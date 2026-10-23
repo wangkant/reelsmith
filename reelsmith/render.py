@@ -1,6 +1,7 @@
 """Preview stills with layout measurement, the delivered film (render, master, checks, layout) and a review sheet."""
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -362,6 +363,26 @@ def _post_meta(root: Path, report: dict, profile: Profile) -> dict:
     return meta
 
 
+def cut_digest(data: dict) -> str:
+    """The project minus its post meta (title, sources...), which never reaches the film's pixels or sound."""
+    body = {k: v for k, v in data.items() if k != "meta"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def film_inputs(root: Path) -> dict:
+    """{cut, components}: recorded with a render so delivery can tell a meta edit or an unused component's edit
+    from a change to the film. {} when project.json cannot be read."""
+    try:
+        data = json.loads((Path(root) / PROJECT_FILE).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    used = sorted({str(c.get("name")) for t in data.get("tracks") or [] if isinstance(t, dict)
+                   for c in t.get("clips") or [] if isinstance(c, dict) and c.get("type") == "component"})
+    return {"cut": cut_digest(data), "components": used}
+
+
 def render(project: str | Path) -> dict:
     """The film into <project>/out/film.mp4, mastered and checked. Every attempt's report goes to build/report.json
     (the latest attempt, delivered or not); a delivered one also to out/report.json. On any failure the previous
@@ -406,6 +427,7 @@ def render(project: str | Path) -> dict:
     with _NODE_LOCK:
         issues = check_project(root)
         report["issues"] = [str(i) for i in issues]
+        report["inputs"] = film_inputs(root)
         lap("check")
         if any(i.level == "error" for i in issues):
             return finish("check", "the project has errors (listed in issues): fix them and render again")

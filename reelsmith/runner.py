@@ -152,7 +152,8 @@ def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log
     if settings.proxy:
         env.update(HTTPS_PROXY=settings.proxy, HTTP_PROXY=settings.proxy, NO_PROXY="localhost,127.0.0.1")
     server = {"type": "stdio", "command": sys.executable, "args": ["-m", "reelsmith.mcp_server"],
-              "env": {"REELSMITH_ROOT": str(scope.home), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}}
+              "env": {"REELSMITH_ROOT": str(scope.home), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                      "PYTHONSAFEPATH": "1"}}
     from .tools import TOOLS
     mcp_tools = [f"{guard.MCP_PREFIX}{name}" for name in TOOLS]
     stderr_path = project / "build" / "runner-cli.log"
@@ -370,10 +371,30 @@ def delivery(project: Path) -> tuple[bool, list[str], dict]:
 
 
 def changed_since(project: Path, when: float) -> str | None:
-    """The first input of the film (project.json, voice, assets, library components) modified after `when`."""
+    """The first input of the film (project.json, voice, assets, library components) modified after `when`. With the
+    render's recorded inputs, an edit to project.json's meta alone and a component the film does not use are not
+    changes to the film."""
+    from .render import cut_digest
+    inputs = (read_json(project / "out" / "report.json", {}) or {}).get("inputs") or {}
     ws = find_workspace(project)
-    roots = [project / "voice", project / "assets"] + ([ws.components_dir] if ws is not None else [])
-    files = [project / PROJECT_FILE] + [p for r in roots if r.is_dir() for p in r.rglob("*") if p.is_file()]
+    roots = [project / "voice", project / "assets"]
+    files = [p for r in roots if r.is_dir() for p in r.rglob("*") if p.is_file()]
+    if ws is not None and ws.components_dir.is_dir():
+        parts = [p for p in ws.components_dir.rglob("*") if p.is_file()]
+        used = inputs.get("components")
+        if isinstance(used, list):
+            # a component is its <Name>.meta.json and siblings; helpers without one may be imported by any
+            named = {p.name[:-len(".meta.json")] for p in parts if p.name.endswith(".meta.json")}
+            parts = [p for p in parts if p.name.split(".")[0] not in named or p.name.split(".")[0] in used]
+        files += parts
+    doc = project / PROJECT_FILE
+    try:
+        if doc.stat().st_mtime > when + 1:
+            data = read_json(doc, None)
+            if not (inputs.get("cut") and isinstance(data, dict) and cut_digest(data) == inputs["cut"]):
+                return PROJECT_FILE
+    except OSError:
+        pass
     for p in files:
         try:
             if p.stat().st_mtime > when + 1:

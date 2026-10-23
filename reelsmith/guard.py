@@ -24,7 +24,7 @@ _CONTROL = re.compile(r"[\x00-\x1f]")
 _DEVICE = re.compile(r"^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[0-9\u00b9\u00b2\u00b3]|LPT[0-9\u00b9\u00b2\u00b3])$",
                      re.I)
 # Nothing the session writes may be something a later process runs (the MCP server, node, a shell).
-_SCRIPT_EXT = (".py", ".pyc", ".pyw", ".pth", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".exe", ".dll", ".so", ".sh",
+_SCRIPT_EXT = (".py", ".pyc", ".pyw", ".pth", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".exe", ".dll", ".pyd", ".so", ".sh",
                ".lnk", ".url", ".reg", ".scr", ".com", ".msi", ".cpl", ".hta", ".jar")
 _SCRIPT_NAMES = {"package.json", "package-lock.json", "node_modules"}
 _PLATFORM_DIRS = (".history", "build", "out")

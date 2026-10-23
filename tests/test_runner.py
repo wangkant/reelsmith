@@ -232,6 +232,48 @@ def test_a_changed_asset_or_component_makes_the_film_stale(ws, no_checks):
     assert not ok and "Tag.tsx changed" in problems[0]
 
 
+def _rendered(project: Path, components=None) -> None:
+    """A delivered film whose report records the inputs the way render() does."""
+    from reelsmith.render import film_inputs
+    deliver(project)
+    inputs = film_inputs(project)
+    if components is not None:
+        inputs["components"] = components
+    (project / "out" / "report.json").write_text(json.dumps({"ok": True, "inputs": inputs}), encoding="utf-8")
+    for p in (project / "project.json", project / "out" / "film.mp4", project / "out" / "report.json"):
+        _age(p, 100)
+
+
+def test_a_meta_only_edit_keeps_the_film_delivered(ws, no_checks):
+    _, project = ws
+    _rendered(project)
+    doc = json.loads((project / "project.json").read_text(encoding="utf-8"))
+    doc["meta"] = {"title": "a better title", "sources": [{"title": "s", "url": "https://example.org/a"}]}
+    (project / "project.json").write_text(json.dumps(doc), encoding="utf-8")
+    assert runner.delivery(project)[0]
+    doc["tracks"] = [{"id": "v1", "kind": "visual", "clips": []}]
+    (project / "project.json").write_text(json.dumps(doc), encoding="utf-8")
+    ok, problems, _ = runner.delivery(project)
+    assert not ok and "project.json changed" in problems[0]
+
+
+def test_only_components_the_film_uses_make_it_stale(ws, no_checks):
+    w, project = ws
+    _rendered(project, components=["Used"])
+    lib = w.components_dir
+    (lib / "Other.meta.json").write_text("{}", encoding="utf-8")
+    (lib / "Other.tsx").write_text("export default () => null;", encoding="utf-8")
+    assert runner.delivery(project)[0]
+    (lib / "helpers.ts").write_text("export const x = 1;", encoding="utf-8")     # no meta: any component may import it
+    ok, problems, _ = runner.delivery(project)
+    assert not ok and "helpers.ts changed" in problems[0]
+    _age(lib / "helpers.ts", 200)
+    (lib / "Used.meta.json").write_text("{}", encoding="utf-8")
+    (lib / "Used.tsx").write_text("export default () => null;", encoding="utf-8")
+    ok, problems, _ = runner.delivery(project)
+    assert not ok and "Used." in problems[0]
+
+
 def test_a_failed_rerender_is_not_delivered(ws, no_checks):
     # render writes failures to build/report.json and keeps the previous good film and out/report.json
     _, project = ws
