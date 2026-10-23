@@ -91,6 +91,9 @@ console.log("words");
 
 console.log("fitLines");
 {
+  check(kit.fit("标题", NaN, 56) === 0 && kit.fit("标题", Infinity, 56) === 0 && kit.fit("标题", 300, NaN) === 0,
+    "fit: an unmeasured box gives 0, never a search");
+  check(kit.textWidth("标题", NaN) === 0, "textWidth: NaN size gives 0");
   // no DOM here: fit() falls back to width / characters
   const one = kit.fitLines("短标签", 300, 56, 28);
   check(one.lines.length === 1 && one.size === 56, `short text: one line at the cap (${JSON.stringify(one)})`);

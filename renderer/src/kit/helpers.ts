@@ -38,7 +38,7 @@ const fontFamily = (family?: string): string => cssFamily(family || SANS);
 
 /** Width in px of `text` on one line at `size`; `tabular` measures digits as with fontVariantNumeric "tabular-nums". */
 export const textWidth = (text: string, size: number, family: string = SANS, weight: string | number = 400, tabular = false): number => {
-  if (!text || size <= 0) return 0;
+  if (!text || !(size > 0) || !Number.isFinite(size)) return 0;
   try {
     return measureText({
       text, fontFamily: fontFamily(family), fontSize: size, fontWeight: String(weight),
@@ -51,7 +51,8 @@ export const textWidth = (text: string, size: number, family: string = SANS, wei
 
 /** Largest font size (<= max) at which `text` fits on one line `width` px wide. */
 export const fit = (text: string, width: number, max: number, family: string = SANS, weight: string | number = 400): number => {
-  if (width <= 0 || max <= 0) return 0;
+  // NaN or Infinity (a box not measured yet) must not reach fitText's search, which then never ends
+  if (!(width > 0) || !Number.isFinite(width) || !(max > 0)) return 0;
   if (!text) return Math.floor(max);
   try {
     const size = fitText({ text, withinWidth: width, fontFamily: fontFamily(family), fontWeight: String(weight) }).fontSize;
