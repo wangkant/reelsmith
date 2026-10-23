@@ -61,7 +61,7 @@ Optional, per tool:
 | `capture` (evidence screenshots) | the `capture` extra and a Chromium browser: Microsoft Edge or Google Chrome if installed, else `python -m playwright install chromium` |
 | `draw` (pictures) | the [Codex CLI](https://github.com/openai/codex), installed and signed in |
 | `speak` (narration), `animate` (video clips) | an [OpenRouter](https://openrouter.ai) API key |
-| `reelsmith run` (the self-hosted agent) | the `runner` extra and an Anthropic API key |
+| `reelsmith run` (the self-hosted agent) | the `runner` extra and an Anthropic or a [DeepSeek](https://platform.deepseek.com) API key |
 
 ## Install
 
@@ -178,7 +178,8 @@ reelsmith run ~/studio/projects/tea --brief "A 60-second film on why tea leaves 
 | flag | |
 |---|---|
 | `--brief` | what the film is about; needed unless an unfinished run resumes |
-| `--model` | default `claude-opus-5-5`, or `runner.model` in workspace.json |
+| `--backend` | `anthropic` (default) or `deepseek`, or `runner.backend` in workspace.json |
+| `--model` | default `claude-opus-5-5` on Anthropic, `deepseek-flash` on DeepSeek, or `runner.model` in workspace.json |
 | `--budget-usd` | cap on this run's model spend (asset spend has its own budget) |
 | `--max-minutes` | wall-clock cap |
 | `--max-turns` | turn cap per session |
@@ -188,6 +189,23 @@ The session gets the reelsmith tools, file tools fenced to the workspace by a gu
 shell. It ends when the film passes the render checks; otherwise the runner hands the session the exact problems
 and lets it fix them, within the budget and the time limit. An interrupted run resumes its own session.
 `out/run_report.json` says how it ended. Exit status: 0 delivered, 1 not delivered, 2 a setup problem.
+
+### Running on DeepSeek
+
+The same session can run on DeepSeek's Anthropic-compatible API. Put `DEEPSEEK_API_KEY=...` in the workspace `.env`
+(or the environment) and pass `--backend deepseek`, or set it in workspace.json:
+
+```json
+"runner": {"backend": "deepseek", "model": "deepseek-flash", "budget_usd": 2}
+```
+
+- **Models.** `deepseek-flash`, the default, takes images. `deepseek-v4-pro` does not: the agent reads its preview
+  stills to judge the picture, and on this model those reads fail, so it edits without seeing the frames.
+- **Keys.** The session gets only the DeepSeek key; the Anthropic key and workspace header stay out of it.
+- **Spend.** The CLI prices every session with its own Claude table, so on DeepSeek the runner estimates the spend
+  from the streamed token usage at DeepSeek's peak prices (off-peak hours cost half), stops a session that reaches
+  the budget, and keeps the CLI's figure as `cli_cost_usd` for reference only.
+- A run resumes on the backend it started on; `--fresh` starts it over on another.
 
 ## What the checks enforce
 

@@ -63,7 +63,7 @@ looked up in the process environment.
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"}
   },
   "budget": {"per_project_usd": 1.0, "min_balance_usd": 5.0},
-  "runner": {"model": "claude-opus-5-5", "budget_usd": 5.0, "max_minutes": 120}
+  "runner": {"backend": "anthropic", "model": "claude-opus-5-5", "budget_usd": 5.0, "max_minutes": 120}
 }
 ```
 
@@ -73,7 +73,7 @@ looked up in the process environment.
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
 | `providers` | per-tool provider settings (section 9); each section is merged over the defaults |
 | `budget` | `per_project_usd` (default 1.0) and `min_balance_usd` (default 5.0), section 9.6 |
-| `runner` | defaults for `reelsmith run` (section 11) |
+| `runner` | defaults for `reelsmith run`: `backend` (`anthropic` or `deepseek`), `model`, budget and limits (section 11) |
 
 ### 2.2 rules.json
 
@@ -423,16 +423,36 @@ applies and returns text; structured results are JSON inside the text. A result 
 ## 11. Runner (self-hosted)
 
 ```
-reelsmith run <project> --brief "..." [--model M] [--budget-usd N] [--max-minutes N] [--max-turns N] [--fresh]
+reelsmith run <project> --brief "..." [--backend anthropic|deepseek] [--model M] [--budget-usd N] [--max-minutes N]
+              [--max-turns N] [--fresh]
 ```
 
 Starts a Claude Agent SDK session (the `runner` extra) that makes one film in one project. Settings come from the
-flags, then `workspace.json` `runner`, then the defaults: `model` `claude-opus-5-5`, `effort` `medium`,
-`budget_usd` 5.0 (the session's model spend; asset spend has its own budget, section 9.6), `max_minutes` 120,
-`stall_minutes` 60 (no message for that long aborts the session), `max_turns` none, `fixups` 2, `proxy` (or
-`REELSMITH_PROXY`). It needs `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_WORKSPACE_ID`) in the workspace `.env`
-or the environment.
+flags, then `workspace.json` `runner`, then the defaults: `backend` `anthropic`, `model` the backend's default,
+`effort` `medium`, `budget_usd` 5.0 (the session's model spend; asset spend has its own budget, section 9.6),
+`max_minutes` 120, `stall_minutes` 60 (no message for that long aborts the session), `max_turns` none, `fixups` 2,
+`proxy` (or `REELSMITH_PROXY`). `runner.model` goes with `runner.backend`: a `--backend` that switches away from the
+workspace's backend starts from the new backend's default model.
 
+| backend | key (workspace `.env`, else the environment) | models |
+|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_WORKSPACE_ID`) | default `claude-opus-5-5` |
+| `deepseek` | `DEEPSEEK_API_KEY` | default `deepseek-flash`; `deepseek-v4-pro` |
+
+Each backend's key goes to that backend only: on `anthropic` an inherited `ANTHROPIC_BASE_URL` or
+`ANTHROPIC_AUTH_TOKEN` is blanked, so a shell set up for another endpoint does not receive the Anthropic key.
+
+- **DeepSeek.** The CLI talks to DeepSeek's Anthropic-compatible API (`https://api.deepseek.com/anthropic`): its
+  env carries the DeepSeek key as `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`, the model as every Claude Code
+  model variable (with the `[1m]` context suffix; `deepseek-flash` for the small model and subagents) and an
+  auto-compact window of 786432 tokens. The Anthropic key, the workspace header and any OAuth token are blanked.
+  `deepseek-v4-pro` takes no images: reading a preview still fails on it (the runner logs a warning), so the agent
+  edits without seeing its frames. The CLI prices sessions with its Claude table, so the runner estimates the spend
+  itself from the streamed usage at DeepSeek's peak prices (per million tokens: `deepseek-flash` $0.30 input, $0.006
+  cached input, $1.20 output; `deepseek-v4-pro` $1.32, $0.044, $3.96; cache writes at the input price; web search
+  $0.75 per 1000), stops a session once that estimate reaches the budget left, and passes the CLI a cap 1000 times
+  the budget as a backstop only. A finished session costs the larger of the streamed estimate and the estimate from
+  the CLI's per-model totals; the CLI's own figure is kept as `cli_cost_usd`.
 - **Session.** Claude Code's system prompt with a short role appended (read the manual, then the notes; every
   choice is yours; look at what you make). The host's own Claude Code settings, memory and instructions are not
   loaded. Tools: the reelsmith MCP server (`python -m reelsmith.mcp_server`, with `REELSMITH_ROOT` set to the
@@ -449,9 +469,11 @@ or the environment.
   alone, or to a library component the film does not use, does not call for another render. Otherwise the runner resumes the same session with the exact problems, up to `fixups` times, within the
   budget and the time limit.
 - **Resume.** State lives in `build/run_state.json`: an interrupted run resumes its own session when started again
-  (`--brief` is then optional); `--fresh` starts a new one. Every message goes to `build/runner.jsonl`, one line per
-  step to stdout; `out/run_report.json` says how it ended (delivered, problems, cost, turns, refused tool calls).
-- Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key).
+  (`--brief` is then optional), on the backend it started on (another backend is refused); `--fresh` starts a new
+  one. Every message goes to `build/runner.jsonl`, one line per step to stdout; `out/run_report.json` says how it
+  ended (delivered, problems, backend, model, `cost_usd` and whether it is `cost_estimated`, turns, refused tool
+  calls).
+- Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key, an unknown backend).
 
 ## 12. Inspect (layout measurement)
 
@@ -547,4 +569,5 @@ The theme is `paper` (or the one `name`d), then workspace.json `theme`, then pro
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (`capture` also honours `HTTPS_PROXY` / `HTTP_PROXY`) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw`, and Codex's home folder (default `~/.codex`) |
 | `OPENROUTER_API_KEY` | `speak` and `animate` (workspace `.env` first, then the environment) |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic |
+| `DEEPSEEK_API_KEY` | the runner on DeepSeek (`runner.backend` `deepseek`) |

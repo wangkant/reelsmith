@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolUseBlock
 
-from reelsmith import guard, runner
+from reelsmith import backends, guard, runner
 from reelsmith.workspace import Workspace
 
 
@@ -98,6 +98,7 @@ def test_options(ws):
     assert server["env"]["REELSMITH_ROOT"] == str(w.root)
     assert o.env["ANTHROPIC_API_KEY"] == "sk-ant-test-123456"
     assert o.env["ANTHROPIC_CUSTOM_HEADERS"] == "anthropic-workspace-id: wrkspc_1"
+    assert o.env["ANTHROPIC_BASE_URL"] == "" == o.env["ANTHROPIC_AUTH_TOKEN"]     # a host's other endpoint is not used
     assert "manual.md" in o.system_prompt["append"] and "NOTES.md" in o.system_prompt["append"]
     assert o.hooks["PreToolUse"][0].hooks
 
@@ -113,6 +114,227 @@ def test_missing_key(ws, monkeypatch):
     log.close()
 
 
+# ------------------------------------------------------------------ the DeepSeek backend
+DS_KEY = "sk-ds-test-777"
+
+
+def configure(w, runner_cfg: dict, env: str | None = None) -> Workspace:
+    """Rewrite the workspace's runner settings (and .env), and load it again."""
+    (w.root / "workspace.json").write_text(json.dumps({"profile": "douyin", "runner": runner_cfg}), encoding="utf-8")
+    if env is not None:
+        (w.root / ".env").write_text(env, encoding="utf-8")
+    return Workspace.load(w.root)
+
+
+def deepseek(w, **extra) -> Workspace:
+    return configure(w, {"budget_usd": 3, "backend": "deepseek", **extra},
+                     "ANTHROPIC_API_KEY=sk-ant-test-123456\nANTHROPIC_WORKSPACE_ID=wrkspc_1\n"
+                     f"DEEPSEEK_API_KEY={DS_KEY}\n")
+
+
+def test_backend_settings_precedence(ws):
+    w, _ = ws
+    s = runner.settings_for(w)
+    assert (s.backend, s.model) == ("anthropic", "claude-opus-5-5")
+    s = runner.settings_for(w, backend="deepseek")
+    assert (s.backend, s.model, s.budget_usd) == ("deepseek", "deepseek-flash", 3)
+    s = runner.settings_for(w, backend="deepseek", model="deepseek-v4-pro")
+    assert (s.backend, s.model) == ("deepseek", "deepseek-v4-pro")
+    w2 = configure(w, {"backend": "deepseek", "model": "deepseek-v4-pro"})
+    assert (runner.settings_for(w2).backend, runner.settings_for(w2).model) == ("deepseek", "deepseek-v4-pro")
+    assert runner.settings_for(w2, backend="deepseek").model == "deepseek-v4-pro"
+    s = runner.settings_for(w2, backend="anthropic")        # the workspace's model went with its backend
+    assert (s.backend, s.model) == ("anthropic", "claude-opus-5-5")
+    w3 = configure(w, {"model": "claude-sonnet-5-5"})
+    assert runner.settings_for(w3).model == "claude-sonnet-5-5"
+    assert runner.settings_for(w3, backend="deepseek").model == "deepseek-flash"
+    with pytest.raises(runner.WorkspaceError, match="unknown runner backend"):
+        runner.settings_for(w, backend="openai")
+    with pytest.raises(runner.WorkspaceError, match="unknown runner backend"):
+        runner.settings_for(configure(w, {"backend": "nope"}))
+
+
+def test_backend_flag_reaches_the_run(ws, monkeypatch):
+    _, project = ws
+    seen = {}
+    monkeypatch.setattr(runner, "run", lambda *a, **k: seen.update(k) or {"delivered": True})
+    assert runner.main([str(project), "--brief", "b", "--backend", "deepseek"]) == 0
+    assert seen["backend"] == "deepseek"
+    with pytest.raises(SystemExit):
+        runner.main([str(project), "--backend", "nope"])
+
+
+def test_deepseek_options_carry_only_the_deepseek_key(ws, monkeypatch):
+    w, project = ws
+    host = {"ANTHROPIC_API_KEY": "sk-ant-host-999", "ANTHROPIC_WORKSPACE_ID": "wrkspc_host",
+            "ANTHROPIC_CUSTOM_HEADERS": "anthropic-workspace-id: wrkspc_host",
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-9"}
+    for name, value in host.items():
+        monkeypatch.setenv(name, value)
+    w = deepseek(w)
+    s = runner.settings_for(w)
+    log = runner.SessionLog(project, io.StringIO())
+    o = runner.build_options(project, w, s, guard.scope_for(project, w), log, budget_left=2.5)
+    log.close()
+    env = o.env
+    assert o.model == "deepseek-flash[1m]"
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == DS_KEY and env["ANTHROPIC_API_KEY"] == DS_KEY
+    for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"):
+        assert env[name] == "deepseek-flash[1m]", name
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek-flash" == env["CLAUDE_CODE_SUBAGENT_MODEL"]
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "786432"
+    # the CLI gets the host env under options.env: no Anthropic key, token or workspace header survives
+    cli_env = {**host, **env}
+    assert not [k for k, v in cli_env.items() if "sk-ant" in v or "wrkspc" in v]
+    assert sorted(k for k, v in env.items() if v == DS_KEY) == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+    assert o.max_budget_usd >= 2.5 * 100                    # the runner's own estimate enforces the budget
+    # everything else is the same session
+    assert o.mcp_servers["reelsmith"]["args"] == ["-m", "reelsmith.mcp_server"] and "Bash" not in o.tools
+    assert "mcp__reelsmith__render" in o.allowed_tools and o.hooks["PreToolUse"][0].hooks
+    assert "manual.md" in o.system_prompt["append"] and o.permission_mode == "dontAsk"
+
+
+def test_deepseek_pro_model(ws):
+    w, project = ws
+    w = deepseek(w, model="deepseek-v4-pro")
+    log = runner.SessionLog(project, io.StringIO())
+    o = runner.build_options(project, w, runner.settings_for(w), guard.scope_for(project, w), log)
+    log.close()
+    assert o.model == "deepseek-v4-pro[1m]" and o.env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "deepseek-v4-pro[1m]"
+    assert o.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek-flash"
+    b = backends.get("deepseek")
+    assert not backends.can_see(b, "deepseek-v4-pro") and backends.can_see(b, "deepseek-flash[1m]")
+    assert backends.cli_model(b, "deepseek-flash[1m]") == "deepseek-flash[1m]"
+    assert backends.cli_model(b, "deepseek-other") == "deepseek-other"
+
+
+def test_deepseek_key_lookup(ws, monkeypatch):
+    w, project = ws
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    w = configure(w, {"backend": "deepseek"}, "ANTHROPIC_API_KEY=sk-ant-test-123456\n")
+    log = runner.SessionLog(project, io.StringIO())
+    with pytest.raises(runner.WorkspaceError, match="DEEPSEEK_API_KEY is missing"):
+        runner.build_options(project, w, runner.settings_for(w), guard.scope_for(project, w), log)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds-from-env")       # the environment is the fallback
+    o = runner.build_options(project, w, runner.settings_for(w), guard.scope_for(project, w), log)
+    log.close()
+    assert o.env["ANTHROPIC_AUTH_TOKEN"] == "sk-ds-from-env"
+    assert runner.key_for(deepseek(w), "DEEPSEEK_API_KEY") == DS_KEY      # the workspace .env comes first
+
+
+def test_deepseek_price_estimate():
+    b = backends.get("deepseek")
+    million = {"input_tokens": 10 ** 6, "cache_creation_input_tokens": 10 ** 6, "cache_read_input_tokens": 10 ** 6,
+               "output_tokens": 10 ** 6, "server_tool_use": {"web_search_requests": 1000}}
+    assert backends.cost(b, {"a": {"model": "deepseek-flash[1m]", "usage": million}}, "deepseek-flash") \
+        == pytest.approx(0.30 + 0.30 + 0.006 + 1.20 + 0.75)
+    assert backends.cost(b, {"a": {"model": "deepseek-v4-pro", "usage": million}}, "deepseek-flash") \
+        == pytest.approx(1.32 + 1.32 + 0.044 + 3.96 + 0.75)
+    # an unknown name in the reply falls back to the session's model, then to the dearest
+    assert backends.cost(b, {"a": {"model": "deepseek-v4.1-flash", "usage": million}}, "deepseek-flash") \
+        == pytest.approx(2.556)
+    assert backends.cost(b, {"a": {"model": None, "usage": million}}, "mystery") == pytest.approx(7.394)
+    assert runner.estimate_cost({"m": {"model": "claude-opus-5-5", "usage": {"input_tokens": 1000,
+                                                                            "output_tokens": 100}}},
+                                "claude-opus-5-5") == pytest.approx(0.006)
+
+
+def test_deepseek_summary_estimates_over_the_cli_figure():
+    r = ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=4,
+                      session_id="s1", total_cost_usd=9.99, model_usage={
+                          "deepseek-flash[1m]": {"inputTokens": 100_000, "outputTokens": 10_000,
+                                                 "cacheReadInputTokens": 1_000_000, "cacheCreationInputTokens": 0,
+                                                 "webSearchRequests": 0, "costUSD": 9.0},
+                          "deepseek-flash": {"inputTokens": 200_000, "outputTokens": 5_000,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                                             "webSearchRequests": 0, "costUSD": 0.99}})
+    row = runner.summary({"result": r, "usage": {}}, "deepseek-flash", "deepseek")
+    assert row["cost_usd"] == pytest.approx(0.048 + 0.066) and row["cost_estimated"]
+    assert row["cli_cost_usd"] == 9.99
+    row = runner.summary({"result": r, "usage": {}}, "claude-opus-5-5", "anthropic")
+    assert row["cost_usd"] == 9.99 and "cli_cost_usd" not in row
+
+
+def test_deepseek_run_report(ws, no_checks):
+    w, project = ws
+    deepseek(w)
+    r = ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=7,
+                      session_id="s1", total_cost_usd=7.5, model_usage={
+                          "deepseek-flash[1m]": {"inputTokens": 100_000, "outputTokens": 10_000,
+                                                 "cacheReadInputTokens": 1_000_000, "cacheCreationInputTokens": 0,
+                                                 "webSearchRequests": 0, "costUSD": 7.5}})
+    calls = []
+    q = fake_query([init(), AssistantMessage(content=[TextBlock("ok")], model="deepseek-flash",
+                                              usage={"input_tokens": 100_000, "output_tokens": 10_000,
+                                                     "cache_read_input_tokens": 1_000_000}, message_id="m1"),
+                    deliver, r], calls=calls)
+    out = io.StringIO()
+    rep = runner.run(project, "b", query_fn=q, out=out)
+    assert rep["delivered"] and rep["backend"] == "deepseek" and rep["model"] == "deepseek-flash"
+    assert rep["cost_estimated"] and rep["cost_usd"] == pytest.approx(0.048)
+    assert rep["sessions"][0]["cli_cost_usd"] == 7.5 and rep["sessions"][0]["cost_usd"] == pytest.approx(0.048)
+    assert calls[0]["options"].env["ANTHROPIC_AUTH_TOKEN"] == DS_KEY
+    saved = json.loads((project / "out" / "run_report.json").read_text(encoding="utf-8"))
+    assert (saved["backend"], saved["model"], saved["cost_usd"]) == ("deepseek", "deepseek-flash", rep["cost_usd"])
+    state = json.loads((project / "build" / "run_state.json").read_text(encoding="utf-8"))
+    assert state["backend"] == "deepseek"
+    assert "on deepseek deepseek-flash" in out.getvalue() and "Claude prices, not used" in out.getvalue()
+
+
+def test_deepseek_session_stops_at_the_budget(ws, no_checks):
+    w, project = ws
+    deepseek(w)                                                # budget $3
+    calls = []
+    over = AssistantMessage(content=[TextBlock("thinking hard")], model="deepseek-flash", message_id="m1",
+                            usage={"input_tokens": 7_000_000, "output_tokens": 1_000_000})   # $2.10 + $1.20
+    q = fake_query([init(), over, AssistantMessage(content=[TextBlock("never seen")], model="deepseek-flash"),
+                    deliver, result(0.01)], calls=calls)
+    out = io.StringIO()
+    rep = runner.run(project, "b", query_fn=q, out=out)
+    assert not rep["delivered"] and len(calls) == 1 and not (project / "out" / "film.mp4").exists()
+    first = rep["sessions"][0]
+    assert "budget" in first["aborted"] and first["cost_estimated"] and first["cost_usd"] == pytest.approx(3.3)
+    assert rep["cost_usd"] == pytest.approx(3.3) and "budget" in rep["stop"]
+    assert any("budget is used up" in p for p in rep["problems"])
+    assert "never seen" not in out.getvalue()
+
+
+def test_under_budget_streaming_does_not_stop(ws):
+    _, project = ws
+    msgs = [AssistantMessage(content=[TextBlock(f"m{i}")], model="deepseek-flash", message_id=f"m{i}",
+                             usage={"input_tokens": 100_000}) for i in range(5)]
+
+    async def q(prompt, options):
+        for m in msgs:
+            await asyncio.sleep(0)
+            yield m
+    log = runner.SessionLog(project, io.StringIO())
+    cost = lambda rows: backends.cost(backends.get("deepseek"), rows, "deepseek-flash")   # noqa: E731
+    out = asyncio.run(runner.run_session(None, "p", log, query_fn=q, cost_fn=cost, budget_usd=0.2))
+    assert out["aborted"] is None and out["messages"] == 5          # 5 x $0.03 = $0.15
+    out = asyncio.run(runner.run_session(None, "p", log, query_fn=q, cost_fn=cost, budget_usd=0.1))
+    log.close()
+    assert out["aborted"] and out["messages"] == 4                  # stopped at the 4th: $0.12
+
+
+def test_deepseek_pro_warns_it_cannot_see(ws, no_checks):
+    w, project = ws
+    deepseek(w, model="deepseek-v4-pro")
+    out = io.StringIO()
+    runner.run(project, "b", query_fn=fake_query([init(), deliver, result(0.1)]), out=out)
+    assert "deepseek-v4-pro takes no images" in out.getvalue()
+
+
+def test_a_session_resumes_only_on_its_own_backend(ws, no_checks):
+    _, project = ws
+    (project / "build").mkdir()
+    (project / "build" / "run_state.json").write_text(json.dumps(
+        {"status": "running", "session_id": "s7", "cost_usd": 0.4, "brief": "b"}), encoding="utf-8")
+    with pytest.raises(runner.WorkspaceError, match="--backend anthropic"):
+        go(project, fake_query(), backend="deepseek")
+
+
 # ------------------------------------------------------------------ runs
 def test_delivered_run(ws, no_checks):
     _, project = ws
@@ -122,6 +344,7 @@ def test_delivered_run(ws, no_checks):
                                                model="claude-opus-5-5"), deliver, result(0.8, 12)], calls=calls)
     rep = go(project, q, brief="一吨汽油值多少钱")
     assert rep["delivered"] and rep["cost_usd"] == 0.8 and rep["turns"] == 12 and rep["stop"] == "finished"
+    assert rep["backend"] == "anthropic" and rep["model"] == "claude-opus-5-5" and not rep["cost_estimated"]
     assert "一吨汽油值多少钱" in calls[0]["prompt"] and calls[0]["options"].resume is None
     saved = json.loads((project / "out" / "run_report.json").read_text(encoding="utf-8"))
     assert saved["delivered"] and saved["sessions"][0]["session_id"] == "s1"

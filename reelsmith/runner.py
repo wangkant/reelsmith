@@ -1,7 +1,8 @@
 """reelsmith run: a self-hosted Claude Agent SDK session that makes one film in one project with the reelsmith tools.
 
-The session gets the reelsmith MCP server, file tools fenced by guard.py and web search; no shell. Its state lives in
-<project>/build/run_state.json, so an interrupted run resumes its own session; out/run_report.json says how it ended.
+The session gets the reelsmith MCP server, file tools fenced by guard.py and web search; no shell. The model is served
+by Anthropic or DeepSeek (backends.py). Its state lives in <project>/build/run_state.json, so an interrupted run
+resumes its own session; out/run_report.json says how it ended.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import guard
+from . import backends, guard
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,13 +25,13 @@ MANUAL = ROOT / "docs" / "manual.md"
 RENDERER_SRC = ROOT / "renderer" / "src"
 STATE_FILE = Path("build") / "run_state.json"
 REPORT_FILE = Path("out") / "run_report.json"
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "budget_usd": 5.0, "max_minutes": 120,
+# the model defaults to the backend's own (backends.py)
+DEFAULTS = {"backend": "anthropic", "effort": "medium", "budget_usd": 5.0, "max_minutes": 120,
             "stall_minutes": 60, "max_turns": None, "fixups": 2}  # a full render may take 55 min in one call
 BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
-# $/MTok; only for a session that ends without a ResultMessage to read its cost from
-PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (1.0, 5.0)}
-CACHE_READ, CACHE_WRITE = 0.1, 1.25
+# the CLI prices a non-Anthropic backend with its Claude table: its own cap only backs up the runner's estimate
+CLI_BUDGET_FACTOR = 1000
 
 
 def now_iso() -> str:
@@ -68,35 +69,38 @@ class Settings:
     max_turns: int | None
     fixups: int
     proxy: str | None = None
+    backend: str = "anthropic"
 
 
-def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=None) -> Settings:
-    """CLI flags over workspace.json "runner" over the defaults."""
+def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=None, backend=None) -> Settings:
+    """CLI flags over workspace.json "runner" over the defaults. The workspace's model goes with the workspace's
+    backend: a --backend that switches away from it starts from the new backend's default model."""
     cfg = dict(DEFAULTS)
     own = (ws.config.get("runner") if ws is not None else None) or {}
     if not isinstance(own, dict):
         raise WorkspaceError('workspace.json "runner" must be an object')
     cfg.update({k: v for k, v in own.items() if v is not None})
-    for key, value in (("model", model), ("budget_usd", budget_usd), ("max_minutes", max_minutes),
-                       ("max_turns", max_turns)):
+    for key, value in (("budget_usd", budget_usd), ("max_minutes", max_minutes), ("max_turns", max_turns)):
         if value is not None:
             cfg[key] = value
-    s = Settings(model=str(cfg["model"]), effort=cfg.get("effort") or None, budget_usd=float(cfg["budget_usd"]),
+    own_backend = backends.get(cfg["backend"])
+    chosen = backends.get(backend) if backend else own_backend
+    if not model:
+        model = own.get("model") if chosen is own_backend and own.get("model") else chosen.model
+    s = Settings(model=str(model), effort=cfg.get("effort") or None, budget_usd=float(cfg["budget_usd"]),
                  max_minutes=float(cfg["max_minutes"]), stall_minutes=float(cfg["stall_minutes"]),
                  max_turns=int(cfg["max_turns"]) if cfg.get("max_turns") else None, fixups=int(cfg["fixups"]),
-                 proxy=cfg.get("proxy") or os.environ.get("REELSMITH_PROXY") or None)
+                 proxy=cfg.get("proxy") or os.environ.get("REELSMITH_PROXY") or None, backend=chosen.name)
     if s.budget_usd <= 0 or s.max_minutes <= 0 or s.stall_minutes <= 0:
         raise WorkspaceError("budget_usd, max_minutes and stall_minutes must be > 0")
     return s
 
 
-def anthropic_keys(ws) -> dict:
+def key_for(ws, name: str) -> str:
+    """A key from the workspace .env, else the environment; "" when neither has it."""
     keys = ws.keys if ws is not None else {}
-    out = {}
-    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID"):
-        value = keys.get(name) if hasattr(keys, "get") else None
-        out[name] = value or os.environ.get(name) or ""
-    return out
+    value = keys.get(name) if hasattr(keys, "get") else None
+    return value or os.environ.get(name) or ""
 
 
 # ------------------------------------------------------------------ prompts
@@ -133,12 +137,12 @@ def fixup_prompt(problems: list[str]) -> str:
 def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log, resume: str | None = None,
                   budget_left: float | None = None):
     from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
-    keys = anthropic_keys(ws)
-    if not keys["ANTHROPIC_API_KEY"]:
-        raise WorkspaceError("ANTHROPIC_API_KEY is missing: put it in the workspace .env or the environment")
+    backend = backends.get(settings.backend)
+    key = key_for(ws, backend.key)
+    if not key:
+        raise WorkspaceError(f"{backend.key} is missing: put it in the workspace .env or the environment")
     stall_ms = int(settings.stall_minutes * 60 * 1000)
     env = {
-        "ANTHROPIC_API_KEY": keys["ANTHROPIC_API_KEY"],
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         # nothing of the host's own Claude Code setup reaches the session
         "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
@@ -147,8 +151,8 @@ def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log
         "MCP_TOOL_TIMEOUT": str(stall_ms),          # a render can take many minutes in one call
         "CLAUDE_AGENT_SDK_CLIENT_APP": "reelsmith-runner/1",
     }
-    if keys["ANTHROPIC_WORKSPACE_ID"]:
-        env["ANTHROPIC_CUSTOM_HEADERS"] = f"anthropic-workspace-id: {keys['ANTHROPIC_WORKSPACE_ID']}"
+    workspace_id = key_for(ws, "ANTHROPIC_WORKSPACE_ID") if backend.name == "anthropic" else ""
+    env.update(backends.cli_env(backend, settings.model, key, workspace_id))
     if settings.proxy:
         env.update(HTTPS_PROXY=settings.proxy, HTTP_PROXY=settings.proxy, NO_PROXY="localhost,127.0.0.1")
     server = {"type": "stdio", "command": sys.executable, "args": ["-m", "reelsmith.mcp_server"],
@@ -162,10 +166,12 @@ def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log
         with open(stderr_path, "a", encoding="utf-8") as fh:
             fh.write(line.rstrip("\n") + "\n")
 
-    budget = settings.budget_usd if budget_left is None else budget_left
+    budget = max(0.01, settings.budget_usd if budget_left is None else budget_left)
+    if not backend.cli_cost:
+        budget *= CLI_BUDGET_FACTOR                # run_session enforces the real budget
     return ClaudeAgentOptions(
-        model=settings.model, effort=settings.effort, thinking={"type": "adaptive"},
-        max_budget_usd=round(max(0.01, budget), 2), max_turns=settings.max_turns,
+        model=backends.cli_model(backend, settings.model), effort=settings.effort, thinking={"type": "adaptive"},
+        max_budget_usd=round(budget, 2), max_turns=settings.max_turns,
         system_prompt={"type": "preset", "preset": "claude_code", "append": system_append(project, ws)},
         tools=BUILTIN_TOOLS, allowed_tools=BUILTIN_TOOLS + mcp_tools, permission_mode="dontAsk",
         setting_sources=[], cwd=str(project), mcp_servers={"reelsmith": server}, strict_mcp_config=True,
@@ -193,6 +199,7 @@ class SessionLog:
         self.fh = open(self.path, "a", encoding="utf-8")
         self.out = out or sys.stdout
         self.denials: list[dict] = []
+        self.cli_cost = True        # False: the CLI's cost figure is not this backend's
 
     def event(self, kind: str, **data) -> None:
         row = {"t": now_iso(), "kind": kind, **data}
@@ -233,7 +240,9 @@ class SessionLog:
                                                                                            ensure_ascii=False)
                     self.line("<- error " + re.sub(r"\s+", " ", str(text))[:200])
         elif isinstance(msg, ResultMessage):
-            self.line(f"result {msg.subtype} turns={msg.num_turns} cost=${msg.total_cost_usd or 0:.2f}")
+            cost = (f"cost=${msg.total_cost_usd or 0:.2f}" if self.cli_cost
+                    else f"cli-priced=${msg.total_cost_usd or 0:.2f} (Claude prices, not used)")
+            self.line(f"result {msg.subtype} turns={msg.num_turns} {cost}")
 
     def close(self) -> None:
         self.fh.close()
@@ -249,28 +258,26 @@ def merge_usage(dst: dict, src: dict) -> dict:
     return dst
 
 
-def estimate_cost(seen: dict, model: str) -> float:
-    total = 0.0
-    for row in seen.values():
-        inp, out = PRICES.get(row.get("model") or model, PRICES["claude-opus-5-5"])
-        u = row.get("usage") or {}
-        total += (int(u.get("input_tokens") or 0) * inp + int(u.get("output_tokens") or 0) * out
-                  + int(u.get("cache_read_input_tokens") or 0) * inp * CACHE_READ
-                  + int(u.get("cache_creation_input_tokens") or 0) * inp * CACHE_WRITE) / 1e6
-    return round(total, 4)
+def estimate_cost(seen: dict, model: str, backend: str = "anthropic") -> float:
+    """$ for streamed usage rows at the backend's prices (DeepSeek's at peak)."""
+    return round(backends.cost(backends.get(backend), seen, model), 4)
 
 
 async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_session=None,
-                      stall_s: float = 1800, wall_s: float = 7200) -> dict:
-    """Drive one query. Never raises: the outcome says what happened."""
+                      stall_s: float = 1800, wall_s: float = 7200, cost_fn=None,
+                      budget_usd: float | None = None) -> dict:
+    """Drive one query. Never raises: the outcome says what happened. With cost_fn (usage rows -> $) and budget_usd,
+    the session stops once the spend estimated from its streamed usage reaches the budget."""
     if query_fn is None:
         from claude_agent_sdk import query as query_fn
     from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage
     outcome = {"session_id": None, "result": None, "error": None, "aborted": None, "messages": 0, "usage": {}}
     started = last = time.monotonic()
+    row_cost: dict = {}
+    spent = 0.0
 
     async def consume():
-        nonlocal last
+        nonlocal last, spent
         async for msg in query_fn(prompt=prompt, options=options):
             last = time.monotonic()
             outcome["messages"] += 1
@@ -279,6 +286,14 @@ async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_s
                 key = getattr(msg, "message_id", None) or getattr(msg, "uuid", None) or f"#{outcome['messages']}"
                 row = outcome["usage"].setdefault(key, {"model": getattr(msg, "model", None), "usage": {}})
                 merge_usage(row["usage"], msg.usage)
+                if cost_fn is not None:
+                    now_cost = cost_fn({key: row})
+                    spent += now_cost - row_cost.get(key, 0.0)
+                    row_cost[key] = now_cost
+                    if budget_usd is not None and spent >= budget_usd and not outcome["aborted"]:
+                        outcome["aborted"] = f"the estimated ${spent:.2f} reached the ${budget_usd:.2f} budget"
+                        log.line(f"abort: {outcome['aborted']}")
+                        asyncio.current_task().cancel()     # lands in the SDK's next await, like the watchdog's
             sid = getattr(msg, "session_id", None)
             if isinstance(msg, SystemMessage) and isinstance(msg.data, dict):
                 sid = sid or msg.data.get("session_id")
@@ -295,12 +310,14 @@ async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_s
         now = time.monotonic()
         if task.done():
             break
-        if now - last > stall_s:
-            outcome["aborted"] = f"no message for {int(now - last)} s"
-        elif now - started > wall_s:
-            outcome["aborted"] = f"over the {wall_s / 60:g} minute limit"
+        if not outcome["aborted"]:
+            if now - last > stall_s:
+                outcome["aborted"] = f"no message for {int(now - last)} s"
+            elif now - started > wall_s:
+                outcome["aborted"] = f"over the {wall_s / 60:g} minute limit"
+            if outcome["aborted"]:
+                log.line(f"abort: {outcome['aborted']}")
         if outcome["aborted"]:
-            log.line(f"abort: {outcome['aborted']}")
             task.cancel()
     try:
         await task
@@ -317,14 +334,24 @@ async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_s
     return outcome
 
 
-def summary(outcome: dict, model: str) -> dict:
+def summary(outcome: dict, model: str, backend: str = "anthropic") -> dict:
+    """One session's row. Its cost is the CLI's figure when the CLI prices the backend right, else an estimate from
+    the usage (the larger of the streamed messages' and the CLI's per-model totals, which add background calls)."""
+    b = backends.get(backend)
     r = outcome.get("result")
     row = {"session_id": outcome.get("session_id"), "aborted": outcome.get("aborted"), "error": outcome.get("error")}
+    streamed = estimate_cost(outcome.get("usage") or {}, model, b.name)
     if r is not None:
         row.update(subtype=r.subtype, is_error=r.is_error, turns=r.num_turns or 0, cost_usd=r.total_cost_usd or 0.0,
                    stop_reason=getattr(r, "stop_reason", None))
+        if not b.cli_cost:
+            totals = backends.model_usage_rows(getattr(r, "model_usage", None))
+            if not totals and isinstance(getattr(r, "usage", None), dict):
+                totals = {"result": {"model": model, "usage": r.usage}}
+            row.update(cost_usd=max(streamed, estimate_cost(totals, model, b.name)), cost_estimated=True,
+                       cli_cost_usd=r.total_cost_usd or 0.0)
     else:
-        row.update(turns=0, cost_usd=estimate_cost(outcome.get("usage") or {}, model), cost_estimated=True)
+        row.update(turns=0, cost_usd=streamed, cost_estimated=True)
     return row
 
 
@@ -413,7 +440,9 @@ class Run:
         self.settings, self.ws, self.query_fn = settings, ws, query_fn
         self.state_path = self.project / STATE_FILE
         self.state = {} if fresh else (read_json(self.state_path, {}) or {})
+        self.backend = backends.get(settings.backend)
         self.log = SessionLog(self.project, out)
+        self.log.cli_cost = self.backend.cli_cost
         self.started = time.monotonic()
         self.started_at = now_iso()
 
@@ -436,16 +465,25 @@ class Run:
         budget_left = self.settings.budget_usd - self.spent()
         options = build_options(self.project, self.ws, self.settings, self.scope(), self.log, resume=resume,
                                 budget_left=budget_left)
-        self.log.event("run", session=kind, resume=resume, prompt=prompt)
-        self.log.line(f"{kind} session{' ' + resume if resume else ''} (budget left ${budget_left:.2f})")
+        model, b = self.settings.model, self.backend
+        self.log.event("run", session=kind, resume=resume, prompt=prompt, backend=b.name, model=model)
+        self.log.line(f"{kind} session{' ' + resume if resume else ''} on {b.name} {model} "
+                      f"(budget left ${budget_left:.2f}{'' if b.cli_cost else ', estimated at peak prices'})")
+        if not backends.can_see(b, model):
+            self.log.line(f"warning: {model} takes no images; reading a still will fail")
         self.save(status="running", last_stop="the process was interrupted")
 
         def remember(sid):
             self.save(session_id=sid)
+        own_budget = {} if b.cli_cost else {
+            "cost_fn": lambda rows: backends.cost(b, rows, model), "budget_usd": budget_left}
         outcome = await run_session(options, prompt, self.log, query_fn=self.query_fn, on_session=remember,
-                                    stall_s=self.settings.stall_minutes * 60, wall_s=max(60.0, self.wall_left()))
-        row = summary(outcome, self.settings.model)
+                                    stall_s=self.settings.stall_minutes * 60, wall_s=max(60.0, self.wall_left()),
+                                    **own_budget)
+        row = summary(outcome, model, b.name)
         row.update(kind=kind, ended_at=now_iso())
+        if not b.cli_cost:
+            self.log.line(f"session spend ~${row['cost_usd']:.2f} (estimated at {b.name} peak prices)")
         runs = (self.state.get("runs") or []) + [row]
         self.save(cost_usd=round(self.spent() + float(row.get("cost_usd") or 0), 4),
                   turns=int(self.state.get("turns") or 0) + int(row.get("turns") or 0),
@@ -457,11 +495,15 @@ class Run:
         """(kind, prompt, resume id) for the first session of this process."""
         sid = self.state.get("session_id")
         if sid and self.state.get("status") not in ("done", None):
+            made_on = self.state.get("backend") or "anthropic"
+            if made_on != self.backend.name:
+                raise WorkspaceError(f"the unfinished run's session is on {made_on}: resume it with --backend "
+                                     f"{made_on}, or start over with --fresh")
             return "resume", resume_prompt(self.state.get("last_stop") or "unknown", self.state), sid
         if not self.brief:
             raise WorkspaceError("a brief is needed for a new run (--brief \"...\")")
         self.save(status="new", brief=self.brief, started_at=self.started_at, session_id=None, cost_usd=0.0,
-                  turns=0, runs=[])
+                  turns=0, runs=[], backend=self.backend.name, model=self.settings.model)
         return "new", first_prompt(self.project, self.brief), None
 
     async def go(self) -> dict:
@@ -506,10 +548,11 @@ class Run:
 
     def report(self, delivered: bool, problems: list[str], check: dict, last: dict) -> dict:
         out = {
-            "project": str(self.project), "brief": self.state.get("brief"), "model": self.settings.model,
-            "delivered": delivered, "problems": problems, "check": check,
+            "project": str(self.project), "brief": self.state.get("brief"), "backend": self.backend.name,
+            "model": self.settings.model, "delivered": delivered, "problems": problems, "check": check,
             "film": str(self.project / "out" / "film.mp4") if (self.project / "out" / "film.mp4").is_file() else None,
-            "cost_usd": self.spent(), "turns": int(self.state.get("turns") or 0),
+            "cost_usd": self.spent(), "cost_estimated": not self.backend.cli_cost,
+            "turns": int(self.state.get("turns") or 0),
             "wall_s": round(time.monotonic() - self.started, 1), "started_at": self.started_at,
             "finished_at": now_iso(), "stop": stop_reason(last) if last else None,
             "sessions": self.state.get("runs") or [], "denied": self.log.denials[-50:],
@@ -524,12 +567,12 @@ class Run:
 
 def run(project, brief: str | None = None, model: str | None = None, budget_usd: float | None = None,
         max_minutes: float | None = None, query_fn=None, fresh: bool = False, max_turns: int | None = None,
-        out=None) -> dict:
+        out=None, backend: str | None = None) -> dict:
     root = project_root(project)
     if not (root / PROJECT_FILE).is_file():
         raise WorkspaceError(f"no project at {root} ({PROJECT_FILE} missing): create it with `reelsmith new`")
     ws = find_workspace(root)
-    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns)
+    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend)
     return asyncio.run(Run(root, brief, settings, ws, query_fn=query_fn, fresh=fresh, out=out).go())
 
 
@@ -537,15 +580,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="reelsmith run", description="Let an agent make the film in a project.")
     ap.add_argument("project", help="the project folder (reelsmith new makes one)")
     ap.add_argument("--brief", help="what the film is about; needed unless an unfinished run resumes")
-    ap.add_argument("--model", help=f"default {DEFAULTS['model']} or workspace.json runner.model")
-    ap.add_argument("--budget-usd", type=float, help="cap on this run's Claude spend")
+    ap.add_argument("--backend", choices=sorted(backends.BACKENDS),
+                    help=f"who serves the model; default {DEFAULTS['backend']} or workspace.json runner.backend")
+    ap.add_argument("--model", help="default " + ", ".join(f"{b.model} ({b.name})" for b in backends.BACKENDS.values())
+                    + ", or workspace.json runner.model")
+    ap.add_argument("--budget-usd", type=float, help="cap on this run's model spend")
     ap.add_argument("--max-minutes", type=float, help="wall-clock cap for this process")
     ap.add_argument("--max-turns", type=int, help="turn cap per session")
     ap.add_argument("--fresh", action="store_true", help="ignore an unfinished run and start a new session")
     args = ap.parse_args(argv)
     try:
         report = run(args.project, args.brief, args.model, args.budget_usd, args.max_minutes, fresh=args.fresh,
-                     max_turns=args.max_turns)
+                     max_turns=args.max_turns, backend=args.backend)
     except WorkspaceError as exc:
         print(f"reelsmith run: {exc}", file=sys.stderr)
         return 2
