@@ -1,0 +1,97 @@
+{
+  "version": 2, "fps": 30, "width": 1080, "height": 1920, "durationInFrames": 150,
+  "safe": {"x": 40, "y": 220, "w": 840, "h": 1240},
+  "theme": {"paper": "#F3EBDD", "ink": "#1E1A16", "night": "#16130F", "snow": "#F7F1E6", "accent": "#C8372D",
+            "gold": "#D9A441", "good": "#2E8B57", "bad": "#C8372D", "muted": "#7A6F62"},
+  "tracks": [
+    {"id": "bg", "kind": "visual", "clips": [
+      {"id": "ground", "type": "shape", "track": "bg", "from": 0, "dur": 150, "box": {"x": 0, "y": 0, "w": 1080, "h": 1920},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null, "content": {"shape": "rect", "fill": "#3A6EA5"}}
+    ]},
+    {"id": "t1", "kind": "visual", "clips": [
+      {"id": "nowrap", "type": "text", "track": "t1", "from": 0, "dur": 60, "box": {"x": 60, "y": 80, "w": 800, "h": 90},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "wrap 关闭时这一行很长很长很长很长很长会怎样", "accent": false}],
+                   "style": {"font": "sans", "size": 60, "max_size": 160, "min_size": 28, "weight": 700, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": false, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}},
+      {"id": "ev_tall", "type": "evidence", "track": "t1", "from": 60, "dur": 90, "box": {"x": 40, "y": 220, "w": 500, "h": 1240},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"src": "assets/evidence.png", "size": [1290, 960], "box": [358, 446, 330, 66], "site": "example.org", "highlight": null}}
+    ]},
+    {"id": "t2", "kind": "visual", "clips": [
+      {"id": "fit", "type": "text", "track": "t2", "from": 0, "dur": 60, "box": {"x": 60, "y": 200, "w": 800, "h": 360},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "按92号汽油密度0.725换算，一吨大约1370升，个税按偶然所得20%扣，到手大约九千三百七十一元。", "accent": false}],
+                   "style": {"font": "sans", "size": "fit", "max_size": 160, "min_size": 28, "weight": 900, "color": "gold",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}},
+      {"id": "ev_wide", "type": "evidence", "track": "t2", "from": 60, "dur": 90, "box": {"x": 560, "y": 220, "w": 480, "h": 90},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"src": "assets/evidence.png", "size": [1290, 960], "box": [56, 446, 1060, 66], "site": "example.org", "highlight": null}}
+    ]},
+    {"id": "t3", "kind": "visual", "clips": [
+      {"id": "bal", "type": "text", "track": "t3", "from": 0, "dur": 60, "box": {"x": 60, "y": 600, "w": 700, "h": 200},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "iPhone 17 Pro 售价 8999 元，比去年贵了 12%", "accent": false}],
+                   "style": {"font": "sans", "size": 56, "max_size": 160, "min_size": 28, "weight": 700, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": true, "stroke": null, "shadow": false, "bg": null}, "reveal": null}},
+      {"id": "ev_narrow", "type": "evidence", "track": "t3", "from": 60, "dur": 90, "box": {"x": 600, "y": 400, "w": 300, "h": 700},
+       "style": {"radius": 12, "shadow": true}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"src": "assets/evidence.png", "size": [1290, 960], "box": [56, 446, 1060, 66], "site": "example.org", "highlight": null}}
+    ]},
+    {"id": "t4", "kind": "visual", "clips": [
+      {"id": "lines", "type": "text", "track": "t4", "from": 0, "dur": 60, "box": {"x": 60, "y": 840, "w": 800, "h": 340},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "固定字号的段落用 lines 模式逐行出现，但这段文字没有手动换行，所以要靠测量出来的视觉行一行一行地显示出来。", "accent": false}],
+                   "style": {"font": "sans", "size": 56, "max_size": 160, "min_size": 28, "weight": 700, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null},
+                   "reveal": {"mode": "lines", "dur": 1.5}}},
+      {"id": "panned", "type": "image", "track": "t4", "from": 60, "dur": 90, "box": {"x": 40, "y": 1500, "w": 400, "h": 300},
+       "style": {}, "keyframes": {"pan_x": [{"f": 0, "v": 0}, {"f": 30, "v": 100, "ease": "inOut"}]}, "enter": null, "exit": null,
+       "content": {"src": "assets/photo.jpg", "size": [720, 960], "fit": "cover", "focus": null}}
+    ]},
+    {"id": "t8", "kind": "visual", "clips": [
+      {"id": "fill_line", "type": "shape", "track": "t8", "from": 60, "dur": 90, "box": {"x": 600, "y": 1500, "w": 400, "h": 300},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"shape": "line", "fill": "gold", "stroke": null, "stroke_width": null, "d": null, "draw": false}}
+    ]},
+    {"id": "t5", "kind": "visual", "clips": [
+      {"id": "plain", "type": "text", "track": "t5", "from": 0, "dur": 60, "box": {"x": 60, "y": 1140, "w": 800, "h": 110},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "没有设置颜色的文字", "accent": false}],
+                   "style": {"font": "sans", "size": 80, "max_size": 160, "min_size": 28, "weight": 700, "color": null,
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}},
+      {"id": "fonts_display", "type": "text", "track": "t5", "from": 0, "dur": 60, "box": {"x": 60, "y": 1480, "w": 960, "h": 110},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "水多算 得意黑 2026", "accent": false}],
+                   "style": {"font": "display", "size": 80, "max_size": 160, "min_size": 28, "weight": 400, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}}
+    ]},
+    {"id": "t6", "kind": "visual", "clips": [
+      {"id": "fonts_zcool", "type": "text", "track": "t6", "from": 0, "dur": 60, "box": {"x": 60, "y": 1600, "w": 960, "h": 110},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "水多算 得意黑 2026", "accent": false}],
+                   "style": {"font": "zcool", "size": 80, "max_size": 160, "min_size": 28, "weight": 400, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}}
+    ]},
+    {"id": "t7", "kind": "visual", "clips": [
+      {"id": "fonts_sans", "type": "text", "track": "t7", "from": 0, "dur": 60, "box": {"x": 60, "y": 1720, "w": 960, "h": 110},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "水多算 得意黑 2026", "accent": false}],
+                   "style": {"font": "sans", "size": 80, "max_size": 160, "min_size": 28, "weight": 400, "color": "snow",
+                             "accent": null, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
+                             "wrap": true, "balance": false, "stroke": null, "shadow": false, "bg": null}, "reveal": null}}
+    ]},
+    {"id": "cap", "kind": "captions", "box": null, "style": null, "items": [
+      {"from": 0, "to": 60, "runs": [{"text": "全国居民人均可支配收入34230元，比上年名义增长百分之五", "accent": false}]}
+    ]}
+  ],
+  "audio": [],
+  "inspect": false
+}

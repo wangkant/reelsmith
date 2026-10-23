@@ -1,0 +1,4 @@
+{
+  "hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
+  "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": [45, 75]}
+}

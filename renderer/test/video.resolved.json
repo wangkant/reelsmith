@@ -1,0 +1,24 @@
+{
+  "version": 2, "fps": 30, "width": 540, "height": 960, "durationInFrames": 150,
+  "safe": {"x": 20, "y": 110, "w": 420, "h": 620},
+  "theme": {"paper": "#F3EBDD", "ink": "#1E1A16", "night": "#16130F", "snow": "#F7F1E6", "accent": "#C8372D",
+            "gold": "#D9A441", "good": "#2E8B57", "bad": "#C8372D", "muted": "#7A6F62"},
+  "tracks": [
+    {"id": "bg", "kind": "visual", "clips": [
+      {"id": "v1", "type": "video", "track": "bg", "from": 0, "dur": 150, "box": {"x": 0, "y": 0, "w": 540, "h": 960},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"src": "assets/clip.mp4", "duration": 2, "trimIn": 6, "rate": 1.25, "loop": true, "fit": "cover", "focus": null,
+                   "volume": 0}}
+    ]},
+    {"id": "fg", "kind": "visual", "clips": [
+      {"id": "v2", "type": "video", "track": "fg", "from": 30, "dur": 120, "box": {"x": 40, "y": 600, "w": 240, "h": 240},
+       "style": {"radius": 20}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"src": "assets/clip.mp4", "duration": 2, "trimIn": 0, "rate": 1, "loop": false, "fit": "cover", "focus": [0.8, 0.5],
+                   "volume": 0}}
+    ]}
+  ],
+  "audio": [
+    {"id": "bed", "src": "assets/bed.wav", "from": 0, "dur": 150, "trimIn": 0, "volume": 1, "fadeIn": 0, "fadeOut": 0, "loop": true}
+  ],
+  "inspect": false
+}

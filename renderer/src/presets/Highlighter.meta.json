@@ -1,0 +1,19 @@
+{
+  "name": "Highlighter",
+  "description": "A translucent highlighter stroke that sweeps across its own clip box: put the clip exactly over a word, a line or a number (in a picture, an evidence clip, a text clip) on a track above it. Draws no text.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "at": {"type": ["number", "string"], "description": "Time the sweep starts: \"line:7+0.2\" or seconds from the clip start. Default: the clip start"},
+      "dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 5, "default": 0.6, "description": "seconds the sweep takes"},
+      "direction": {"type": "string", "enum": ["right", "left", "down", "up"], "default": "right"},
+      "shape": {"type": "string", "enum": ["block", "underline", "marker"], "default": "block", "description": "block fills the box; underline is its bottom third; marker is a pen stroke with uneven edges"},
+      "color": {"type": "string", "default": "gold", "description": "theme token (gold, accent, good, bad) or CSS"},
+      "opacity": {"type": "number", "minimum": 0, "maximum": 1, "description": "default 0.42 (0.5 on a dark ground)"},
+      "seed": {"type": "string", "maxLength": 20, "description": "changes the marker's uneven edges"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "light multiplies like ink; dark screens so it stays visible. For a true ink look also set the clip's blend to multiply"}
+    }
+  },
+  "example": {"shape": "marker", "dur": 0.6}
+}

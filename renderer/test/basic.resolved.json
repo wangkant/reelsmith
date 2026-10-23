@@ -1,0 +1,87 @@
+{
+  "version": 2, "fps": 30, "width": 1080, "height": 1920, "durationInFrames": 120,
+  "safe": {"x": 40, "y": 220, "w": 840, "h": 1240},
+  "theme": {"paper": "#F3EBDD", "ink": "#1E1A16", "night": "#16130F", "snow": "#F7F1E6", "accent": "#C8372D",
+            "gold": "#D9A441", "good": "#2E8B57", "bad": "#C8372D", "muted": "#7A6F62"},
+  "tracks": [
+    {"id": "bg", "kind": "visual", "clips": [
+      {"id": "photo", "type": "image", "track": "bg", "from": 0, "dur": 120, "box": {"x": 0, "y": 0, "w": 1080, "h": 1920},
+       "style": {"opacity": 1, "rotate": 0, "scale": 1, "origin": "center", "radius": 0, "blend": "normal",
+                 "filter": {"brightness": 0.55, "saturate": 0.8}, "shadow": false},
+       "keyframes": {"zoom": [{"f": 0, "v": 1}, {"f": 119, "v": 1.15, "ease": "inOut"}],
+                     "pan_x": [{"f": 0, "v": 0}, {"f": 119, "v": -40, "ease": "linear"}]},
+       "enter": null, "exit": null,
+       "content": {"src": "assets/photo.jpg", "size": [720, 960], "fit": "cover", "focus": [0.5, 0.4]}}
+    ]},
+    {"id": "ghost", "kind": "visual", "hidden": true, "clips": [
+      {"id": "ghost1", "type": "text", "track": "ghost", "from": 0, "dur": 120, "box": {"x": 100, "y": 900, "w": 800, "h": 200},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "HIDDEN TRACK MUST NOT SHOW", "accent": false}], "style": {"size": 80, "color": "#ff00ff"}, "reveal": null}}
+    ]},
+    {"id": "media", "kind": "visual", "clips": [
+      {"id": "vid", "type": "video", "track": "media", "from": 0, "dur": 120, "box": {"x": 60, "y": 260, "w": 420, "h": 620},
+       "style": {"radius": 28, "shadow": true}, "keyframes": {}, "enter": {"preset": "fade", "dur": 10}, "exit": null,
+       "content": {"src": "assets/clip.mp4", "duration": 2.0, "trimIn": 15, "rate": 1, "loop": true, "fit": "cover", "volume": 0}}
+    ]},
+    {"id": "proof", "kind": "visual", "clips": [
+      {"id": "ev", "type": "evidence", "track": "proof", "from": 20, "dur": 100, "box": {"x": 60, "y": 960, "w": 960, "h": 300},
+       "style": {"radius": 16, "shadow": true}, "keyframes": {}, "enter": {"preset": "rise", "dur": 12}, "exit": null,
+       "content": {"src": "assets/evidence.png", "size": [1290, 960], "box": [56, 446, 1060, 66], "site": "example.org",
+                   "highlight": {"at": 10, "dur": 20, "color": "gold"}}}
+    ]},
+    {"id": "words", "kind": "visual", "clips": [
+      {"id": "title", "type": "text", "track": "words", "from": 0, "dur": 120, "box": {"x": 520, "y": 280, "w": 500, "h": 300},
+       "style": {}, "keyframes": {}, "enter": {"preset": "rise", "dur": 12}, "exit": null,
+       "content": {"runs": [{"text": "油价", "accent": true}, {"text": "又涨了，这次涨多少？", "accent": false}],
+                   "style": {"font": "sans", "size": "fit", "max_size": 120, "min_size": 40, "weight": 900, "color": "snow",
+                             "accent": "gold", "align": "left", "valign": "top", "line_height": 1.12, "letter_spacing": 0,
+                             "wrap": true, "balance": true, "stroke": {"color": "#000000", "width": 3}, "shadow": true, "bg": null},
+                   "reveal": null}},
+      {"id": "sub", "type": "text", "track": "words", "from": 10, "dur": 110, "box": {"x": 520, "y": 600, "w": 500, "h": 260},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"runs": [{"text": "每吨汽油提高 ", "accent": false}, {"text": "215元", "accent": true},
+                            {"text": "，柴油提高 205 元。折合每升约一毛七。", "accent": false}],
+                   "style": {"font": "sans", "size": 44, "weight": 500, "color": "snow", "accent": "gold", "align": "left",
+                             "valign": "top", "line_height": 1.3, "wrap": true, "bg": {"color": "rgba(0,0,0,0.45)", "radius": 12, "pad": 16}},
+                   "reveal": {"mode": "chars", "dur": 1.5}}}
+    ]},
+    {"id": "marks", "kind": "visual", "clips": [
+      {"id": "arrow", "type": "shape", "track": "marks", "from": 15, "dur": 105, "box": {"x": 560, "y": 870, "w": 220, "h": 90},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"shape": "arrow", "stroke": "gold", "stroke_width": 8, "d": "M210 0 C 140 10, 60 40, 20 85", "draw": true}},
+      {"id": "ring", "type": "shape", "track": "marks", "from": 0, "dur": 120, "box": {"x": 90, "y": 1150, "w": 300, "h": 100},
+       "style": {}, "keyframes": {"progress": [{"f": 30, "v": 0}, {"f": 50, "v": 1, "ease": "out"}]}, "enter": null, "exit": null,
+       "content": {"shape": "ellipse", "stroke": "accent", "stroke_width": 7, "draw": true}},
+      {"id": "plate", "type": "shape", "track": "marks", "from": 0, "dur": 120, "box": {"x": 40, "y": 1740, "w": 1000, "h": 120},
+       "style": {"radius": 24, "opacity": 0.85}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"shape": "rect", "fill": "night", "draw": false}}
+    ]},
+    {"id": "comps", "kind": "visual", "clips": [
+      {"id": "count", "type": "component", "track": "comps", "from": 0, "dur": 120, "box": {"x": 60, "y": 1490, "w": 460, "h": 220},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"name": "CountUp", "props": {"value": 215, "suffix": "元", "label": "每吨汽油", "at": 5, "ground": "dark", "color": "gold"}}},
+      {"id": "stamp", "type": "component", "track": "comps", "from": 0, "dur": 120, "box": {"x": 600, "y": 1480, "w": 360, "h": 220},
+       "style": {}, "keyframes": {}, "enter": null, "exit": null,
+       "content": {"name": "Stamp", "props": {"text": "STAMP"}}},
+      {"id": "badge", "type": "component", "track": "comps", "from": 0, "dur": 120, "box": {"x": 880, "y": 100, "w": 180, "h": 80},
+       "style": {}, "keyframes": {}, "enter": {"preset": "pop", "dur": 12}, "exit": null,
+       "content": {"name": "Badge", "props": {"text": "NEW"}}}
+    ]},
+    {"id": "top", "kind": "visual", "clips": [
+      {"id": "note", "type": "text", "track": "top", "from": 0, "dur": 120, "box": {"x": 60, "y": 1750, "w": 960, "h": 100},
+       "style": {"opacity": 0.5, "rotate": -2}, "keyframes": {}, "enter": null, "exit": {"preset": "wipe_left", "dur": 15},
+       "content": {"runs": [{"text": "半透明的旁注 note", "accent": false}],
+                   "style": {"size": "fit", "max_size": 60, "color": "snow", "align": "center", "valign": "middle"}, "reveal": null}}
+    ]},
+    {"id": "cap", "kind": "captions", "box": {"x": 40, "y": 1270, "w": 840, "h": 180}, "style": {},
+     "items": [
+       {"from": 0, "to": 50, "runs": [{"text": "油价又涨了", "accent": false}]},
+       {"from": 50, "to": 110, "runs": [{"text": "每吨汽油涨了", "accent": false}, {"text": "215元", "accent": true}]}
+     ]}
+  ],
+  "audio": [
+    {"id": "voice", "src": "assets/voice.wav", "from": 0, "dur": 90, "trimIn": 0, "volume": 1, "fadeIn": 0, "fadeOut": 6},
+    {"id": "bed", "src": "assets/bed.wav", "from": 30, "dur": 60, "trimIn": 15, "volume": 0.3, "fadeIn": 15, "fadeOut": 15}
+  ],
+  "inspect": false
+}

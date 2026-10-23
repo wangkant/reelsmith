@@ -1,0 +1,58 @@
+{
+ "version": 2,
+ "meta": {"title": "一杯奶茶的成本", "desc": "一杯奶茶，算完账才知道钱去哪了 #奶茶", "topic": "奶茶成本拆解",
+          "shape": "receipt explainer, verdict at the end",
+          "sources": [{"title": "示例来源", "url": "https://example.com/milk-tea-cost"}]},
+ "voice": "voice/voice.json",
+ "assets": {
+  "photo": {"path": "assets/photo.png", "kind": "image"},
+  "clip": {"path": "assets/clip.mp4", "kind": "video"},
+  "ev": {"path": "assets/evidence.png", "kind": "evidence", "box": [40, 420, 460, 50], "site": "example.com",
+         "url": "https://example.com/milk-tea-cost"},
+  "bed": {"path": "assets/bed.wav", "kind": "audio"}
+ },
+ "tracks": [
+  {"id": "bg", "kind": "visual", "clips": [
+   {"id": "open", "type": "image", "asset": "photo", "start": 0, "end": "line:3", "motion": "push"},
+   {"id": "shop", "type": "video", "asset": "clip", "start": "line:3", "end": "line:5", "loop": true, "trim_in": 0.5,
+    "filter": {"brightness": 0.7}},
+   {"id": "close", "type": "image", "asset": "photo", "start": "line:5", "end": "end", "motion": "pull",
+    "filter": {"brightness": 0.55, "saturate": 0.8}}
+  ]},
+  {"id": "mid", "kind": "visual", "clips": [
+   {"id": "bill", "type": "component", "name": "Receipt", "start": "line:3", "end": "line:5",
+    "box": {"x": 80, "y": 560, "w": 720, "h": 640}, "enter": {"preset": "rise", "dur": 0.4},
+    "props": {"title": "这杯奶茶", "rows": [{"label": "茶底和奶", "value": "¥2.5", "at": "line:3+0.3"},
+                                           {"label": "杯子吸管", "value": "¥1.0", "at": "line:4"}],
+              "total": {"label": "材料", "value": "¥3.5", "at": "line:4.end"}}},
+   {"id": "proof", "type": "evidence", "asset": "ev", "start": "line:5", "end": "line:6",
+    "box": {"x": 60, "y": 560, "w": 800, "h": 420}, "radius": 16, "shadow": true,
+    "highlight": {"at": "line:5+0.8"}, "enter": {"preset": "rise", "dur": 0.4}},
+   {"id": "count", "type": "component", "name": "CountUp", "start": "line:6", "end": "line:7",
+    "box": {"x": 80, "y": 600, "w": 720, "h": 380},
+    "props": {"value": 5, "prefix": "¥", "label": "毛利不到", "at": "line:6+0.3", "ground": "dark"}}
+  ]},
+  {"id": "fg", "kind": "visual", "clips": [
+   {"id": "hook", "type": "text", "text": "一杯奶茶，**成本多少**？", "start": 0, "end": "line:2.end",
+    "box": {"x": 60, "y": 300, "w": 800, "h": 260},
+    "style": {"size": "fit", "max_size": 130, "weight": 900, "color": "#FFFFFF", "stroke": {"color": "#000", "width": 6}},
+    "reveal": {"mode": "chars", "dur": 0.6},
+    "keyframes": {"scale": [{"t": 0, "v": 0.92}, {"t": 0.5, "v": 1, "ease": "spring"}]}},
+   {"id": "arrow", "type": "shape", "shape": "arrow", "start": "line:5+1", "dur": 1.5,
+    "box": {"x": 520, "y": 1000, "w": 300, "h": 160}, "stroke": "accent", "stroke_width": 10, "draw": true},
+   {"id": "ring", "type": "shape", "shape": "ellipse", "start": "line:6", "end": "line:7",
+    "box": {"x": 120, "y": 640, "w": 640, "h": 300}, "stroke": "gold", "stroke_width": 8, "draw": true,
+    "keyframes": {"progress": [{"t": 0.4, "v": 0}, {"t": "line:6+1.2", "v": 1, "ease": "out"}]}},
+   {"id": "verdict", "type": "component", "name": "Stamp", "start": "line:7", "end": "end",
+    "box": {"x": 300, "y": 640, "w": 360, "h": 360}, "props": {"text": "不贵", "at": 0.3}}
+  ]},
+  {"id": "notes", "kind": "visual", "hidden": true, "clips": [
+   {"id": "todo", "type": "text", "text": "hidden track: never shows", "start": 0, "dur": 2}
+  ]},
+  {"id": "music", "kind": "audio", "clips": [
+   {"id": "bed1", "type": "audio", "asset": "bed", "start": 0, "dur": 2, "volume": 0.1, "fade_out": 0.5}
+  ]},
+  {"id": "cap", "kind": "captions", "source": "voice", "emphasis": ["成本"], "max_chars": 12,
+   "overrides": [{"line": 3, "text": "茶底加奶，大约**2.5元**"}]}
+ ]
+}

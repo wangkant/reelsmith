@@ -1,0 +1,1 @@
+{"name": "Badge", "description": "test: a pill with a word", "props": {"type": "object", "properties": {"text": {"type": "string"}}}, "example": {"text": "NEW"}}

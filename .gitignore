@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+renderer/node_modules/
+build/
+out/
+npm-install.log
+.history/
+.env
+.env.*
+.cache/
+ledger.jsonl*
+dist/

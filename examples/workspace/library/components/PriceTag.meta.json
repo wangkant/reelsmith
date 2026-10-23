@@ -1,0 +1,18 @@
+{
+  "name": "PriceTag",
+  "description": "A paper price tag that drops in on its string and swings to rest, with an optional label and an old price that gets struck through. For a price that changed, or what something really costs.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["price"],
+    "properties": {
+      "price": {"type": "string", "minLength": 1, "maxLength": 12, "description": "the price now, formatted: ¥22/杯"},
+      "old": {"type": "string", "maxLength": 12, "description": "the old price, struck through at strike_at"},
+      "label": {"type": "string", "maxLength": 14, "description": "small line on top: 中杯拿铁"},
+      "at": {"type": ["number", "string"], "description": "Time the tag drops in: \"line:6\" or seconds from the clip start. Default: the clip start"},
+      "strike_at": {"type": ["number", "string"], "description": "Time the old price is struck: \"line:7\" or seconds from the clip start. Default: 0.7 s after at"},
+      "color": {"type": "string", "default": "accent", "description": "price and strike colour: theme token or CSS"}
+    }
+  },
+  "example": {"price": "¥22/杯", "old": "¥18/杯", "label": "中杯拿铁"}
+}

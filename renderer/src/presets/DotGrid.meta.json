@@ -1,0 +1,23 @@
+{
+  "name": "DotGrid",
+  "description": "\"N out of M\" made visible: a grid of `total` dots that appear, then light one by one up to `lit` from `at`, with a live count and labels under the grid once lighting starts. Whole rows (10 x 10 for 100) sized to fill the clip box.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["total", "lit"],
+    "properties": {
+      "total": {"type": "integer", "minimum": 1, "maximum": 400, "description": "how many dots; 10, 20, 50 or 100 read at a glance"},
+      "lit": {"type": "number", "minimum": 0, "description": "how many light up (rounded, at most total)"},
+      "label_lit": {"type": "string", "maxLength": 16, "description": "legend after the live count of lit dots, e.g. 交给个税"},
+      "label_rest": {"type": "string", "maxLength": 16, "description": "legend for the unlit rest, e.g. 落进口袋"},
+      "counter": {"type": "boolean", "default": true, "description": "show the live count line even without label_lit"},
+      "at": {"type": ["number", "string"], "description": "Time the lighting starts: \"line:12\" or seconds from the clip start. The count and legend show from then. Default: 0.27 s into the clip"},
+      "dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "description": "seconds to light them all; default: until 55% of the clip"},
+      "columns": {"type": "integer", "minimum": 1, "maximum": 40, "description": "force the column count; default: the biggest dots in whole rows, rows of ten when they fit"},
+      "shape": {"type": "string", "enum": ["dot", "square"], "default": "dot"},
+      "color": {"type": "string", "default": "accent", "description": "lit colour: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets unlit dot and text colours"}
+    }
+  },
+  "example": {"total": 100, "lit": 20, "label_lit": "交给个税", "label_rest": "落进口袋"}
+}

@@ -1,0 +1,1 @@
+{"name": "Stamp", "description": "test: shadows the Stamp preset", "props": {"type": "object", "properties": {"text": {"type": "string"}}}, "example": {"text": "OK"}}

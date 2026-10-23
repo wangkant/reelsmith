@@ -1,0 +1,41 @@
+{
+  "name": "TimelineRule",
+  "description": "A rule that draws itself through 2-6 dated points; each node lights and its date and text arrive at their own time. Vertical (text right of the rule) or horizontal (dates above, text below). Fitted to the clip box.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["points"],
+    "properties": {
+      "points": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "description": "in order along the rule",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["when", "text"],
+          "properties": {
+            "when": {"type": "string", "maxLength": 12, "description": "the date or step, e.g. 第100天, 2024年"},
+            "text": {"type": "string", "maxLength": 24, "description": "what happened; long ones wrap to two lines"},
+            "tone": {"type": "string", "description": "this node's colour: theme token or CSS"},
+            "at": {"type": ["number", "string"], "description": "Time this point lights: \"line:3\" or seconds from the clip start. Default: points spread over the first 60% of the clip"}
+          }
+        }
+      },
+      "orientation": {"type": "string", "enum": ["vertical", "horizontal"], "default": "vertical", "description": "horizontal suits 2-4 short points"},
+      "highlight": {"type": "integer", "minimum": -1, "default": -1, "description": "index of the point to stress (bigger node, coloured text)"},
+      "at": {"type": ["number", "string"], "description": "Time the rule starts drawing: \"line:2\" or seconds from the clip start. Default: the clip start"},
+      "color": {"type": "string", "default": "accent", "description": "lit node colour: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets text and rule colours"}
+    }
+  },
+  "example": {
+    "points": [
+      {"when": "第1天", "text": "报名百日挑战"},
+      {"when": "第100天", "text": "全勤打卡，进抽奖池"},
+      {"when": "第108天", "text": "抽中一台笔记本"}
+    ],
+    "highlight": 2
+  }
+}

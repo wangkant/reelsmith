@@ -1,0 +1,25 @@
+{
+  "name": "CountUp",
+  "description": "One big number that appears at `at`, counts from `from` to `value`, pops when it lands and underlines itself, with an optional label rising under it. Sized to the clip box; the number that matters, said out loud.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["value"],
+    "properties": {
+      "value": {"type": "number", "description": "where it lands"},
+      "from": {"type": "number", "default": 0, "description": "where it starts"},
+      "decimals": {"type": "integer", "minimum": 0, "maximum": 4, "description": "decimal places; default: as many as value or from is written with"},
+      "grouping": {"type": "boolean", "default": true, "description": "thousands separators (12,345)"},
+      "prefix": {"type": "string", "maxLength": 4, "default": "", "description": "smaller text before the digits, e.g. ¥"},
+      "suffix": {"type": "string", "maxLength": 6, "default": "", "description": "smaller text after the digits, e.g. 公里, %, 元/杯"},
+      "label": {"type": "string", "maxLength": 20, "description": "a line under the number, fitted to the box width"},
+      "at": {"type": ["number", "string"], "description": "Time the count starts: \"line:8\" or seconds from the clip start. Nothing shows before it. Default: the clip start"},
+      "dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "description": "seconds the count takes; default: 1.4 s or half of the clip after `at`, whichever is shorter"},
+      "color": {"type": "string", "default": "accent", "description": "number colour: theme token (accent, good, bad, gold, ink, snow) or CSS"},
+      "align": {"type": "string", "enum": ["center", "left"], "default": "center"},
+      "underline": {"type": "boolean", "default": true, "description": "the bar that grows under the number when it lands"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets the label colour"}
+    }
+  },
+  "example": {"value": 12860, "suffix": "人", "label": "报名百日挑战，全勤的不到一成"}
+}

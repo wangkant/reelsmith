@@ -1,0 +1,46 @@
+{
+  "name": "BarCompare",
+  "description": "2-6 bars that grow one after another, each value counting up with its label; one bar is highlighted. Columns, switching to rows by itself when the box is narrow or labels are long. All text is fitted to the clip box; labels are never larger than values.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["items"],
+    "properties": {
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "description": "the bars, left to right (top to bottom when horizontal)",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "value"],
+          "properties": {
+            "label": {"type": "string", "maxLength": 12, "description": "name under (or beside) the bar"},
+            "value": {"type": "number", "description": "bar length; negative values are drawn by their size"},
+            "display": {"type": "string", "maxLength": 12, "description": "text shown instead of the counting value, e.g. 1.2万"},
+            "tone": {"type": "string", "description": "this bar's colour: theme token or CSS (default: muted, accent for the highlighted one)"},
+            "at": {"type": ["number", "string"], "description": "Time this bar starts growing: \"line:9\" or seconds from the clip start. Default: one after another from `at`"}
+          }
+        }
+      },
+      "unit": {"type": "string", "maxLength": 6, "default": "", "description": "appended to each counting value, e.g. 元, %, 升"},
+      "decimals": {"type": "integer", "minimum": 0, "maximum": 4, "description": "decimal places of the values; default: as written"},
+      "orientation": {"type": "string", "enum": ["auto", "vertical", "horizontal"], "default": "auto", "description": "auto: columns, or rows when the column labels or values would read small (narrow boxes, long labels); vertical forces columns"},
+      "highlight": {"type": "integer", "minimum": -1, "description": "index of the bar in the accent colour; -1 for none. Default: the last"},
+      "max": {"type": "number", "exclusiveMinimum": 0, "description": "the value a full-length bar stands for; default: the largest value (set it to compare across clips)"},
+      "at": {"type": ["number", "string"], "description": "Time the first bar starts growing: \"line:8\" or seconds from the clip start. Default: 0.2 s into the clip"},
+      "stagger": {"type": "number", "minimum": 0, "maximum": 5, "default": 0.33, "description": "seconds between bars that have no `at` of their own"},
+      "color": {"type": "string", "default": "accent", "description": "the highlight colour: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets text and plain-bar colours"}
+    }
+  },
+  "example": {
+    "items": [
+      {"label": "奖品价值", "value": 11714},
+      {"label": "个税", "value": 2343, "tone": "bad"},
+      {"label": "到手", "value": 9371}
+    ],
+    "unit": "元"
+  }
+}

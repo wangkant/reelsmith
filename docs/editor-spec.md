@@ -1,0 +1,549 @@
+# reelsmith reference
+
+The platform's contract: where things live, the project format, the edit ops, the Time grammar, the tools and the
+providers behind them, the renderer's input, the checks a film must pass and the self-hosted runner. The agent's
+own guide is [manual.md](manual.md); the component kit is documented in [kit.md](kit.md). Section numbers are stable
+(the source refers to them).
+
+## 1. Principles
+
+- **Environment, not pipeline.** No stages, no required order, no templates. Every tool can be called at any time.
+- **The agent edits a project like an NLE project**: tracks, clips, keyframes, text, shapes, media, components.
+- **Self-editable.** The agent can write its own components into the workspace library (they persist and shadow
+  built-in presets of the same name) and keep its own notes. Built-in presets are optional conveniences.
+- **The platform guarantees mechanics, not taste**: timing to the narration, rendering, loudness, layout
+  measurement, delivery checks. The owner's hard rules (`rules.json`) block delivery; advice is information only.
+- **Every edit is validated and undoable.** A batch of edit ops applies atomically or not at all.
+- **Spend is explicit.** Paid calls estimate first, check the budget and the balance floor, and record what they
+  really cost.
+- **Tools never raise to the client.** A failure comes back as text that says what to do.
+
+## 2. Workspace layout
+
+```
+<workspace>/                      the nearest folder at or above the project that holds workspace.json
+  workspace.json                  profile, theme, providers, budget, runner (all optional)
+  rules.json                      the owner's rules {"hard": {...}, "advice": {...}} (optional)
+  .env                            keys (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, ...); never printed or shown to the agent
+  ledger.jsonl                    paid calls (section 9.6)
+  .cache/                         narration line cache (tts/), draw.log, animate work files, the type-check config
+  library/
+    NOTES.md                      the agent's notes (tools notes / note)
+    components/<Name>.tsx         the agent's own components (section 6)
+    components/<Name>.meta.json
+  projects/<name>/
+    project.json                  the project (section 3)
+    script.md                     free-form: research, sources, draft script
+    voice/voice.wav               narration audio (from speak, or brought in)
+    voice/voice.json              narration timing {file, duration_s, lines: [{i, text, t0, t1}], ...}
+    assets/                       images, clips, evidence captures, audio
+    build/                        regenerable: resolved*.json, stills/, inspect/, review/, report.json (latest
+                                  render attempt), run_state.json and logs of the runner
+    out/film.mp4                  the delivered film; out/meta.json (meta + duration, profile, render time);
+                                  out/report.json (the delivered film's report); out/run_report.json (runner)
+    .history/NNNN.json            a snapshot of project.json before each applied edit batch (undo); log.jsonl,
+                                  redo.json
+```
+
+A project may live outside any workspace: then there is no library and no notes, rules and providers take their
+defaults, keys come from the environment, and the ledger and cache sit in the project folder.
+
+`.env` holds `KEY=VALUE` lines (`export`, quotes and `#` comments are understood). A key missing from `.env` is
+looked up in the process environment.
+
+### 2.1 workspace.json
+
+```json
+{
+  "profile": "douyin",
+  "theme": {"name": "paper", "accent": "#C8372D"},
+  "providers": {
+    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "longanlufeng"},
+    "image": {"provider": "codex"},
+    "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"}
+  },
+  "budget": {"per_project_usd": 1.0, "min_balance_usd": 5.0},
+  "runner": {"model": "claude-opus-5-5", "budget_usd": 5.0, "max_minutes": 120}
+}
+```
+
+| key | meaning |
+|---|---|
+| `profile` | output profile (section 15); a project's own `profile` wins; default `douyin` |
+| `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
+| `providers` | per-tool provider settings (section 9); each section is merged over the defaults |
+| `budget` | `per_project_usd` (default 1.0) and `min_balance_usd` (default 5.0), section 9.6 |
+| `runner` | defaults for `reelsmith run` (section 11) |
+
+### 2.2 rules.json
+
+```json
+{"hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
+ "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": [45, 75]}}
+```
+
+Every key is optional; the values above are the defaults, except `target_s`, which defaults to the profile's
+target. Hard rules are errors (they block `render`): the title's length in characters, how many numbers it may hold,
+how many sources with an http(s) url `meta.sources` needs, and words that may not appear in the title, description
+or topic. Advice never blocks: words on screen within `hook_seconds`, no still image or evidence held longer than
+`max_same_visual_s` without movement, the length against `target_s`.
+
+## 3. project.json
+
+```
+{
+  "version": 2,
+  "profile": "douyin",                 optional: overrides workspace.json
+  "theme": {},                         optional: {"name": "night"} and/or token overrides
+  "meta": {"title": "", "desc": "", "topic": "", "shape": "", "sources": [{"title": "", "url": "https://..."}]},
+  "voice": "voice/voice.json",         optional narration timing file; its audio plays at volume 1 automatically
+  "duration": null,                    seconds or a Time; default: end of the voice + 0.6 s, else the last clip end
+  "assets": {"<id>": Asset},
+  "tracks": [Track, ...]               bottom to top
+}
+```
+
+Unknown keys are refused everywhere. Ids (assets, tracks, clips) are 1-64 letters, digits, `_` or `-`; clip ids
+are unique in the project. Paths are relative to the project folder.
+
+**Asset**: `{"path": "assets/x.png", "kind": "image"|"video"|"audio"|"evidence", "box": [x, y, w, h], "site": "",
+"url": "", "note": ""}`. `box` (pixels in the image: the proving sentence), `site` and `url` belong to evidence.
+Accepted files: image `.png .jpg .jpeg .webp .gif`; evidence `.png .jpg .jpeg .webp`; video `.mp4 .m4v .mov .webm
+.mkv`; audio `.wav .mp3 .m4a .aac .ogg .oga .opus .flac`. An image clip takes an image or evidence asset, an audio
+clip an audio or video asset.
+
+**Track**: `{"id": "v1", "kind": "visual"|"audio"|"captions", "hidden": false, ...}`
+
+- visual / audio: `"clips": [Clip, ...]`. Clips on one track must not overlap in time: layer with more tracks.
+- captions: `{"id": "cap", "kind": "captions", "source": "voice", "box"?, "style"?: TextStyle, "emphasis": [words
+  in the accent colour], "max_chars": 14 (4-40), "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start":
+  Time, "end": Time, "text": "..."}]}`. Without `items`, captions come from the voice lines: phrase-split (never
+  inside a word or a number) and timed by characters. Without `box` they sit in the profile's captions band
+  (section 15). Without a captions track there are no captions.
+
+### 3.1 Time
+
+A Time is a number (seconds from the start of the film) or a string:
+
+- `"line:N"` start of voice line N (1-based); `"line:N.end"` its end
+- `"clip:ID"` start of clip ID; `"clip:ID.end"` its end
+- `"end"` end of the film
+- any of these `+` or `-` seconds: `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"end-2"`
+
+Inside a clip (keyframe `t`, `highlight.at`, component props `at` / `*_at`) a plain number is seconds from the
+clip's start; a Time string stays absolute. A clip's own `start` / `end`, `duration` and caption `items` are film
+Times.
+
+Seconds become frames as `round(s × fps)`, halves up (`timeexpr.to_frame`). Cycles in `clip:` references are an
+error. `resolve.time_of(project, value)` turns a Time into seconds outside the renderer. In `preview` and
+`describe(at=...)`, `"clip:ID.end"` means the clip's last frame.
+
+### 3.2 Clip (visual)
+
+Common fields:
+```
+id, type, start: Time, end: Time | dur: seconds          one of end and dur
+box: {x,y,w,h} | "full" | "safe"          default "full"; canvas pixels
+opacity 1, rotate 0 (deg), scale 1, origin "center"|"top-left"|..., radius 0
+blend "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|... (CSS mix-blend-mode values)
+filter: {blur, brightness, contrast, saturate, grayscale}   (CSS filter units)
+shadow: bool | css string
+enter: {"preset": "fade"|"rise"|"drop"|"pop"|"wipe_left"|"wipe_up"|"zoom", "dur": 0.4}   exit: the same presets
+keyframes: {"<prop>": [{"t": number | Time, "v": number, "ease": "linear"|"in"|"out"|"inOut"|"spring"|"step"}]}
+     props: x, y, w, h, opacity, rotate, scale, blur, brightness, zoom, pan_x, pan_y, progress
+     zoom/pan_x/pan_y move the CONTENT inside the box (Ken Burns); progress (0..1) drives shapes and components
+motion: "push"|"pull"|"pan_left"|"pan_right"|"rise"|"still"   (image/video shorthand for zoom/pan keyframes;
+     keyframes on the same property win)
+```
+
+Types and their fields:
+
+- `image`: `asset`, `fit` `"cover"|"contain"` (default cover), `focus` `[fx, fy]` 0..1, `motion`
+- `video`: `asset`, `trim_in` s, `rate` 1, `loop` false, `fit`, `focus`, `motion`, `volume` 0 (muted)
+- `text`: `text` (markup `**x**` = accent colour), `style`: TextStyle, `reveal`: `{"mode": "chars"|"words"|"lines"|
+  "none", "dur": s}` (`lines` reveals the lines as laid out)
+- `shape`: `shape` `"rect"|"ellipse"|"line"|"arrow"|"path"`, `fill`, `stroke`, `stroke_width`, `d` (SVG path in box
+  pixels), `draw` (the stroke draws on along `progress`, by default over the first 0.6 s). A line or arrow with
+  only `fill` is stroked in that colour.
+- `evidence`: `asset` (kind evidence). The capture's `box` is scaled to the clip width (at most 2×) with context
+  above and below; the panel hugs its content (the rest of the box is transparent) and cut edges fade.
+  `highlight`: `{"at": Time?, "dur": 0.8, "color": "gold"}` sweeps across the proving sentence.
+- `component`: `name`, `props` (validated against the component's meta schema)
+
+TextStyle: `font` `"sans"|"serif"|"display"|"zcool"` (Noto Sans SC, Noto Serif SC, Smiley Sans, ZCOOL QingKe
+HuangYou), `size` px or `"fit"` (the largest size that fits the box width and height on as many word-aware lines as
+it takes), `max_size` 160, `min_size` 28, `weight` 100-900, `color` (default `snow` with a soft shadow), `accent`,
+`align` `"left"|"center"|"right"`, `valign` `"top"|"middle"|"bottom"`, `line_height` 1.15, `letter_spacing` 0,
+`wrap` true, `balance` false (exactly two even lines), `stroke` `{color, width}`, `shadow` bool or CSS, `bg`
+`{color, radius, pad}`.
+
+Colours (text, shapes, highlights, component colour props) take a theme token (section 15) or any CSS colour.
+
+Audio clip: `{id, type: "audio", asset, start, end | dur, trim_in 0, volume 1, fade_in 0, fade_out 0, loop false}`.
+
+### 3.3 Component props and Times
+
+In component props, any key named `at` or ending in `_at` takes a Time and reaches the component as **frames from
+the clip's start**; any key named `asset` or ending in `_asset` takes an asset id and reaches the component as
+`{src, kind, size?, box?, site?, duration?}`. This applies at any depth (arrays, nested objects).
+
+## 4. Python API (package `reelsmith`)
+
+Problems everywhere are `Issue(level: "error"|"warning"|"advice", where: str, msg: str)` (`issues.py`); `str()`
+gives `"[level] where: msg"`.
+
+- `workspace.py`: `Workspace` (`root`, `config`, `rules`, `keys`, `library_dir`, `components_dir`, `notes_path`,
+  `ledger_path`, `cache_dir`, `projects_dir`); `find_workspace(project) -> Workspace | None`; `project_paths(project)`;
+  `profile_for(project)`.
+- `profiles.py`: `Profile`, `get_profile(name)`, `PROFILES`, themes `PAPER` and `NIGHT`.
+- `timeexpr.py`: `parse(value)`, `resolve(value, ctx) -> seconds`, `to_frame(seconds, fps)`.
+- `library.py`: `components(project) -> dict[name, Component]` (presets from `renderer/src/presets/*.meta.json`,
+  overlaid by `<workspace>/library/components/*.meta.json`); `Component(name, description, schema, source:
+  "preset"|"library", path, ...)`; `validate_props(component, props) -> list[str]` (JSON Schema).
+- `document.py`: pydantic models for section 3; `load(project) -> Document`; `save(project, doc)`;
+  `validate(project, doc) -> list[Issue]` (unique ids, references to assets, clips, components and voice lines,
+  Time resolution, cycles, overlaps per track, files present).
+- `ops.py`: `apply(project, ops) -> (ok, issues, summary)`; `undo(project, steps=1) -> (ok, text)` (section 5).
+- `resolve.py`: `resolve(project) -> dict` (section 7); `describe(project, at=None) -> str` (section 8);
+  `time_of(project, value) -> seconds`.
+- `checks.py`: `check_project(project) -> list[Issue]`; `check_layout(inspect, profile, resolved=None) ->
+  list[Issue]`; `check_film(path, profile) -> dict` (section 14).
+- `render.py`: `preview(project, times, sweep=False) -> dict`, `render(project) -> dict`, `review(project, n=12)
+  -> dict`.
+- `providers/`: the asset tools (section 9).
+- `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
+  the runner call these.
+- `mcp_server.py` (stdio), `cli.py`, `runner.py` and its file guard `guard.py` (section 11).
+
+## 5. Edit ops
+
+`apply(project, ops)`: all or nothing.
+```
+{"op": "add_track", "track": {...}, "index": int?}           index: position bottom→top; default top
+{"op": "update_track", "id", "set": {...}}                    deep merge; null removes a key
+{"op": "remove_track", "id"}
+{"op": "add_clip", "track": "v2", "clip": {...}}              clip needs id, type, start, end|dur
+{"op": "update_clip", "id", "set": {...}}                     deep merge; null removes a key
+{"op": "remove_clip", "id"}
+{"op": "move_clip", "id", "start": Time?, "end": Time?, "dur": s?, "track": id?}
+{"op": "split_clip", "id", "at": Time, "new_id": str}         second half gets new_id; keyframes split by time
+{"op": "set_keyframes", "id", "prop", "frames": [...]}         replaces that prop's keyframes ([] removes)
+{"op": "add_asset", "id", "asset": {...}}                       an existing id is replaced
+{"op": "update_asset", "id", "set": {...}}                      deep merge; null removes; no kind change while used
+{"op": "remove_asset", "id"}                                    refused while a clip uses it (the file stays)
+{"op": "set", "path": "meta.title", "value": ...}              dotted path into project.json (not tracks/assets);
+                                                                null removes
+```
+
+A batch is refused, and project.json left untouched, when an op fails or when the result has validation errors the
+project did not have before: errors that were already there do not block edits that leave them alone. Before each
+write the previous project.json is kept as `.history/NNNN.json` (the last 500); `undo` puts one back and keeps the
+version it replaces as `.history/redo.json`. The project may also be edited as a file directly; every tool reads it
+fresh and validates it.
+
+## 6. Components (presets and the agent's library)
+
+A component is a React function in a `.tsx` file plus a `.meta.json` next to it:
+```json
+{"name": "Receipt", "description": "one line for agents", "props": { JSON Schema of props }, "example": {...}}
+```
+```tsx
+import { useCurrentFrame } from "remotion";
+import { useClip, ease, fit, FONTS } from "@reelsmith/kit";
+export default function Receipt({ props }: { props: any }) {
+  const { w, h, dur, fps, theme } = useClip();   // the clip box size, its length in frames, the theme
+  const f = useCurrentFrame();                    // frames from the clip's start
+  ...
+}
+```
+
+- It renders inside an absolutely positioned div of the clip box's size and lays itself out in `w × h`.
+- Imports allowed: `react`, `remotion`, installed `@remotion/*`, `@reelsmith/kit`, relative files in the same
+  folder. Anything else (node builtins, other packages, absolute paths) is refused at bundle time.
+- Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `BarCompare`, `CountUp`, `DotGrid`,
+  `EvidenceCard`, `Highlighter`, `Receipt`, `Stamp`, `TimelineRule`. Library: `<workspace>/library/components/`.
+  The renderer discovers both; a library component shadows a preset of the same name.
+- `@reelsmith/kit` is documented in full in [kit.md](kit.md).
+- `typecheck` type-checks the library with the renderer's TypeScript; a component that throws fails `render` and
+  shows as a red box in `preview`, reported with its source line.
+
+## 7. resolved.json (the renderer's input)
+
+`resolve(project)` writes `build/resolved.json`; `render` and `preview` keep their own copies
+(`resolved.film.json`, `resolved.inspect.json`, `resolved.preview.json`).
+```
+{
+  "version": 2, "fps": 30, "width": 1080, "height": 1920, "durationInFrames": N,
+  "safe": {x,y,w,h}, "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
+  "tracks": [
+    {"id", "kind": "visual", "hidden", "clips": [RClip...]},
+    {"id", "kind": "captions", "box": {..}, "style": {...}, "items": [{"from", "to", "runs": [{"text", "accent": bool}]}]},
+    {"id", "kind": "audio", "hidden"}
+  ],
+  "audio": [{"id", "src", "from", "dur", "trimIn" (frames), "volume", "fadeIn", "fadeOut" (frames), "loop"}],
+  "inspect": false
+}
+RClip = {"id", "type", "track", "from", "dur" (frames), "box": {x,y,w,h},
+         "style": {opacity, rotate, scale, origin, radius, blend, filter, shadow},
+         "keyframes": {prop: [{"f": frames from clip start, "v", "ease"}]},
+         "enter": {"preset", "dur" (frames)} | null, "exit": {...} | null,
+         "content": {...}}
+content by type:
+  image     {"src", "size": [w,h], "fit", "focus"}
+  video     {"src", "duration": s, "trimIn": frames, "rate", "loop", "fit", "focus", "volume"}
+  text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
+  shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
+  evidence  {"src", "size", "box", "site", "highlight": {"at" frames, "dur" frames, "color"} | null}
+  component {"name", "props" (Times → frames, asset ids → refs)}
+```
+The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
+`zoom`/`pan_x`/`pan_y` keyframes, and captions are already phrase-split and timed. `renderer/src/types.ts` is the
+TypeScript side of this format.
+
+## 8. describe
+
+`describe(project, at=None)` returns text an agent reads like the editor's window: canvas, safe area, theme,
+duration, voice lines (`[n] t0-t1 text`), tracks bottom to top with their clips (`id type start-end (as written)
+box summary`) and every caption phrase, assets, and the current validation issues. With `at`, only what is on
+screen then, bottom to top.
+
+## 9. Providers (asset tools)
+
+Each asset tool writes into the project's `assets/` or `voice/`, registers what it made in project.json through the
+edit ops (validated, undoable) and returns text. None raises and none echoes a key: key values and anything shaped
+like a key are scrubbed from every message.
+
+| tool | provider | needs |
+|---|---|---|
+| `speak` | OpenRouter text-to-speech | `OPENROUTER_API_KEY`; ffmpeg |
+| `capture` | Playwright driving a Chromium browser | the `capture` extra; Microsoft Edge, Google Chrome or Playwright's Chromium |
+| `draw` | Codex CLI image generation | the Codex CLI installed and signed in |
+| `animate` | OpenRouter image-to-video | `OPENROUTER_API_KEY`; ffmpeg |
+| `import_asset` | local copy or http(s) download | ffmpeg (ffprobe) for video and audio |
+
+### 9.1 speak
+
+`speak(project, lines: [str | {text, pace?, emotion?}], gap_s=0.22)` → `voice/voice.wav` and `voice/voice.json`
+(`{file, duration_s, lufs, true_peak_db, gap_s, lines: [{i, text, t0, t1}]}`); sets the project's `voice` when it is
+unset. One TTS call per line, at most 200 lines of 400 characters. Each line is cached by everything that shapes
+its audio (provider, model, voice, style, pace, emotion, text), so only changed lines are paid for again; each line
+is trimmed of the TTS's padding and brought to the same loudness before the lines are joined with `gap_s` of
+silence (at most 1.5 s). `pace` is `"slower"`, `"normal"`, `"faster"` or a factor 0.5-2; `emotion` (at most 20
+characters) is passed to the voice as an instruction.
+
+`providers.tts`: `provider` `"openrouter"`, `model` (default `qwen/qwen-audio-3.0-tts-plus`), `voice` (default
+`longanlufeng`), `instructions` (a standing style instruction), `speed_scale` 1.0, `usd_per_1k_chars` 0.02 (the
+estimate when the provider reports no cost), `line_lufs` -12.
+
+Any narration works: a `voice.json` with `lines` (`t0`, `t1` in seconds) next to its audio file is all the
+project needs.
+
+### 9.2 capture
+
+`capture(project, url, id, match?)` → `assets/<id>.png`, an evidence asset with `box` (the sentence holding `match`,
+in the PNG's pixels), `site` and `url`. The browser is the installed Microsoft Edge, else the installed Google
+Chrome, else the Chromium that `python -m playwright install chromium` downloads. The page is loaded at a phone viewport (430 CSS px wide, 3× device scale,
+so the PNG is 1290 px wide); fixed and sticky overlays are hidden, a text column wider than the phone is reflowed,
+and the match grows to its sentence (at most 4 lines). An empty `match` boxes the title. All browser traffic goes
+through a local guard proxy, so the page, its redirects, frames and scripts cannot reach local or private
+addresses. `providers.capture.proxy` (or `REELSMITH_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`) chains an upstream proxy.
+
+### 9.3 draw
+
+`draw(project, id, prompt, style_ref_asset?, size?)` → `assets/<id>.png`, an image asset. `size` is an aspect
+(`9:16` default at 1080×1920, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, `3:2`, `16:9`) or `"WxH"` with sides 256-4096;
+`style_ref_asset` is an image or evidence asset to match in style. The `codex` provider runs `codex exec` with
+image generation only: no user config, no shell, a read-only sandbox without network, no web search, in a
+throwaway folder; Codex's own words go to `<cache>/draw.log`, never to the agent. It uses the model from
+`$CODEX_HOME/config.toml` when one is set there. The binary is `CODEX_EXE`, else the CLI bundled with the Codex
+desktop app on Windows, else `codex` on PATH. A logged-out or out-of-quota answer pauses drawing for 10 minutes.
+
+`providers.image`: `provider` `"codex"`, `max_draws` 30 (tries per project, counted in the ledger), `timeout_s`
+360, `effort` `"low"` (`minimal`, `low`, `medium`, `high`).
+
+### 9.4 animate
+
+`animate(project, id, image_asset, motion, seconds=4, camera?)` → `assets/<id>.mp4`, a silent video asset of 2-12 s
+whose first frame is the picture and in which `motion` happens; `camera` is `push` (default), `pull`, `pan_left`,
+`pan_right`, `rise` or `still`. The estimate is reserved in the ledger before anything is sent, and the accepted
+job is recorded the moment it exists: a later call with the same picture and motion polls that job instead of
+paying again, and a finished clip whose download failed is collected again from its job.
+
+`providers.video`: `provider` `"openrouter"`, `model` (default `bytedance/seedance-1-5-pro`), `resolution`
+`480p`, `720p` (default) or `1080p`, `usd_per_s` (overrides the built-in per-second estimate), `timeout_s` 360.
+
+### 9.5 import_asset and assets
+
+`import_asset(project, id, source, kind?)` copies a local file, or downloads an http(s) image, video or audio file,
+into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video and audio probed) whatever the name or the server
+says; a download goes only to public hosts, every redirect included; the size is capped by
+`providers.import.max_mb` (200). `kind` `evidence` takes a page screenshot you already have (PNG, JPEG or WebP); its
+box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` set, local files must live inside it.
+
+`assets(project)` lists the project's assets with kinds, sizes, durations and spend.
+
+### 9.6 Costs: the ledger, the budget and the balance floor
+
+`speak` and `animate` spend money; `draw` spends tries. Every paid call goes through `ledger.jsonl` (in the
+workspace, or in the project folder outside one):
+
+1. Estimate the cost.
+2. Under the ledger lock, refuse if the project's spend plus this estimate would exceed `budget.per_project_usd`, or
+   if the provider's account balance minus calls still in flight minus this estimate would drop under
+   `budget.min_balance_usd` (an unreadable balance refuses too); otherwise write a `reserved` row.
+3. Call the provider; record `submitted` for an accepted asynchronous job.
+4. Settle with the real cost when the provider reports one, else the estimate.
+
+A call without a final row counts at its estimate, so a call killed half-way still counts against the project and
+parallel calls see each other's reservations. `REELSMITH_BUDGET_USD` and `REELSMITH_MIN_BALANCE_USD` override the
+two budget values for one process.
+
+## 10. Agent-facing tools (tools.py → MCP, CLI, runner)
+
+| tool | does | CLI |
+|---|---|---|
+| `manual()` | the agent manual ([manual.md](manual.md)) | `manual` |
+| `notes(project)` / `note(project, text)` | read / append to the workspace's `library/NOTES.md` | `notes`, `note` |
+| `new_project(project, profile?, title?)` | create a project folder | `new` |
+| `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
+| `edit(project, ops)` | apply a batch of ops (section 5) | `edit` (JSON, `@file` or `-`) |
+| `undo(project, steps=1)` | undo applied batches | `undo --steps` |
+| `check(project)` | validation, hard rules, advice (section 14) | `check` |
+| `library(project, name?)` | components with their props; one in full with its schema, example and source path | `library` |
+| `typecheck(project)` | type-check the library's components | `typecheck` |
+| `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures a still every second as `render` does | `preview [times...] --sweep` |
+| `render(project)` | the film, mastered and checked (section 14) | `render` |
+| `review(project, n=12)` | 2-24 evenly spaced frames of the delivered film and a contact sheet | `review -n` |
+| `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture`, `draw`, `animate`, `import`, `assets` |
+
+Each takes `project` (the path of the folder holding project.json, or of project.json itself) first where it
+applies and returns text; structured results are JSON inside the text. A result is flagged as an error (MCP
+`is_error`, CLI exit status 1) when the call failed or found blocking problems. No tool raises to the client.
+
+## 11. Runner (self-hosted)
+
+```
+reelsmith run <project> --brief "..." [--model M] [--budget-usd N] [--max-minutes N] [--max-turns N] [--fresh]
+```
+
+Starts a Claude Agent SDK session (the `runner` extra) that makes one film in one project. Settings come from the
+flags, then `workspace.json` `runner`, then the defaults: `model` `claude-opus-5-5`, `effort` `medium`,
+`budget_usd` 5.0 (the session's model spend; asset spend has its own budget, section 9.6), `max_minutes` 120,
+`stall_minutes` 60 (no message for that long aborts the session), `max_turns` none, `fixups` 2, `proxy` (or
+`REELSMITH_PROXY`). It needs `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_WORKSPACE_ID`) in the workspace `.env`
+or the environment.
+
+- **Session.** Claude Code's system prompt with a short role appended (read the manual, then the notes; every
+  choice is yours; look at what you make). The host's own Claude Code settings, memory and instructions are not
+  loaded. Tools: the reelsmith MCP server (`python -m reelsmith.mcp_server`, with `REELSMITH_ROOT` set to the
+  workspace), Read, Write, Edit, Glob, Grep, WebSearch, WebFetch and TodoWrite. No shell.
+- **Guard** (`guard.py`, a PreToolUse hook; anything it does not know is refused). Writes go to the project and the
+  workspace library only, never into `build/`, `out/` or `.history/` (the tools write those), never `workspace.json`,
+  `rules.json`, `.env*` or `ledger.jsonl` under any name, never scripts, executables or package files. Reads stay
+  in the workspace, the manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and
+  `.cache/` are unreadable. WebFetch takes public http(s) URLs only; reelsmith tool arguments that name files or
+  URLs are held to the same rules.
+- **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
+  `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
+  it. Otherwise the runner resumes the same session with the exact problems, up to `fixups` times, within the
+  budget and the time limit.
+- **Resume.** State lives in `build/run_state.json`: an interrupted run resumes its own session when started again
+  (`--brief` is then optional); `--fresh` starts a new one. Every message goes to `build/runner.jsonl`, one line per
+  step to stdout; `out/run_report.json` says how it ended (delivered, problems, cost, turns, refused tool calls).
+- Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key).
+
+## 12. Inspect (layout measurement)
+
+When resolved.json has `"inspect": true`, the renderer measures each rendered frame and logs one line:
+`@@inspect {"frame": F, "items": [{"clip", "track", "kind": "clip"|"text", "rect": [x,y,w,h], "opacity", "text",
+"size", "color"}]}`.
+
+- One `clip` item per visible clip container; one `text` item per visible text node (Range rects, merged per node)
+  with its effective opacity (the product up the tree), the first 24 characters, the computed font size in px and
+  the colour.
+- `scripts/render.mjs inspect <resolved.json> <project dir> <out dir> <frame...>` renders those stills and writes
+  `<out dir>/inspect.json` = `{"frames": [{"frame", "png", "items"}]}`.
+- `check_layout` turns it into issues (section 14): text outside the safe area or cut by the canvas edge, tiny or
+  small text, text overflowing its clip box, text over other text, and contrast sampled from the still.
+
+## 13. render.mjs (node, renderer/scripts)
+
+`node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame...]`, one bundle per call:
+
+- `film`: `<out>` is the mp4 to write (h264 crf 18, yuv420p, BT.709); `stills`: a folder of `still_<frame>.png`;
+  `inspect`: stills plus `inspect.json`.
+- The public dir is the project dir. Webpack aliases `@reelsmith/kit` → `renderer/src/kit` and `@library` → the
+  folder in `REELSMITH_LIBRARY` (reelsmith sets it to the workspace's `library/components`; an empty folder when
+  unset). The import guard enforces section 6.
+- The last stdout line is JSON: `{"ok": true, ...}` or `{"ok": false, "stage", "error", "browserErrors"}`. Stage
+  `component` names a crashed or missing component with its source line; stage `infra` with `"transient": true`
+  is a socket, browser or compositor failure that a plain retry may pass (reelsmith retries it once).
+
+`scripts/segment.mjs` gives Python the word boundaries (`Intl.Segmenter("zh")`) used to phrase-split captions.
+
+## 14. Checks and delivery
+
+`check(project)` reports three levels: **errors** block `render`, **warnings** and **advice** are information.
+
+- Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
+  cyclic Times, props that fail a component's schema); the hard rules (section 2.2); a length outside the profile's
+  limits.
+- Warnings: an empty title; frame 0 (the cover) without whole words on it (mid-reveal, mid-enter, fading in, or no
+  words at all); evidence whose proving sentence will read under 40 px; a component Time that falls outside its
+  clip; motion and keyframes on the same property.
+- Advice (from rules.json `advice`): nothing on screen at 0 s or no words within `hook_seconds`; a still image or
+  evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
+
+`render(project)` stops at the first stage that fails and keeps the previous `out/film.mp4`:
+
+1. **check**: any check error.
+2. **layout**: a still every second, measured (section 12): visible text outside the safe area or cut by the canvas
+   edge, text under 20 px, a component that crashes. Text during its enter/exit animation and text fainter than
+   10 % opacity are not counted. Warnings: text under 28 px, text overflowing its clip box, text of one clip over
+   text of another (captions included), and contrast under 3:1 against the background sampled from the still
+   (between 2:1 and 3:1 a clearly different hue passes).
+3. **film**: the renderer encodes the film.
+4. **master**: the film must have sound; loudness is normalised to the profile's target (true peak −1 dBTP).
+5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
+   profile's cap, sound not near silent, at most 10 % black, and no stretch longer than 5 s without any motion. A
+   rejected film is kept as `build/film.rejected.mp4` to look at.
+
+Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
+failure that is not the project's (its local server or browser) is retried once and reported as transient.
+
+## 15. Profiles and themes
+
+| profile | canvas | safe area x, y, w, h | captions band | length | target | max size | loudness |
+|---|---|---|---|---|---|---|---|
+| `douyin` (default) | 1080×1920, 30 fps | 40, 220, 840, 1240 | 40, 1260, 840, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS |
+| `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS |
+| `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS |
+
+The safe area is where the platform's own UI (status bar, tabs, the button rail, title and music) does not cover
+the picture: words must stay inside it; backgrounds may bleed to the edges.
+
+| token | `paper` (default) | `night` | for |
+|---|---|---|---|
+| `paper` | #F3EBDD | #E9EEF3 | light ground |
+| `ink` | #1E1A16 | #10151C | text on a light ground |
+| `night` | #16130F | #0E1319 | dark ground |
+| `snow` | #F7F1E6 | #F2F5F8 | text on a dark ground or a picture (the default text colour) |
+| `accent` | #C8372D | #FF5A3C | the one number that matters |
+| `gold` | #D9A441 | #FFC24B | highlights |
+| `good` / `bad` | #2E8B57 / #C8372D | #3BC48A / #FF5A3C | gains / losses |
+| `muted` | #7A6F62 | #8A96A3 | secondary text |
+
+The theme is `paper` (or the one `name`d), then workspace.json `theme`, then project.json `theme`.
+
+## 16. Environment variables
+
+| variable | effect |
+|---|---|
+| `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace) |
+| `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
+| `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
+| `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
+| `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (`capture` also honours `HTTPS_PROXY` / `HTTP_PROXY`) |
+| `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw`, and Codex's home folder (default `~/.codex`) |
+| `OPENROUTER_API_KEY` | `speak` and `animate` (workspace `.env` first, then the environment) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner |

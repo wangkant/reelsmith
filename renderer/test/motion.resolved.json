@@ -1,0 +1,81 @@
+{
+  "version": 2, "fps": 30, "width": 1080, "height": 1920, "durationInFrames": 60,
+  "safe": {"x": 40, "y": 220, "w": 840, "h": 1240},
+  "theme": {"paper": "#F3EBDD", "ink": "#1E1A16", "night": "#16130F", "snow": "#F7F1E6", "accent": "#C8372D",
+            "gold": "#D9A441", "good": "#2E8B57", "bad": "#C8372D", "muted": "#7A6F62"},
+  "tracks": [
+    {"id": "ground", "kind": "visual", "clips": [
+      {"id": "paper", "type": "shape", "track": "ground", "from": 0, "dur": 60, "box": {"x": 0, "y": 0, "w": 1080, "h": 1920},
+       "content": {"shape": "rect", "fill": "paper"}},
+      {"id": "pic", "type": "image", "track": "ground", "from": 0, "dur": 60, "box": {"x": 700, "y": 60, "w": 340, "h": 200},
+       "style": {"radius": 20, "filter": {"grayscale": 1}},
+       "content": {"src": "assets/photo.jpg", "size": [720, 960], "fit": "contain", "focus": [0, 0]}}
+    ]},
+    {"id": "keys", "kind": "visual", "clips": [
+      {"id": "lin", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 100, "y": 100, "w": 100, "h": 100},
+       "keyframes": {"x": [{"f": 0, "v": 100}, {"f": 20, "v": 300, "ease": "linear"}]}, "content": {"shape": "rect", "fill": "accent"}},
+      {"id": "stp", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 100, "y": 250, "w": 100, "h": 100},
+       "keyframes": {"y": [{"f": 0, "v": 250}, {"f": 20, "v": 450, "ease": "step"}]}, "content": {"shape": "ellipse", "fill": "gold"}},
+      {"id": "ein", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 100, "y": 600, "w": 80, "h": 80},
+       "keyframes": {"x": [{"f": 0, "v": 100}, {"f": 20, "v": 300, "ease": "in"}]}, "content": {"shape": "rect", "fill": "good"}},
+      {"id": "eout", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 100, "y": 700, "w": 80, "h": 80},
+       "keyframes": {"x": [{"f": 0, "v": 100}, {"f": 20, "v": 300, "ease": "out"}]}, "content": {"shape": "rect", "fill": "bad"}},
+      {"id": "size", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 450, "y": 100, "w": 100, "h": 100},
+       "keyframes": {"w": [{"f": 0, "v": 100}, {"f": 20, "v": 200}], "h": [{"f": 0, "v": 100}, {"f": 20, "v": 200}]},
+       "content": {"shape": "rect", "stroke": "ink", "stroke_width": 6}},
+      {"id": "spr", "type": "shape", "track": "keys", "from": 0, "dur": 60, "box": {"x": 100, "y": 800, "w": 80, "h": 80},
+       "keyframes": {"x": [{"f": 0, "v": 100}, {"f": 20, "v": 300, "ease": "spring"}]}, "content": {"shape": "ellipse", "fill": "accent"}}
+    ]},
+    {"id": "fx", "kind": "visual", "clips": [
+      {"id": "op", "type": "text", "track": "fx", "from": 0, "dur": 60, "box": {"x": 450, "y": 330, "w": 560, "h": 90},
+       "keyframes": {"opacity": [{"f": 0, "v": 0}, {"f": 20, "v": 1}]},
+       "content": {"runs": [{"text": "opacity keyframes"}], "style": {"size": 48, "color": "ink"}}},
+      {"id": "fade", "type": "text", "track": "fx", "from": 0, "dur": 60, "box": {"x": 450, "y": 430, "w": 560, "h": 90},
+       "enter": {"preset": "fade", "dur": 10}, "exit": {"preset": "rise", "dur": 10},
+       "content": {"runs": [{"text": "fade in, rise out"}], "style": {"size": 48, "color": "ink"}}},
+      {"id": "pop", "type": "text", "track": "fx", "from": 0, "dur": 60, "box": {"x": 450, "y": 540, "w": 560, "h": 110},
+       "style": {"rotate": -6}, "enter": {"preset": "pop", "dur": 14}, "exit": {"preset": "zoom", "dur": 10},
+       "content": {"runs": [{"text": "弹出 "}, {"text": "POP", "accent": true}],
+                   "style": {"size": "fit", "max_size": 90, "weight": 900, "color": "ink", "align": "center", "valign": "middle",
+                             "bg": {"color": "gold", "radius": 50, "pad": 12}}}},
+      {"id": "wipe", "type": "text", "track": "fx", "from": 0, "dur": 60, "box": {"x": 450, "y": 670, "w": 560, "h": 100},
+       "enter": {"preset": "wipe_up", "dur": 12}, "exit": {"preset": "wipe_left", "dur": 12},
+       "content": {"runs": [{"text": "擦除 wipe_up / wipe_left"}], "style": {"size": "fit", "max_size": 70, "weight": 800, "color": "accent"}}},
+      {"id": "blurry", "type": "image", "track": "fx", "from": 0, "dur": 60, "box": {"x": 450, "y": 800, "w": 270, "h": 200},
+       "style": {"blend": "multiply", "radius": 100, "shadow": "0 10px 30px rgba(0,0,0,0.5)"},
+       "keyframes": {"blur": [{"f": 0, "v": 12}, {"f": 30, "v": 0, "ease": "out"}], "zoom": [{"f": 0, "v": 1.6}, {"f": 59, "v": 1}]},
+       "content": {"src": "assets/photo.jpg", "size": [720, 960], "fit": "cover", "focus": [0.8, 0.2]}},
+      {"id": "frz", "type": "video", "track": "fx", "from": 0, "dur": 60, "box": {"x": 740, "y": 800, "w": 270, "h": 200},
+       "style": {"scale": 0.9, "origin": "top-left"},
+       "content": {"src": "assets/clip.mp4", "duration": 2.0, "trimIn": 0, "rate": 2, "loop": false, "fit": "cover", "volume": 0}}
+    ]},
+    {"id": "shapes", "kind": "visual", "clips": [
+      {"id": "ln", "type": "shape", "track": "shapes", "from": 0, "dur": 60, "box": {"x": 100, "y": 1050, "w": 400, "h": 0},
+       "content": {"shape": "line", "stroke": "ink", "stroke_width": 6, "draw": true}},
+      {"id": "arr", "type": "shape", "track": "shapes", "from": 0, "dur": 60, "box": {"x": 100, "y": 1100, "w": 400, "h": 160},
+       "content": {"shape": "arrow", "stroke": "accent", "stroke_width": 10, "draw": true}},
+      {"id": "blob", "type": "shape", "track": "shapes", "from": 0, "dur": 60, "box": {"x": 560, "y": 1060, "w": 220, "h": 200},
+       "content": {"shape": "path", "d": "M110 0 L220 200 L0 200 Z", "fill": "gold", "stroke": "ink", "stroke_width": 5, "draw": true}},
+      {"id": "box", "type": "shape", "track": "shapes", "from": 0, "dur": 60, "box": {"x": 820, "y": 1060, "w": 200, "h": 200},
+       "style": {"radius": 30}, "content": {"shape": "rect", "stroke": "good", "stroke_width": 8, "draw": true}}
+    ]},
+    {"id": "type", "kind": "visual", "clips": [
+      {"id": "long", "type": "text", "track": "type", "from": 0, "dur": 60, "box": {"x": 60, "y": 1300, "w": 460, "h": 200},
+       "content": {"runs": [{"text": "一段很长的文字在固定大小的盒子里按最小字号换行显示，验证 fit 退到最小字号后会折行"}],
+                   "style": {"size": "fit", "max_size": 80, "min_size": 34, "weight": 600, "color": "ink", "line_height": 1.3}}},
+      {"id": "bal", "type": "text", "track": "type", "from": 0, "dur": 60, "box": {"x": 560, "y": 1300, "w": 460, "h": 200},
+       "content": {"runs": [{"text": "固定字号也能平衡成两行，不留下孤零零的尾巴"}],
+                   "style": {"size": 46, "weight": 700, "color": "ink", "balance": true, "align": "right", "valign": "bottom"}}},
+      {"id": "words", "type": "text", "track": "type", "from": 0, "dur": 60, "box": {"x": 60, "y": 1520, "w": 460, "h": 160},
+       "content": {"runs": [{"text": "按词出现：油价 "}, {"text": "又涨了", "accent": true}, {"text": " reveal by words"}],
+                   "style": {"size": 40, "weight": 700, "color": "ink", "letter_spacing": 0.05}, "reveal": {"mode": "words", "dur": 1.2}}},
+      {"id": "lines", "type": "text", "track": "type", "from": 0, "dur": 60, "box": {"x": 560, "y": 1520, "w": 460, "h": 160},
+       "content": {"runs": [{"text": "第一行\n第二行\n第三行"}],
+                   "style": {"size": 40, "weight": 700, "color": "ink", "letter_spacing": 4}, "reveal": {"mode": "lines", "dur": 1.2}}}
+    ]},
+    {"id": "cap", "kind": "captions", "box": null, "style": null,
+     "items": [{"from": 0, "to": 60, "runs": [{"text": "默认字幕样式与位置", "accent": false}]}]}
+  ],
+  "audio": [],
+  "inspect": false
+}

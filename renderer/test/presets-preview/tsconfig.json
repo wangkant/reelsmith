@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "resolveJsonModule": true,
+    "paths": {
+      "@reelsmith/kit": ["../../src/kit/index.ts"],
+      "*": ["../../node_modules/@types/*", "../../node_modules/*"]
+    }
+  },
+  "include": ["./", "../../src/kit", "../../src/presets", "../../../examples/workspace/library/components"]
+}

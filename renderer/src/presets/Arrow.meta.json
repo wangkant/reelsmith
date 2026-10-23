@@ -1,0 +1,25 @@
+{
+  "name": "Arrow",
+  "description": "An arrow that draws itself from one point of its clip box to another, straight or bent, its head riding the tip, with an optional label at the tail or the head (kept inside the box). Points are fractions of the box, so the same props work at any box size.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "from": {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 2, "maxItems": 2, "default": [0.12, 0.85], "description": "tail [x, y] as fractions of the box (0,0 top-left; 1,1 bottom-right)"},
+      "to": {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 2, "maxItems": 2, "default": [0.85, 0.18], "description": "tip [x, y] as fractions of the box"},
+      "curve": {"type": "number", "minimum": -1, "maximum": 1, "default": 0.25, "description": "bend: 0 straight; positive bows to the right of the direction of travel (clockwise), negative to the left"},
+      "width": {"type": "number", "minimum": 2, "maximum": 60, "description": "stroke width in px; default: 2.2% of the box's short side (at least 6)"},
+      "head": {"type": "boolean", "default": true},
+      "dashed": {"type": "boolean", "default": false},
+      "color": {"type": "string", "default": "accent", "description": "theme token or CSS"},
+      "at": {"type": ["number", "string"], "description": "Time it starts drawing: \"line:9+0.3\" or seconds from the clip start. Default: the clip start"},
+      "dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 5, "default": 0.6, "description": "seconds the drawing takes"},
+      "label": {"type": "string", "maxLength": 16, "description": "short text at the tail or the head, at least 28 px (a long one takes two lines)"},
+      "label_pos": {"type": "string", "enum": ["start", "end"], "default": "start", "description": "start: behind the tail; end: past the head"},
+      "label_at": {"type": ["number", "string"], "description": "Time the label appears: \"line:9+0.8\" or seconds from the clip start. Default: with the arrow"},
+      "label_style": {"type": "string", "enum": ["pill", "plain"], "default": "pill", "description": "pill: white text on the arrow colour; plain: text in the ground's ink"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets a plain label's colour"}
+    }
+  },
+  "example": {"from": [0.1, 0.8], "to": [0.86, 0.22], "curve": 0.3, "label": "多出来的钱", "label_pos": "start"}
+}

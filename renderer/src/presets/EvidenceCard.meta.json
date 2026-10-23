@@ -1,0 +1,20 @@
+{
+  "name": "EvidenceCard",
+  "description": "A captured page on a white card: cropped to the evidence asset's proving sentence (its box) with some page above and below, the sentence enlarged to the clip box width (at most 2x), a highlighter sweeping across it, and the source under the card. The card hugs the crop; give it a wide box (a long sentence in a narrow box reads small).",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["asset"],
+    "properties": {
+      "asset": {"type": "string", "minLength": 1, "description": "id of an evidence asset (from capture); its box marks the proving sentence"},
+      "source": {"type": "string", "maxLength": 40, "description": "line under the card (at least 28 px, two lines if long); default: 来源：<the asset's site, without www.>; \"\" hides it"},
+      "context": {"type": "number", "minimum": 0, "maximum": 2000, "default": 120, "description": "capture pixels of page shown above and below the sentence (captures are 3x, so 120 is about one line)"},
+      "highlight": {"type": "boolean", "default": true, "description": "sweep a highlighter across the sentence"},
+      "highlight_at": {"type": ["number", "string"], "description": "Time the sweep starts: \"line:5+0.5\" or seconds from the clip start. Default: 0.3 s into the clip"},
+      "highlight_dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 5, "default": 0.8, "description": "seconds the sweep takes"},
+      "highlight_color": {"type": "string", "default": "gold", "description": "theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what the card sits on; sets the source line colour and the shadow"}
+    }
+  },
+  "example": {"asset": "ev_article"}
+}
