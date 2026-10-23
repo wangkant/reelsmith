@@ -445,7 +445,8 @@ or the environment.
   URLs are held to the same rules.
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
-  it. Otherwise the runner resumes the same session with the exact problems, up to `fixups` times, within the
+  it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`
+  alone, or to a library component the film does not use, does not call for another render. Otherwise the runner resumes the same session with the exact problems, up to `fixups` times, within the
   budget and the time limit.
 - **Resume.** State lives in `build/run_state.json`: an interrupted run resumes its own session when started again
   (`--brief` is then optional); `--fresh` starts a new one. Every message goes to `build/runner.jsonl`, one line per
