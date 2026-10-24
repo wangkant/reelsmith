@@ -607,6 +607,7 @@ failure that is not the project's (its local server or browser) is retried once 
 | profile | canvas | safe area x, y, w, h | captions band | length | target | max size | loudness |
 |---|---|---|---|---|---|---|---|
 | `douyin` (default) | 1080×1920, 30 fps | 40, 220, 840, 1240 | 40, 1260, 840, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS |
+| `douyin-long` | as `douyin` | as `douyin` | as `douyin` | 60-300 s | 90-180 s | 250 MB | −10 LUFS |
 | `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS |
 | `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS |
 

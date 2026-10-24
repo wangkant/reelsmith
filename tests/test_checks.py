@@ -504,3 +504,10 @@ def test_defaults_are_not_shared():
     r = default_rules()
     r["hard"]["banned"].append("x")
     assert DEFAULT_RULES["hard"]["banned"] == []
+
+
+def test_douyin_long_keeps_the_screen_and_allows_longer_films():
+    from reelsmith.profiles import DOUYIN_LONG, get_profile
+    assert get_profile("douyin-long") is DOUYIN_LONG
+    assert (DOUYIN_LONG.safe, DOUYIN_LONG.captions, DOUYIN_LONG.lufs) == (DOUYIN.safe, DOUYIN.captions, DOUYIN.lufs)
+    assert DOUYIN_LONG.max_s == 300 and DOUYIN_LONG.target_s == (90, 180) and DOUYIN_LONG.max_mb == 250

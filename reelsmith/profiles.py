@@ -1,7 +1,7 @@
 """Platform profiles (frame, UI-safe area, delivery limits) and visual themes."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -45,13 +45,15 @@ class Profile:
 # Douyin on a phone covers the top ~200 px, the right rail (x >= 920, y 720-1640) and the bottom bar (y >= 1480).
 DOUYIN = Profile("douyin", 1080, 1920, 30, Box(40, 220, 840, 1240), Box(40, 1260, 840, 200),
                  20, 90, (45, 75), 80, -10.0)
+# Douyin's longer explainers (a how-to, a checklist worth saving): the same screen, more time.
+DOUYIN_LONG = replace(DOUYIN, name="douyin-long", min_s=60, max_s=300, target_s=(90, 180), max_mb=250)
 # TikTok and Shorts lay their chrome out much the same; the right rail sits a little lower on Shorts.
 TIKTOK = Profile("tiktok", 1080, 1920, 30, Box(60, 200, 820, 1260), Box(60, 1260, 820, 200),
                  15, 180, (30, 75), 250, -14.0)
 SHORTS = Profile("shorts", 1080, 1920, 30, Box(60, 180, 820, 1300), Box(60, 1280, 820, 200),
                  15, 180, (30, 60), 250, -14.0)
 
-PROFILES = {p.name: p for p in (DOUYIN, TIKTOK, SHORTS)}
+PROFILES = {p.name: p for p in (DOUYIN, DOUYIN_LONG, TIKTOK, SHORTS)}
 DEFAULT_PROFILE = "douyin"
 
 
