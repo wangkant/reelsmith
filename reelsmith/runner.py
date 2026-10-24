@@ -1,7 +1,9 @@
-"""reelsmith run: a self-hosted Claude Agent SDK session that makes one film in one project with the reelsmith tools.
+"""reelsmith run: a self-hosted agent session that makes one film in one project with the reelsmith tools.
 
-The session gets the reelsmith MCP server, file tools fenced by guard.py and web search; no shell. The model is served
-by Anthropic or DeepSeek (backends.py). Its state lives in <project>/build/run_state.json, so an interrupted run
+Two engines. "api" (the default) is reelsmith's own agent loop (agent/) over any OpenAI-compatible Chat Completions
+API: OpenRouter, DeepSeek, OpenAI or a custom/local server (agent/providers.py). "agent-sdk" is a Claude Agent SDK
+session served by Anthropic or DeepSeek (backends.py). Either way the session gets the reelsmith tools, file tools
+fenced by guard.py and web search; no shell. Its state lives in <project>/build/run_state.json, so an interrupted run
 resumes its own session; out/run_report.json says how it ended.
 """
 from __future__ import annotations
@@ -13,11 +15,13 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import backends, guard
+from .agent import providers
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,9 +29,12 @@ MANUAL = ROOT / "docs" / "manual.md"
 RENDERER_SRC = ROOT / "renderer" / "src"
 STATE_FILE = Path("build") / "run_state.json"
 REPORT_FILE = Path("out") / "run_report.json"
-# the model defaults to the backend's own (backends.py)
-DEFAULTS = {"backend": "anthropic", "effort": "medium", "budget_usd": 5.0, "max_minutes": 120,
-            "stall_minutes": 60, "max_turns": None, "fixups": 2}  # a full render may take 55 min in one call
+MESSAGES_FILE = Path("build") / "agent_messages.json"
+ENGINES = ("api", "agent-sdk")
+# the model defaults to the provider's (api) or the backend's (agent-sdk) own
+DEFAULTS = {"engine": "api", "provider": providers.DEFAULT, "backend": "anthropic", "effort": "medium",
+            "reasoning": None, "budget_usd": 5.0, "max_minutes": 120, "stall_minutes": 60, "max_turns": None,
+            "fixups": 2, "context_tokens": 200_000, "max_image_edge": 1280}  # a full render may take 55 min in one call
 BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 # the CLI prices a non-Anthropic backend with its Claude table: its own cap only backs up the runner's estimate
@@ -69,12 +76,36 @@ class Settings:
     max_turns: int | None
     fixups: int
     proxy: str | None = None
-    backend: str = "anthropic"
+    backend: str = "anthropic"                  # agent-sdk engine
+    engine: str = "agent-sdk"
+    provider: str | None = None                 # api engine: the provider's name, and `api` the resolved Provider
+    api: providers.Provider | None = None
+    reasoning: str | None = None
+    web: dict | None = None
+    context_tokens: int = 200_000
+    max_image_edge: int = 1280
+    images: bool | None = None                  # None: the provider's table says whether the model takes images
 
 
-def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=None, backend=None) -> Settings:
-    """CLI flags over workspace.json "runner" over the defaults. The workspace's model goes with the workspace's
-    backend: a --backend that switches away from it starts from the new backend's default model."""
+def _engine(name) -> str:
+    key = str(name or "").strip().lower()
+    if key not in ENGINES:
+        raise WorkspaceError(f'unknown runner engine "{name}": use {" or ".join(ENGINES)}')
+    return key
+
+
+def _own_engine(own: dict) -> str:
+    """The workspace's engine; a workspace that names a backend and no engine predates the api engine."""
+    if own.get("engine"):
+        return _engine(own["engine"])
+    return "agent-sdk" if own.get("backend") else DEFAULTS["engine"]
+
+
+def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=None, backend=None, engine=None,
+                 provider=None) -> Settings:
+    """CLI flags over workspace.json "runner" over the defaults. --backend implies the agent-sdk engine and
+    --provider the api engine. The workspace's model goes with the workspace's engine and provider (or backend): a
+    flag that switches away from them starts from the new one's default model."""
     cfg = dict(DEFAULTS)
     own = (ws.config.get("runner") if ws is not None else None) or {}
     if not isinstance(own, dict):
@@ -83,16 +114,58 @@ def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=No
     for key, value in (("budget_usd", budget_usd), ("max_minutes", max_minutes), ("max_turns", max_turns)):
         if value is not None:
             cfg[key] = value
-    own_backend = backends.get(cfg["backend"])
-    chosen = backends.get(backend) if backend else own_backend
-    if not model:
-        model = own.get("model") if chosen is own_backend and own.get("model") else chosen.model
-    s = Settings(model=str(model), effort=cfg.get("effort") or None, budget_usd=float(cfg["budget_usd"]),
-                 max_minutes=float(cfg["max_minutes"]), stall_minutes=float(cfg["stall_minutes"]),
-                 max_turns=int(cfg["max_turns"]) if cfg.get("max_turns") else None, fixups=int(cfg["fixups"]),
-                 proxy=cfg.get("proxy") or os.environ.get("REELSMITH_PROXY") or None, backend=chosen.name)
+    own_engine = _own_engine(own)
+    if engine:
+        chosen_engine = _engine(engine)
+    elif backend and provider:
+        raise WorkspaceError("--backend is for the agent-sdk engine and --provider for the api engine: pass one")
+    else:
+        chosen_engine = "agent-sdk" if backend else "api" if provider else own_engine
+    if chosen_engine == "api" and backend:
+        raise WorkspaceError("--backend is for --engine agent-sdk; the api engine takes --provider")
+    if chosen_engine == "agent-sdk" and provider:
+        raise WorkspaceError("--provider is for --engine api; the agent-sdk engine takes --backend")
+    own_model = own.get("model") if chosen_engine == own_engine else None
+    api = None
+    if chosen_engine == "agent-sdk":
+        own_backend = backends.get(own.get("backend") or DEFAULTS["backend"])
+        chosen = backends.get(backend) if backend else own_backend
+        if not model:
+            model = own_model if chosen is own_backend and own_model else chosen.model
+        backend_name, provider_name = chosen.name, None
+    else:
+        own_provider = str(own.get("provider") or DEFAULTS["provider"]).strip().lower()
+        api = providers.get(provider or own_provider, own)
+        if not model:
+            model = own_model if api.name == own_provider and own_model else api.default_model
+        if not model:
+            raise WorkspaceError(f"the {api.name} provider has no default model: pass --model or set "
+                                 "workspace.json runner.model")
+        backend_name, provider_name = DEFAULTS["backend"], api.name
+    reasoning = cfg.get("reasoning") or None
+    if reasoning is not None and str(reasoning).lower() not in providers.REASONING:
+        raise WorkspaceError(f'runner.reasoning must be {", ".join(providers.REASONING)} or null, not "{reasoning}"')
+    web = cfg.get("web")
+    if web is not None and not isinstance(web, dict):
+        raise WorkspaceError("workspace.json runner.web must be an object")
+    images = cfg.get("images")
+    if images is not None and not isinstance(images, bool):
+        raise WorkspaceError("workspace.json runner.images must be true, false or null")
+    try:
+        s = Settings(model=str(model), effort=cfg.get("effort") or None, budget_usd=float(cfg["budget_usd"]),
+                     max_minutes=float(cfg["max_minutes"]), stall_minutes=float(cfg["stall_minutes"]),
+                     max_turns=int(cfg["max_turns"]) if cfg.get("max_turns") else None, fixups=int(cfg["fixups"]),
+                     proxy=cfg.get("proxy") or os.environ.get("REELSMITH_PROXY") or None, backend=backend_name,
+                     engine=chosen_engine, provider=provider_name, api=api,
+                     reasoning=str(reasoning).lower() if reasoning else None, web=web,
+                     context_tokens=int(cfg["context_tokens"]), max_image_edge=int(cfg["max_image_edge"]),
+                     images=images)
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceError(f"workspace.json runner has a value of the wrong type: {exc}") from None
     if s.budget_usd <= 0 or s.max_minutes <= 0 or s.stall_minutes <= 0:
         raise WorkspaceError("budget_usd, max_minutes and stall_minutes must be > 0")
+    if s.context_tokens < 8000 or s.max_image_edge < 64:
+        raise WorkspaceError("context_tokens must be at least 8000 and max_image_edge at least 64")
     return s
 
 
@@ -115,6 +188,16 @@ def system_append(project: Path, ws) -> str:
         "Look at what you make: preview and read the stills before you render, review the film after.",
     ]
     return "\n".join(rows)
+
+
+def api_system(project: Path, ws) -> str:
+    """The api engine's whole system prompt: there is no host preset under it."""
+    return "\n".join([
+        system_append(project, ws),
+        "Work only through your tools; there is no shell. A reply without a tool call ends the session, so keep "
+        "calling tools until out/film.mp4 is rendered and passes, then answer with a short summary.",
+        f"Today is {datetime.now():%Y-%m-%d}.",
+    ])
 
 
 def first_prompt(project: Path, brief: str) -> str:
@@ -177,6 +260,58 @@ def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log
         setting_sources=[], cwd=str(project), mcp_servers={"reelsmith": server}, strict_mcp_config=True,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[guard.make_hook(scope, log.denied)], timeout=30)]},
         env=env, resume=resume, stderr=stderr, max_buffer_size=MAX_MESSAGE_BYTES)
+
+
+# ------------------------------------------------------------------ the api engine
+def api_client(ws, settings: Settings):
+    """A ChatClient for the settings' provider and model; the key comes from the workspace .env, else the
+    environment (a custom provider without key_env sends none)."""
+    prov = settings.api or providers.get(settings.provider)
+    key = key_for(ws, prov.key) if prov.key else ""
+    if prov.key and not key:
+        raise WorkspaceError(f"{prov.key} is missing: put it in the workspace .env or the environment")
+    return providers.make_client(prov, settings.model, key, settings.reasoning, proxy=settings.proxy)
+
+
+def _slim(messages: list[dict]) -> list[dict]:
+    """The history without image data: a saved conversation stays small, and a resumed agent can look again."""
+    out = []
+    for m in messages:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            m = {**m, "content": [p if not (isinstance(p, dict) and p.get("type") == "image_url")
+                                  else {"type": "text", "text": "[image not kept: look again if you need it]"}
+                                  for p in content]}
+        out.append(m)
+    return out
+
+
+def save_messages(project: Path, settings: Settings, session_id: str, messages: list[dict]) -> None:
+    write_json(project / MESSAGES_FILE, {"engine": "api", "provider": settings.provider, "model": settings.model,
+                                         "session_id": session_id, "saved_at": now_iso(),
+                                         "messages": _slim(messages)})
+
+
+def load_messages(project: Path, session_id: str | None = None) -> list[dict] | None:
+    """The saved conversation (of that session), or None when there is none to go on from."""
+    data = read_json(project / MESSAGES_FILE, None)
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list) or not data["messages"]:
+        return None
+    if session_id and data.get("session_id") != session_id:
+        return None
+    return [m for m in data["messages"] if isinstance(m, dict)]
+
+
+def api_summary(result: dict) -> dict:
+    """One api session's row; the session counts as started once a model call came back."""
+    turns = int(result.get("turns") or 0)
+    done = result.get("result") is not None and not result.get("error") and not result.get("aborted")
+    answer = result.get("result")
+    return {"session_id": result.get("session_id") if turns else None, "aborted": result.get("aborted"),
+            "error": result.get("error"), "subtype": "success" if done else None, "turns": turns,
+            "cost_usd": round(float(result.get("cost_usd") or 0), 6),
+            "cost_estimated": bool(result.get("cost_estimated")), "usage": result.get("usage") or {},
+            "answer": answer[:1000] if isinstance(answer, str) else None}
 
 
 # ------------------------------------------------------------------ the session
@@ -432,17 +567,59 @@ def changed_since(project: Path, when: float) -> str | None:
 
 
 # ------------------------------------------------------------------ the run
+async def in_thread(fn, *args):
+    """fn(*args) in a daemon thread. Unlike asyncio.to_thread, Ctrl+C does not wait for an agent that may run
+    for an hour: the process exits and the next run resumes from the saved conversation."""
+    loop = asyncio.get_running_loop()
+    done = loop.create_future()
+
+    def settle(ok: bool, value) -> None:
+        if not done.done():
+            (done.set_result if ok else done.set_exception)(value)
+
+    def work() -> None:
+        try:
+            outcome = (True, fn(*args))
+        except BaseException as exc:  # noqa: BLE001 - handed to the awaiting task
+            outcome = (False, exc)
+        try:
+            loop.call_soon_threadsafe(settle, *outcome)
+        except RuntimeError:                        # the loop is gone: nobody waits any more
+            pass
+    threading.Thread(target=work, name="reelsmith-agent", daemon=True).start()
+    return await done
+
+
+def _without_images(tools: list) -> list:
+    """The tools of a model that takes no images: their pictures become a note, so no request carries one."""
+    def blind(run):
+        def wrapped(args):
+            result = run(args)
+            pics = list(getattr(result, "images", None) or [])
+            if not pics:
+                return result
+            note = f"\n({len(pics)} image(s) not shown: this model takes no images)"
+            return dataclasses.replace(result, text=str(result.text) + note, images=[])
+        return wrapped
+    return [dataclasses.replace(t, run=blind(t.run)) for t in tools]
+
+
 class Run:
     def __init__(self, project, brief: str | None, settings: Settings, ws=None, query_fn=None, fresh=False,
-                 out=None):
+                 out=None, client_factory=None, tools_factory=None):
         self.project = Path(project)
         self.brief = (brief or "").strip()
         self.settings, self.ws, self.query_fn = settings, ws, query_fn
+        # api engine seams: settings -> a ChatClient; (project, ws, scope, web) -> tools
+        self.client_factory, self.tools_factory = client_factory, tools_factory
+        self.api = settings.engine == "api"
         self.state_path = self.project / STATE_FILE
         self.state = {} if fresh else (read_json(self.state_path, {}) or {})
         self.backend = backends.get(settings.backend)
         self.log = SessionLog(self.project, out)
         self.log.cli_cost = self.backend.cli_cost
+        self.messages: list[dict] | None = None     # the api conversation of session self.messages_sid
+        self.messages_sid: str | None = None
         self.started = time.monotonic()
         self.started_at = now_iso()
 
@@ -454,14 +631,95 @@ class Run:
         return round(float(self.state.get("cost_usd") or 0), 4)
 
     def scope(self) -> guard.Scope:
-        spill = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects" / sanitized(
-            self.project)
+        spill = None if self.api else Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") \
+            / "projects" / sanitized(self.project)
         return guard.scope_for(self.project, self.ws, extra_read=[MANUAL.parent, RENDERER_SRC], spill=spill)
 
     def wall_left(self) -> float:
         return self.settings.max_minutes * 60 - (time.monotonic() - self.started)
 
+    def record(self, row: dict) -> None:
+        runs = (self.state.get("runs") or []) + [row]
+        self.save(cost_usd=round(self.spent() + float(row.get("cost_usd") or 0), 4),
+                  turns=int(self.state.get("turns") or 0) + int(row.get("turns") or 0),
+                  runs=runs[-30:], last_stop=stop_reason(row),
+                  session_id=row.get("session_id") or self.state.get("session_id"))
+
+    async def api_session(self, prompt: str, kind: str, resume: str | None = None) -> dict:
+        from .agent.loop import Agent
+        s, prov = self.settings, self.settings.api
+        budget_left = s.budget_usd - self.spent()
+        client = self.client_factory(s) if self.client_factory else api_client(self.ws, s)
+        if self.tools_factory is None:
+            from .agent.tools import toolbox as tools_factory
+        else:
+            tools_factory = self.tools_factory
+        web = dict(s.web or {})
+        if s.proxy and "proxy" not in web:
+            web["proxy"] = s.proxy
+        tools = tools_factory(self.project, self.ws, self.scope(), web or None)
+        for note in getattr(tools, "notes", None) or []:
+            self.log.line(f"note: {note}")
+        sees = s.images if s.images is not None else prov.can_see(s.model) is not False
+        if not sees:
+            tools = _without_images(tools)
+        history = None
+        if resume:
+            history = self.messages if self.messages and self.messages_sid == resume \
+                else load_messages(self.project, resume)
+            if not history:
+                self.log.line(f"no saved conversation of session {resume}: starting a new one")
+                prompt = first_prompt(self.project, self.state.get("brief") or self.brief) + "\n\n" + prompt
+                resume = None
+        self.log.event("run", session=kind, resume=resume, prompt=prompt, engine="api", provider=prov.name,
+                       model=s.model)
+        self.log.line(f"{kind} session{' ' + resume if resume else ''} on {prov.name} {s.model} "
+                      f"(budget left ${budget_left:.2f}{'' if prov.reports_cost else ', priced from a table'})")
+        if not sees:
+            self.log.line(f"warning: {s.model} takes no images; the agent edits without seeing its stills")
+        price = prov.pricer(s.model)
+        if price is None and not prov.reports_cost:
+            self.log.line(f"warning: no price for {s.model}: the spend is not counted; set workspace.json "
+                          "runner.prices")
+        self.save(status="running", last_stop="the process was interrupted")
+
+        def on_turn(info: dict) -> None:
+            # a killed process loses no conversation and no spend: plan() settles `inflight` on the next start
+            save_messages(self.project, s, info["session_id"], info["messages"])
+            self.save(session_id=info["session_id"], inflight={
+                "session_id": info["session_id"], "cost_usd": info["cost_usd"], "turns": info["turn"],
+                "cost_estimated": not prov.reports_cost})
+        limits = {"max_turns": s.max_turns, "budget_usd": max(0.0, budget_left), "wall_s": max(60.0, self.wall_left()),
+                  "context_tokens": s.context_tokens, "max_image_edge": s.max_image_edge}
+        agent = Agent(client, tools, api_system(self.project, self.ws), limits, log=self.log, price=price,
+                      on_turn=on_turn, session_id=resume)
+        result = await in_thread(agent.run, prompt, history)
+        row = api_summary(result)
+        if row["turns"]:
+            self.messages, self.messages_sid = result.get("messages"), result.get("session_id")
+            save_messages(self.project, s, self.messages_sid, self.messages)
+        row.update(kind=kind, ended_at=now_iso())
+        self.log.line(f"session spend {'~' if row['cost_estimated'] else ''}${row['cost_usd']:.2f} "
+                      f"in {row['turns']} turns")
+        self.save(inflight=None)
+        self.record(row)
+        return row
+
+    def settle_inflight(self) -> None:
+        """Count the spend of a session whose process was killed before it could record it."""
+        left = self.state.get("inflight")
+        if not isinstance(left, dict):
+            return
+        row = {"kind": "interrupted", "session_id": left.get("session_id"), "aborted": None,
+               "error": "the process was interrupted", "subtype": None, "turns": int(left.get("turns") or 0),
+               "cost_usd": round(float(left.get("cost_usd") or 0), 6),
+               "cost_estimated": bool(left.get("cost_estimated")), "ended_at": self.state.get("updated_at")}
+        self.save(inflight=None)
+        self.record(row)
+
     async def session(self, prompt: str, kind: str, resume: str | None = None) -> dict:
+        if self.api:
+            return await self.api_session(prompt, kind, resume)
         budget_left = self.settings.budget_usd - self.spent()
         options = build_options(self.project, self.ws, self.settings, self.scope(), self.log, resume=resume,
                                 budget_left=budget_left)
@@ -484,26 +742,34 @@ class Run:
         row.update(kind=kind, ended_at=now_iso())
         if not b.cli_cost:
             self.log.line(f"session spend ~${row['cost_usd']:.2f} (estimated at {b.name} peak prices)")
-        runs = (self.state.get("runs") or []) + [row]
-        self.save(cost_usd=round(self.spent() + float(row.get("cost_usd") or 0), 4),
-                  turns=int(self.state.get("turns") or 0) + int(row.get("turns") or 0),
-                  runs=runs[-30:], last_stop=stop_reason(row),
-                  session_id=row.get("session_id") or self.state.get("session_id"))
+        self.record(row)
         return row
 
     def plan(self) -> tuple[str, str, str | None]:
         """(kind, prompt, resume id) for the first session of this process."""
         sid = self.state.get("session_id")
         if sid and self.state.get("status") not in ("done", None):
-            made_on = self.state.get("backend") or "anthropic"
-            if made_on != self.backend.name:
-                raise WorkspaceError(f"the unfinished run's session is on {made_on}: resume it with --backend "
-                                     f"{made_on}, or start over with --fresh")
+            made = self.state.get("engine") or "agent-sdk"      # a state from before the api engine
+            if made != self.settings.engine:
+                raise WorkspaceError(f"the unfinished run is on the {made} engine: resume it with --engine {made}, "
+                                     "or start over with --fresh")
+            if self.api:
+                on = (self.state.get("provider"), self.state.get("model"))
+                if on != (self.settings.provider, self.settings.model):
+                    raise WorkspaceError(f"the unfinished run's session is on {on[0]} {on[1]}: resume it with "
+                                         f"--provider {on[0]} --model {on[1]}, or start over with --fresh")
+                self.settle_inflight()
+            else:
+                made_on = self.state.get("backend") or "anthropic"
+                if made_on != self.backend.name:
+                    raise WorkspaceError(f"the unfinished run's session is on {made_on}: resume it with --backend "
+                                         f"{made_on}, or start over with --fresh")
             return "resume", resume_prompt(self.state.get("last_stop") or "unknown", self.state), sid
         if not self.brief:
             raise WorkspaceError("a brief is needed for a new run (--brief \"...\")")
         self.save(status="new", brief=self.brief, started_at=self.started_at, session_id=None, cost_usd=0.0,
-                  turns=0, runs=[], backend=self.backend.name, model=self.settings.model)
+                  turns=0, runs=[], engine=self.settings.engine, provider=self.settings.provider,
+                  backend=None if self.api else self.backend.name, model=self.settings.model, inflight=None)
         return "new", first_prompt(self.project, self.brief), None
 
     async def go(self) -> dict:
@@ -547,11 +813,18 @@ class Run:
         return self.report(delivered, problems, check, row)
 
     def report(self, delivered: bool, problems: list[str], check: dict, last: dict) -> dict:
+        sessions = self.state.get("runs") or []
+        if self.api:
+            estimated = (any(r.get("cost_estimated") for r in sessions) if sessions
+                         else not self.settings.api.reports_cost)
+        else:
+            estimated = not self.backend.cli_cost
         out = {
-            "project": str(self.project), "brief": self.state.get("brief"), "backend": self.backend.name,
+            "project": str(self.project), "brief": self.state.get("brief"), "engine": self.settings.engine,
+            "provider": self.settings.provider, "backend": None if self.api else self.backend.name,
             "model": self.settings.model, "delivered": delivered, "problems": problems, "check": check,
             "film": str(self.project / "out" / "film.mp4") if (self.project / "out" / "film.mp4").is_file() else None,
-            "cost_usd": self.spent(), "cost_estimated": not self.backend.cli_cost,
+            "cost_usd": self.spent(), "cost_estimated": estimated,
             "turns": int(self.state.get("turns") or 0),
             "wall_s": round(time.monotonic() - self.started, 1), "started_at": self.started_at,
             "finished_at": now_iso(), "stop": stop_reason(last) if last else None,
@@ -567,23 +840,32 @@ class Run:
 
 def run(project, brief: str | None = None, model: str | None = None, budget_usd: float | None = None,
         max_minutes: float | None = None, query_fn=None, fresh: bool = False, max_turns: int | None = None,
-        out=None, backend: str | None = None) -> dict:
+        out=None, backend: str | None = None, engine: str | None = None, provider: str | None = None,
+        client_factory=None, tools_factory=None) -> dict:
     root = project_root(project)
     if not (root / PROJECT_FILE).is_file():
         raise WorkspaceError(f"no project at {root} ({PROJECT_FILE} missing): create it with `reelsmith new`")
     ws = find_workspace(root)
-    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend)
-    return asyncio.run(Run(root, brief, settings, ws, query_fn=query_fn, fresh=fresh, out=out).go())
+    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend, engine, provider)
+    return asyncio.run(Run(root, brief, settings, ws, query_fn=query_fn, fresh=fresh, out=out,
+                           client_factory=client_factory, tools_factory=tools_factory).go())
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="reelsmith run", description="Let an agent make the film in a project.")
     ap.add_argument("project", help="the project folder (reelsmith new makes one)")
     ap.add_argument("--brief", help="what the film is about; needed unless an unfinished run resumes")
+    ap.add_argument("--engine", choices=ENGINES,
+                    help="api: reelsmith's own loop over an OpenAI-compatible API (default); agent-sdk: a Claude "
+                         "Agent SDK session; or workspace.json runner.engine")
+    ap.add_argument("--provider", choices=list(providers.PROVIDERS),
+                    help=f"api engine: who serves the model; default {DEFAULTS['provider']} or workspace.json "
+                         "runner.provider")
     ap.add_argument("--backend", choices=sorted(backends.BACKENDS),
-                    help=f"who serves the model; default {DEFAULTS['backend']} or workspace.json runner.backend")
-    ap.add_argument("--model", help="default " + ", ".join(f"{b.model} ({b.name})" for b in backends.BACKENDS.values())
-                    + ", or workspace.json runner.model")
+                    help="agent-sdk engine: who serves the model; default anthropic or workspace.json runner.backend")
+    ap.add_argument("--model", help="default " + ", ".join(
+        [f"{p.default_model} ({p.name})" for p in providers.PROVIDERS.values() if p.default_model]
+        + [f"{b.model} (agent-sdk {b.name})" for b in backends.BACKENDS.values()]) + ", or workspace.json runner.model")
     ap.add_argument("--budget-usd", type=float, help="cap on this run's model spend")
     ap.add_argument("--max-minutes", type=float, help="wall-clock cap for this process")
     ap.add_argument("--max-turns", type=int, help="turn cap per session")
@@ -591,7 +873,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         report = run(args.project, args.brief, args.model, args.budget_usd, args.max_minutes, fresh=args.fresh,
-                     max_turns=args.max_turns, backend=args.backend)
+                     max_turns=args.max_turns, backend=args.backend, engine=args.engine, provider=args.provider)
     except WorkspaceError as exc:
         print(f"reelsmith run: {exc}", file=sys.stderr)
         return 2

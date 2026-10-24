@@ -18,6 +18,7 @@ Repository = "https://github.com/wangkant/reelsmith"
 [project.optional-dependencies]
 capture = ["playwright>=1.45"]
 runner = ["claude-agent-sdk>=0.2.170"]
+web = ["ddgs>=9"]
 dev = ["pytest>=8"]
 
 [project.scripts]

@@ -38,7 +38,7 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
     voice/voice.json              narration timing {file, duration_s, lines: [{i, text, t0, t1}], ...}
     assets/                       images, clips, evidence captures, audio
     build/                        regenerable: resolved*.json, stills/, inspect/, review/, report.json (latest
-                                  render attempt), run_state.json and logs of the runner
+                                  render attempt), run_state.json, agent_messages.json and logs of the runner
     out/film.mp4                  the delivered film; out/meta.json (meta + duration, profile, render time);
                                   out/report.json (the delivered film's report); out/run_report.json (runner)
     .history/NNNN.json            a snapshot of project.json before each applied edit batch (undo); log.jsonl,
@@ -63,7 +63,7 @@ looked up in the process environment.
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"}
   },
   "budget": {"per_project_usd": 1.0, "min_balance_usd": 5.0},
-  "runner": {"backend": "anthropic", "model": "claude-opus-5-5", "budget_usd": 5.0, "max_minutes": 120}
+  "runner": {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "budget_usd": 5.0, "max_minutes": 120}
 }
 ```
 
@@ -73,7 +73,7 @@ looked up in the process environment.
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
 | `providers` | per-tool provider settings (section 9); each section is merged over the defaults |
 | `budget` | `per_project_usd` (default 1.0) and `min_balance_usd` (default 5.0), section 9.6 |
-| `runner` | defaults for `reelsmith run`: `backend` (`anthropic` or `deepseek`), `model`, budget and limits (section 11) |
+| `runner` | defaults for `reelsmith run`: `engine` (`api` or `agent-sdk`), `provider` or `backend`, `model`, budget, limits and the api engine's settings (section 11) |
 
 ### 2.2 rules.json
 
@@ -214,6 +214,9 @@ gives `"[level] where: msg"`.
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
   the runner call these.
 - `mcp_server.py` (stdio), `cli.py`, `runner.py` and its file guard `guard.py` (section 11).
+- `agent/`: the runner's api engine (section 11): `tools.toolbox(project, ws, scope, web)` (function tools),
+  `client.ChatClient` (an OpenAI-compatible Chat Completions client), `loop.Agent` (the tool-calling loop) and
+  `providers` (who serves the model: endpoint, key, request extras, prices).
 
 ## 5. Edit ops
 
@@ -423,16 +426,71 @@ applies and returns text; structured results are JSON inside the text. A result 
 ## 11. Runner (self-hosted)
 
 ```
-reelsmith run <project> --brief "..." [--backend anthropic|deepseek] [--model M] [--budget-usd N] [--max-minutes N]
-              [--max-turns N] [--fresh]
+reelsmith run <project> --brief "..." [--engine api|agent-sdk] [--provider openrouter|deepseek|openai|custom]
+              [--backend anthropic|deepseek] [--model M] [--budget-usd N] [--max-minutes N] [--max-turns N] [--fresh]
 ```
 
-Starts a Claude Agent SDK session (the `runner` extra) that makes one film in one project. Settings come from the
-flags, then `workspace.json` `runner`, then the defaults: `backend` `anthropic`, `model` the backend's default,
-`effort` `medium`, `budget_usd` 5.0 (the session's model spend; asset spend has its own budget, section 9.6),
-`max_minutes` 120, `stall_minutes` 60 (no message for that long aborts the session), `max_turns` none, `fixups` 2,
-`proxy` (or `REELSMITH_PROXY`). `runner.model` goes with `runner.backend`: a `--backend` that switches away from the
-workspace's backend starts from the new backend's default model.
+Makes one film in one project with an agent and no client attached. Two engines:
+
+- **`api`** (the default): reelsmith's own agent loop (`reelsmith/agent/`) over the OpenAI-compatible Chat
+  Completions API with tool calling, so OpenRouter, DeepSeek, OpenAI, Qwen or GLM gateways and local servers can
+  drive it. It needs no extra package (the `web` extra adds keyless web search).
+- **`agent-sdk`**: a Claude Agent SDK session (the `runner` extra), served by Anthropic or by DeepSeek's
+  Anthropic-compatible API.
+
+Settings come from the flags, then `workspace.json` `runner`, then the defaults:
+
+| key | default | meaning |
+|---|---|---|
+| `engine` | `api` | `--backend` implies `agent-sdk` and `--provider` implies `api`; a workspace whose `runner` names a `backend` and no `engine` (one from before the api engine) runs on `agent-sdk` |
+| `provider` | `openrouter` | api engine: who serves the model (table below) |
+| `backend` | `anthropic` | agent-sdk engine: `anthropic` or `deepseek` |
+| `model` | the provider's or the backend's | `runner.model` goes with the workspace's engine and provider (or backend): a flag that switches away from them starts from the new one's default model |
+| `budget_usd` | 5.0 | the run's model spend; asset spend has its own budget (section 9.6) |
+| `max_minutes` | 120 | wall clock for the process |
+| `max_turns` | none | model calls per session |
+| `fixups` | 2 | sessions after the first that fix delivery problems |
+| `proxy` | `REELSMITH_PROXY` | an upstream proxy for the model API (and the api engine's web tools) |
+| `reasoning` | null | api engine: `low`, `medium` or `high`; OpenRouter gets `reasoning.effort`, the others `reasoning_effort`; null keeps the model's default |
+| `context_tokens` | 200000 | api engine: once a request's prompt passes it, the oldest tool outputs and images are replaced by short stubs (the newest turn stays) |
+| `max_image_edge` | 1280 | api engine: images are downscaled to this edge and sent as JPEG |
+| `images` | null | api engine: `false` sends no images (a text-only model); null follows the provider's table |
+| `web` | `{}` | api engine: `fetch` (`false` leaves web_fetch out), `search` (`auto`, `ddgs`, `tavily` or `none`; `auto` takes ddgs when installed, else Tavily with `TAVILY_API_KEY`), `region`, `proxy`, `timeout_s` |
+| `prices` | none | api engine: `{"model": [input, output, cached_input]}` in $ per million tokens, for calls whose provider reports no cost |
+| `extra_body` | none | api engine: fields merged into every request (an OpenRouter `provider` routing preference, a sampling setting) |
+| `base_url`, `key_env` | | the `custom` provider's endpoint and the name of its key |
+| `effort` | `medium` | agent-sdk engine: the Claude Code effort |
+| `stall_minutes` | 60 | agent-sdk engine: no message for that long aborts the session |
+
+**Providers of the api engine.** The key comes from the workspace `.env`, else the environment, and goes to its
+provider only.
+
+| provider | endpoint | key | default model | spend |
+|---|---|---|---|---|
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | `deepseek/deepseek-v4.1-flash` | the cost each response reports |
+| `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` | `deepseek-flash` | estimated at DeepSeek's peak prices (below) |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | none: pass one | `prices` |
+| `custom` | `runner.base_url` | `runner.key_env`; none sends no key | none: `runner.model` | `prices` |
+
+OpenRouter requests carry `usage: {include: true}`, so each response reports its cost in dollars, and
+`provider: {require_parameters: true}`, so they are routed only to hosts that take tools. Known to take images:
+`deepseek/deepseek-v4.1-flash` and `deepseek-flash`; text-only: `deepseek/deepseek-v4-pro` and `deepseek-v4-pro`. A
+call that reports no cost is priced from the table (`prices`, and DeepSeek's own); a model with neither is not
+counted against the budget, and the runner says so.
+
+**The api session.** The system prompt is the role below plus two lines: a reply without a tool call ends the
+session, and today's date. Tools: every reelsmith tool (the functions the MCP server serves, with its schemas),
+`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir`, `web_fetch` and `web_search`; no shell. The
+loop calls the model, runs every tool call, and feeds the results back; a tool's images (preview stills, contact
+sheets, review frames) follow the tool results as one user message of image parts, because most providers take
+no image in a tool message. A text-only model's tools return a note instead. Assistant messages go back as the
+provider sent them, reasoning fields included. A session stops when the model answers without a tool call, or at
+`max_turns`, the budget left or the time limit; a request is retried on 408, 409, 425, 429, 5xx and dropped
+connections.
+
+**The agent-sdk session.** Claude Code's system prompt with the role appended. The host's own Claude Code settings,
+memory and instructions are not loaded. Tools: the reelsmith MCP server (`python -m reelsmith.mcp_server`, with
+`REELSMITH_ROOT` set to the workspace), Read, Write, Edit, Glob, Grep, WebSearch, WebFetch and TodoWrite. No shell.
 
 | backend | key (workspace `.env`, else the environment) | models |
 |---|---|---|
@@ -442,38 +500,48 @@ workspace's backend starts from the new backend's default model.
 Each backend's key goes to that backend only: on `anthropic` an inherited `ANTHROPIC_BASE_URL` or
 `ANTHROPIC_AUTH_TOKEN` is blanked, so a shell set up for another endpoint does not receive the Anthropic key.
 
-- **DeepSeek.** The CLI talks to DeepSeek's Anthropic-compatible API (`https://api.deepseek.com/anthropic`): its
-  env carries the DeepSeek key as `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`, the model as every Claude Code
-  model variable (with the `[1m]` context suffix; `deepseek-flash` for the small model and subagents) and an
-  auto-compact window of 786432 tokens. The Anthropic key, the workspace header and any OAuth token are blanked.
-  `deepseek-v4-pro` takes no images: reading a preview still fails on it (the runner logs a warning), so the agent
-  edits without seeing its frames. The CLI prices sessions with its Claude table, so the runner estimates the spend
-  itself from the streamed usage at DeepSeek's peak prices (per million tokens: `deepseek-flash` $0.30 input, $0.006
-  cached input, $1.20 output; `deepseek-v4-pro` $1.32, $0.044, $3.96; cache writes at the input price; web search
-  $0.75 per 1000), stops a session once that estimate reaches the budget left, and passes the CLI a cap 1000 times
-  the budget as a backstop only. A finished session costs the larger of the streamed estimate and the estimate from
-  the CLI's per-model totals; the CLI's own figure is kept as `cli_cost_usd`.
-- **Session.** Claude Code's system prompt with a short role appended (read the manual, then the notes; every
-  choice is yours; look at what you make). The host's own Claude Code settings, memory and instructions are not
-  loaded. Tools: the reelsmith MCP server (`python -m reelsmith.mcp_server`, with `REELSMITH_ROOT` set to the
-  workspace), Read, Write, Edit, Glob, Grep, WebSearch, WebFetch and TodoWrite. No shell.
-- **Guard** (`guard.py`, a PreToolUse hook; anything it does not know is refused). Writes go to the project and the
-  workspace library only, never into `build/`, `out/` or `.history/` (the tools write those), never `workspace.json`,
-  `rules.json`, `.env*` or `ledger.jsonl` under any name, never scripts, executables or package files. Reads stay
-  in the workspace, the manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and
-  `.cache/` are unreadable. WebFetch takes public http(s) URLs only; reelsmith tool arguments that name files or
-  URLs are held to the same rules.
+- **DeepSeek on the agent-sdk engine.** The CLI talks to DeepSeek's Anthropic-compatible API
+  (`https://api.deepseek.com/anthropic`): its env carries the DeepSeek key as `ANTHROPIC_AUTH_TOKEN` and
+  `ANTHROPIC_API_KEY`, the model as every Claude Code model variable (with the `[1m]` context suffix;
+  `deepseek-flash` for the small model and subagents) and an auto-compact window of 786432 tokens. The Anthropic
+  key, the workspace header and any OAuth token are blanked. `deepseek-v4-pro` takes no images: reading a preview
+  still fails on it (the runner logs a warning). The CLI prices sessions with its Claude table, so the runner
+  estimates the spend itself from the streamed usage, stops a session once that estimate reaches the budget left,
+  and passes the CLI a cap 1000 times the budget as a backstop only. A finished session costs the larger of the
+  streamed estimate and the estimate from the CLI's per-model totals; the CLI's own figure is kept as
+  `cli_cost_usd`.
+- **DeepSeek's peak prices** (both engines; off-peak hours cost half), per million tokens: `deepseek-flash` $0.30
+  input, $0.006 cached input, $1.20 output; `deepseek-v4-pro` $1.32, $0.044, $3.96; cache writes at the input price;
+  web search $0.75 per 1000. An unlisted DeepSeek model is priced as the dearest.
+
+**Common to both engines.**
+
+- **Role.** Read the manual, then the notes; every choice is yours; look at what you make.
+- **Guard** (`guard.py`; anything it does not know is refused): a PreToolUse hook on the agent-sdk engine, checked
+  in-process before each tool call on the api engine. Writes go to the project and the workspace library only,
+  never into `build/`, `out/` or `.history/` (the tools write those), never `workspace.json`, `rules.json`, `.env*`
+  or `ledger.jsonl` under any name, never scripts, executables or package files. Reads stay in the workspace, the
+  manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and `.cache/` are
+  unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
+  redirects included, as `capture` does); reelsmith tool arguments that name files or URLs are held to the same
+  rules.
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
   it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`
-  alone, or to a library component the film does not use, does not call for another render. Otherwise the runner resumes the same session with the exact problems, up to `fixups` times, within the
-  budget and the time limit.
+  alone, or to a library component the film does not use, does not call for another render. Otherwise the runner
+  continues the same session with the exact problems, up to `fixups` times, within the budget and the time limit.
 - **Resume.** State lives in `build/run_state.json`: an interrupted run resumes its own session when started again
-  (`--brief` is then optional), on the backend it started on (another backend is refused); `--fresh` starts a new
-  one. Every message goes to `build/runner.jsonl`, one line per step to stdout; `out/run_report.json` says how it
-  ended (delivered, problems, backend, model, `cost_usd` and whether it is `cost_estimated`, turns, refused tool
-  calls).
-- Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key, an unknown backend).
+  (`--brief` is then optional), on the engine, provider (or backend) and model it started on; anything else is
+  refused with the flags to pass, and `--fresh` starts a new one. On the api engine the conversation is saved to
+  `build/agent_messages.json` after every turn (without image data: the agent looks again) and the session's spend
+  so far to the state's `inflight`, so a killed process loses neither: the next start counts that spend and goes on
+  from the saved conversation.
+- **Logs and report.** Every message and tool call goes to `build/runner.jsonl`, one line per step to stdout;
+  `out/run_report.json` says how it ended: `delivered`, `problems`, `engine`, `provider`, `backend`, `model`,
+  `cost_usd` and whether it is `cost_estimated`, `turns`, the sessions (each with its kind, turns, cost and stop),
+  and refused tool calls (agent-sdk).
+- Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key, an unknown engine,
+  provider or backend, a provider without a model).
 
 ## 12. Inspect (layout measurement)
 
@@ -566,8 +634,11 @@ The theme is `paper` (or the one `name`d), then workspace.json `theme`, then pro
 | `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
-| `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (`capture` also honours `HTTPS_PROXY` / `HTTP_PROXY`) |
+| `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw`, and Codex's home folder (default `~/.codex`) |
-| `OPENROUTER_API_KEY` | `speak` and `animate` (workspace `.env` first, then the environment) |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic |
-| `DEEPSEEK_API_KEY` | the runner on DeepSeek (`runner.backend` `deepseek`) |
+| `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
+| `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, or `--backend deepseek` on the agent-sdk engine) |
+| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`) |
+| the name in `runner.key_env` | the runner on a `custom` provider |
+| `TAVILY_API_KEY` | the api engine's `web_search` through Tavily (when ddgs is not installed, or `web.search` is `tavily`) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic (agent-sdk engine) |

@@ -5,7 +5,9 @@ tools, the way a person works in an editing app; reelsmith renders the film and 
 delivered.
 
 It is for people who let an agent (Claude Code, Codex or any MCP client) make short vertical videos and want it to
-have a real editor rather than a fixed template, with a platform that will not let a broken film out.
+have a real editor rather than a fixed template, with a platform that will not let a broken film out. With no
+client at all, `reelsmith run` drives any model behind an OpenAI-compatible API (OpenRouter, DeepSeek, OpenAI, a
+local server) through the same tools.
 
 ```
 agent ── research, script.md
@@ -40,7 +42,8 @@ layout measurement, loudness and the delivery rules.
 - **Delivery checks**: words outside the safe area, cut, tiny, overlapping or low in contrast (measured on rendered
   frames), loudness, black or frozen stretches, size, length and the workspace's own rules.
 - **Spend control**: paid calls go through a ledger with a per-project budget and an account balance floor.
-- **Three ways in**: an MCP server, a CLI, and a self-hosted runner on the Claude Agent SDK.
+- **Three ways in**: an MCP server, a CLI, and a self-hosted runner that works with any OpenAI-compatible model
+  API (a Claude Agent SDK session is an optional engine).
 - **Output profiles** `douyin` (the default), `tiktok` and `shorts`: 1080×1920 at 30 fps, each with its own safe
   area, length limits, size cap and loudness target.
 
@@ -61,7 +64,8 @@ Optional, per tool:
 | `capture` (evidence screenshots) | the `capture` extra and a Chromium browser: Microsoft Edge or Google Chrome if installed, else `python -m playwright install chromium` |
 | `draw` (pictures) | the [Codex CLI](https://github.com/openai/codex), installed and signed in |
 | `speak` (narration), `animate` (video clips) | an [OpenRouter](https://openrouter.ai) API key |
-| `reelsmith run` (the self-hosted agent) | the `runner` extra and an Anthropic or a [DeepSeek](https://platform.deepseek.com) API key |
+| `reelsmith run` (the self-hosted agent) | a key for the model's API: [OpenRouter](https://openrouter.ai) (the default), [DeepSeek](https://platform.deepseek.com), OpenAI, or none for a local server; the `web` extra for keyless web search |
+| `reelsmith run --engine agent-sdk` | the `runner` extra and an Anthropic or a DeepSeek API key |
 
 ## Install
 
@@ -72,13 +76,13 @@ git clone https://github.com/wangkant/reelsmith
 cd reelsmith
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\Activate.ps1 (PowerShell)
-pip install -e ".[capture,runner]"   # or just: pip install -e .
+pip install -e ".[capture,web]"      # or just: pip install -e .
 cd renderer && npm ci && cd ..
 ```
 
-The extras are `capture` (Playwright), `runner` (Claude Agent SDK) and `dev` (pytest). Remotion fetches the
-headless browser it renders with on first use; `npx remotion browser ensure` (in `renderer/`) does it ahead of
-time.
+The extras are `capture` (Playwright), `web` (ddgs, the runner's web search without a key), `runner` (the Claude
+Agent SDK, only for the `agent-sdk` engine) and `dev` (pytest). Remotion fetches the headless browser it renders
+with on first use; `npx remotion browser ensure` (in `renderer/`) does it ahead of time.
 
 ## A workspace
 
@@ -89,7 +93,7 @@ library and notes:
 studio/
   workspace.json    output profile, theme, providers, budget, runner defaults
   rules.json        hard rules (block delivery) and advice (information only)
-  .env              OPENROUTER_API_KEY=...   ANTHROPIC_API_KEY=...
+  .env              OPENROUTER_API_KEY=...   (and any other provider's key)
   library/
     NOTES.md        the agent's own notes, read at the start of work
     components/     the agent's own React components (Name.tsx + Name.meta.json)
@@ -169,43 +173,79 @@ The other commands: `manual`, `new`, `library`, `typecheck`, `capture`, `draw`, 
 
 ## The self-hosted runner
 
-`reelsmith run` lets an agent make one film on its own, with no client attached:
+`reelsmith run` lets an agent make one film on its own, with no client attached. It talks to any model behind an
+OpenAI-compatible Chat Completions API with tool calling: OpenRouter (the default), DeepSeek, OpenAI, a Qwen or GLM
+gateway, or a local server. Claude is not required; a Claude Agent SDK session is an optional engine.
 
 ```sh
-reelsmith run ~/studio/projects/tea --brief "A 60-second film on why tea leaves curl" --budget-usd 5
+reelsmith run ~/studio/projects/tea --brief "A 60-second film on why tea leaves curl" --budget-usd 2
 ```
 
 | flag | |
 |---|---|
 | `--brief` | what the film is about; needed unless an unfinished run resumes |
-| `--backend` | `anthropic` (default) or `deepseek`, or `runner.backend` in workspace.json |
-| `--model` | default `claude-opus-5-5` on Anthropic, `deepseek-flash` on DeepSeek, or `runner.model` in workspace.json |
+| `--engine` | `api` (default): reelsmith's own agent loop over an OpenAI-compatible API; `agent-sdk`: a Claude Agent SDK session |
+| `--provider` | `openrouter` (default), `deepseek`, `openai` or `custom` (the `api` engine) |
+| `--backend` | `anthropic` (default) or `deepseek` (the `agent-sdk` engine) |
+| `--model` | default `deepseek/deepseek-v4.1-flash` on OpenRouter, `deepseek-flash` on DeepSeek; `openai` and `custom` need one |
 | `--budget-usd` | cap on this run's model spend (asset spend has its own budget) |
 | `--max-minutes` | wall-clock cap |
-| `--max-turns` | turn cap per session |
+| `--max-turns` | model-call cap per session |
 | `--fresh` | ignore an unfinished run and start a new session |
 
-The session gets the reelsmith tools, file tools fenced to the workspace by a guard, and web search; there is no
-shell. It ends when the film passes the render checks; otherwise the runner hands the session the exact problems
-and lets it fix them, within the budget and the time limit. An interrupted run resumes its own session.
-`out/run_report.json` says how it ended. Exit status: 0 delivered, 1 not delivered, 2 a setup problem.
+Every flag has a `runner` key in workspace.json. The session gets the reelsmith tools, file tools fenced to the
+workspace by a guard, and web fetch and search; there is no shell. It ends when the film passes the render checks;
+otherwise the runner hands the session the exact problems and lets it fix them, within the budget and the time
+limit. An interrupted run resumes its own session. `out/run_report.json` says how it ended. Exit status: 0
+delivered, 1 not delivered, 2 a setup problem.
 
-### Running on DeepSeek
+### Run on DeepSeek through OpenRouter
 
-The same session can run on DeepSeek's Anthropic-compatible API. Put `DEEPSEEK_API_KEY=...` in the workspace `.env`
-(or the environment) and pass `--backend deepseek`, or set it in workspace.json:
+This is the default. Put `OPENROUTER_API_KEY=...` in the workspace `.env` (or the environment), and optionally pin
+the choice in workspace.json:
 
 ```json
-"runner": {"backend": "deepseek", "model": "deepseek-flash", "budget_usd": 2}
+"runner": {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "reasoning": "medium", "budget_usd": 2}
 ```
 
-- **Models.** `deepseek-flash`, the default, takes images. `deepseek-v4-pro` does not: the agent reads its preview
-  stills to judge the picture, and on this model those reads fail, so it edits without seeing the frames.
-- **Keys.** The session gets only the DeepSeek key; the Anthropic key and workspace header stay out of it.
-- **Spend.** The CLI prices every session with its own Claude table, so on DeepSeek the runner estimates the spend
-  from the streamed token usage at DeepSeek's peak prices (off-peak hours cost half), stops a session that reaches
-  the budget, and keeps the CLI's figure as `cli_cost_usd` for reference only.
-- A run resumes on the backend it started on; `--fresh` starts it over on another.
+- **Models.** `deepseek/deepseek-v4.1-flash` takes images, so the agent sees its preview stills and review frames.
+  `deepseek/deepseek-v4-pro` is text-only: its tools return a note instead of pictures, and it edits without seeing
+  the frames.
+- **Spend.** OpenRouter reports each call's cost; the runner adds it up and stops a session at the budget.
+- **Web search.** The `web` extra searches without a key (ddgs); a `TAVILY_API_KEY` works too. Without either the
+  agent can still fetch pages.
+
+### Other providers
+
+| `--provider` | key (workspace `.env`, else the environment) | endpoint | spend |
+|---|---|---|---|
+| `openrouter` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` | reported by OpenRouter |
+| `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | estimated at DeepSeek's peak prices |
+| `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` | from `runner.prices` |
+| `custom` | `runner.key_env`, or none | `runner.base_url` | from `runner.prices` |
+
+A local server, or any other compatible gateway:
+
+```json
+"runner": {"provider": "custom", "base_url": "http://localhost:8000/v1", "model": "qwen3-vl-32b",
+           "prices": {"qwen3-vl-32b": [0, 0]}}
+```
+
+`prices` gives `[input, output, cached input]` in $ per million tokens for providers that report no cost; without
+a price the spend is not counted and the runner says so. Set `"images": false` for a text-only model the runner
+does not know.
+
+### The Claude Agent SDK engine
+
+`--engine agent-sdk` (or `--backend ...`) runs the session in the Claude Agent SDK instead; it needs the `runner`
+extra. It is served by Anthropic (`ANTHROPIC_API_KEY`, default `claude-opus-5-5`) or by DeepSeek's
+Anthropic-compatible API (`--backend deepseek`, `DEEPSEEK_API_KEY`, default `deepseek-flash`). Each backend's key
+goes to that backend only. The CLI prices every session with its Claude table, so on DeepSeek the runner estimates
+the spend from the streamed token usage at DeepSeek's peak prices (off-peak hours cost half), stops a session that
+reaches the budget, and keeps the CLI's figure as `cli_cost_usd` for reference only. A workspace whose `runner`
+names a `backend` and no `engine` keeps running on this engine.
+
+A run resumes on the engine, provider (or backend) and model it started on; `--fresh` starts it over on another.
 
 ## What the checks enforce
 
