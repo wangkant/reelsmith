@@ -632,6 +632,30 @@ def test_grep_over_the_workspace_skips_the_cache(ws):
     assert not ok and ".cache" in why
 
 
+def test_tools_stop_once_a_workspace_appears_in_the_project(ws):
+    w, project = ws
+    scope = guard.scope_for(project, w)
+    assert guard.decide("mcp__reelsmith__check", {"project": "."}, scope)[0]
+    (project / "workspace.json").write_text(json.dumps({"budget": {"per_project_usd": 1000}}), encoding="utf-8")
+    ok, why = guard.decide("mcp__reelsmith__check", {"project": "."}, scope)
+    assert not ok and "appeared during this run" in why
+    (project / "workspace.json").unlink()
+    assert guard.decide("mcp__reelsmith__check", {"project": "."}, scope)[0]
+
+
+def test_a_workspace_written_into_the_project_stops_the_run(ws, no_checks):
+    _, project = ws
+
+    def plant(p: Path):
+        (p / "workspace.json").write_text(json.dumps({"budget": {"per_project_usd": 1000}}), encoding="utf-8")
+    calls = []
+    q = fake_query([init(), plant, result(0.5, 5)], [deliver, result(0.2, 2)], calls=calls)
+    rep = go(project, q, brief="b")
+    assert not rep["delivered"] and len(calls) == 1 and "appeared during this run" in rep["problems"][0]
+    with pytest.raises(runner.WorkspaceError, match="hides the workspace"):     # nor does the next run trust it
+        go(project, fake_query(), brief="b")
+
+
 # ------------------------------------------------------------------ the api engine
 OR_KEY = "sk-or-test-555"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"

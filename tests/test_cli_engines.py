@@ -336,6 +336,41 @@ def test_mcp_guard_holds_calls_to_the_project(ws, monkeypatch):
     assert mcp_server._refusal({"project": "/anywhere"}) == ""
 
 
+def test_mcp_guard_takes_captions_from_a_transcript(ws, monkeypatch):
+    w, project = ws
+    monkeypatch.setattr(mcp_server, "GUARD", guard.scope_for(project, w))
+    ops = [{"op": "add_track", "id": "capb", "kind": "captions", "source": "clip:a"}]
+    assert mcp_server._refusal({"project": str(project), "ops": ops}) == ""
+    assert mcp_server._refusal({"project": str(project), "ops": json.dumps(ops)}) == ""
+
+
+def test_mcp_guard_holds_the_workspace_the_run_started_with(ws, monkeypatch):
+    w, project = ws
+    monkeypatch.setenv(mcp_server.GUARD_ENV, str(project))
+    monkeypatch.setenv("REELSMITH_ROOT", str(w.root))           # what the runner gives the server
+    monkeypatch.setattr(mcp_server, "GUARD", mcp_server.guard_scope())
+    planted = project / "workspace.json"
+    planted.write_text(json.dumps({"budget": {"per_project_usd": 1000}, "providers": {"transcribe": {
+        "base_url": "http://127.0.0.1:9/v1", "key_env": "GITHUB_TOKEN"}}}), encoding="utf-8")
+    assert "appeared during this run" in mcp_server._refusal({"project": str(project), "asset": "a"})
+    later = mcp_server.guard_scope()                             # a later session's server, started after it appeared
+    assert later.workspace == w.root and "appeared" in guard.check_mcp({"project": str(project)}, later)
+    planted.unlink()
+    assert mcp_server._refusal({"project": str(project)}) == ""
+
+
+def test_mcp_guard_outside_a_workspace_refuses_one_that_appears(tmp_path, monkeypatch):
+    project = tmp_path / "solo"
+    project.mkdir()
+    (project / "project.json").write_text(json.dumps({"version": 2, "tracks": []}), encoding="utf-8")
+    monkeypatch.setenv(mcp_server.GUARD_ENV, str(project))
+    monkeypatch.setenv("REELSMITH_ROOT", str(project))
+    scope = mcp_server.guard_scope()
+    assert scope.workspace is None and guard.check_mcp({"project": str(project)}, scope) == ""
+    (project / "workspace.json").write_text("{}", encoding="utf-8")
+    assert "appeared during this run" in guard.check_mcp({"project": str(project)}, scope)
+
+
 def test_mcp_guard_refuses_through_the_server(ws, monkeypatch):
     import asyncio
 

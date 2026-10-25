@@ -635,8 +635,12 @@ variable, or the command exits with status 2 before binding. While the token var
 `Authorization: Bearer <token>` and is answered 401 without it, loopback included.
 
 With `REELSMITH_GUARD_PROJECT` set to a project folder, the server checks every call with the runner guard's MCP
-rules (section 11) before it runs: one project, paths the session may read, public http(s) URLs. A refused call
-returns an error result that starts with `Refused by the run's guard`. The codex and dsh engines set it.
+rules (section 11) before it runs: one project, its workspace, paths the session may read, public http(s) URLs. The
+workspace is the one at `REELSMITH_ROOT` when that folder holds `workspace.json` (the runner sets it to the run's
+workspace), else the project's when the server starts; while the nearest `workspace.json` at or above the project is
+another one (say one the agent wrote into the project, which the codex and dsh sandboxes let it write), every call is
+refused, so no tool runs on settings, rules, keys or a budget the agent chose. A refused call returns an error result
+that starts with `Refused by the run's guard`. The codex and dsh engines set it.
 
 ### 10.2 Setup: attaching a coding agent
 
@@ -810,9 +814,15 @@ carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `output
   unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
   redirects included, as `capture` does); reelsmith tool arguments that name files or URLs (keys such as `path`,
   `source`, `src` and `asset`, at any depth, edit ops included) are held to the same rules, except values in the Time
-  grammar (section 3.1), which covers a captions track's `"clip:<id>"`. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
-  project and the library; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP
-  server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
+  grammar (section 3.1), which covers a captions track's `"clip:<id>"`. Every reelsmith tool call is refused while
+  the project's workspace (the nearest `workspace.json`) is not the one the run started with. On the codex and dsh
+  engines the agent's own sandbox fences its shell and file tools instead (writes to the project and the library;
+  reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP server applies the rules for
+  tool arguments and the workspace itself (`REELSMITH_GUARD_PROJECT`, section 10.1). Because those sandboxes write
+  the project folder, a session that leaves a `workspace.json` there ends the run (no fix-up runs on it), and
+  `reelsmith run` refuses to start on a project whose own `workspace.json` hides the workspace above it. A project
+  outside any workspace, or one that is its own workspace, keeps its ledger (and the owner's files) inside that
+  sandbox: give these engines a project under a workspace's `projects/`.
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
   it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`

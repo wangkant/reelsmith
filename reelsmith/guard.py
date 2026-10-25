@@ -442,10 +442,44 @@ def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     return ""
 
 
+def nearest_workspace(path) -> Path | None:
+    """The folder find_workspace loads for path (the nearest at or above it holding workspace.json); nothing is read."""
+    start = Path(os.path.abspath(path))
+    for d in (start, *start.parents):
+        if (d / _OWNER_FILES[0]).is_file():
+            return d
+    return None
+
+
+def shadowed_workspace(project) -> Path | None:
+    """The workspace above the project that a workspace.json in the project folder itself hides, or None."""
+    p = Path(os.path.abspath(project))
+    return nearest_workspace(p.parent) if (p / _OWNER_FILES[0]).is_file() else None
+
+
+def check_workspace(scope: Scope) -> str:
+    """'' while the project's workspace is the one the run started with. The codex and dsh sandboxes let the agent
+    write the project folder, where a workspace.json would replace the owner's rules, budget, ledger, keys and
+    providers for every later tool call."""
+    found, pinned = nearest_workspace(scope.project), scope.workspace
+    if found is None and pinned is None or (found and pinned and _real(found) == _real(pinned)):
+        return ""
+    if found is not None and (pinned is None or inside(_real(found), [_real(pinned)], strict=True)):
+        return (f"{found / _OWNER_FILES[0]} appeared during this run: it would replace the owner's workspace "
+                f"({pinned or 'none'}), its rules, keys and budget. No reelsmith tool runs until it is deleted (with "
+                "any rules.json, .env or ledger.jsonl next to it).")
+    return (f"The project's workspace changed during this run (it started in {pinned or 'no workspace'}, now "
+            f"{found or 'none'}): stop and report this.")
+
+
 def check_mcp(inp: dict, scope: Scope) -> str:
-    """reelsmith tools take paths and URLs too: the same limits apply, and every call works on this run's project."""
+    """reelsmith tools take paths and URLs too: the same limits apply, and every call works on this run's project
+    and workspace."""
     if "project" in inp and not _same_project(inp.get("project"), scope):
         return f"This run works on one project: pass project={scope.project}"
+    why = check_workspace(scope)
+    if why:
+        return why
     for key, value in _strings({k: v for k, v in inp.items() if k != "project"}):
         why = _check_mcp_value(key, value, scope)
         if why:

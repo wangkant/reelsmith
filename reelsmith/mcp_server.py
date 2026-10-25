@@ -36,15 +36,23 @@ mcp = MCPServer("reelsmith", instructions=INSTRUCTIONS, version=__version__)
 
 
 def guard_scope():
-    """With REELSMITH_GUARD_PROJECT set (the runner's codex and dsh engines), every call is held to that project and
-    the runner guard's rules for paths and URLs, as on the other engines."""
+    """With REELSMITH_GUARD_PROJECT set (the runner's codex and dsh engines), every call is held to that project, its
+    workspace and the runner guard's rules for paths and URLs, as on the other engines."""
     project = os.environ.get(GUARD_ENV)
     if not project:
         return None
     from . import guard
-    from .workspace import find_workspace, project_root
+    from .workspace import WORKSPACE_FILE, Workspace, find_workspace, project_root
     root = project_root(project)
-    return guard.scope_for(root, find_workspace(root), extra_read=[ROOT / "docs", ROOT / "renderer" / "src"])
+    # the runner sets REELSMITH_ROOT to the workspace it started with: a workspace.json the agent wrote into the
+    # project since then (its sandbox may write there) must not become a later session's workspace
+    fence = os.environ.get("REELSMITH_ROOT")
+    home = Path(fence).expanduser().resolve() if fence else None
+    if home is not None and (home == root or home in root.parents) and (home / WORKSPACE_FILE).is_file():
+        ws = Workspace.load(home)
+    else:
+        ws = find_workspace(root)
+    return guard.scope_for(root, ws, extra_read=[ROOT / "docs", ROOT / "renderer" / "src"])
 
 
 GUARD = guard_scope()

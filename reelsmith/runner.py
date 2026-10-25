@@ -904,6 +904,10 @@ class Run:
         while True:
             row = await self.session(prompt, kind, resume)
             delivered, problems, check = delivery(self.project)
+            moved = guard.check_workspace(self.scope())
+            if moved:                                   # a fix-up would run on settings the session wrote itself
+                delivered, problems = False, [moved, *problems]
+                break
             if delivered:
                 break
             if row.get("error") and not row.get("session_id"):
@@ -968,6 +972,11 @@ def run(project, brief: str | None = None, model: str | None = None, budget_usd:
     root = project_root(project)
     if not (root / PROJECT_FILE).is_file():
         raise WorkspaceError(f"no project at {root} ({PROJECT_FILE} missing): create it with `reelsmith new`")
+    hidden = guard.shadowed_workspace(root)
+    if hidden is not None:              # e.g. left by an earlier codex or dsh session, whose sandbox writes the project
+        raise WorkspaceError(f"{root / 'workspace.json'} hides the workspace at {hidden}: a run takes the settings, "
+                             f"rules, keys and budget of its project's workspace. Move what you need into "
+                             f"{hidden / 'workspace.json'} and delete it (or move the project out of {hidden})")
     ws = find_workspace(root)
     settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend, engine, provider, effort)
     return asyncio.run(Run(root, brief, settings, ws, query_fn=query_fn, fresh=fresh, out=out,
