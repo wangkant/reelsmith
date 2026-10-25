@@ -789,7 +789,10 @@ class Run:
             price = cli_engines.price_for(s.model, s.prices, backends.BACKENDS["deepseek"].prices)
             patch = self.project / "build" / "dsh-patch.yml"
             write_text(patch, cli_engines.dsh_patch(srv, s.model, s.effort, stall_s))
-            cmd = cli_engines.dsh_command(exe, patch, scope, resume)
+            cmd = cli_engines.dsh_command(exe, patch, resume)
+            version = cli_engines.dsh_version(exe)
+            self.log.line(f"dsh {version or '(version unknown)'}: {' '.join(exe)}" + (
+                "" if version == cli_engines.DSH_VERSION else f" (tested with {cli_engines.DSH_VERSION})"))
             env = cli_engines.dsh_env(key, scope.home / ".cache" / "dsh", s.proxy)
             stream_cls, extra = cli_engines.DshStream, {"max_turns": s.max_turns}
         model = s.model or "its default model"

@@ -70,6 +70,8 @@ function call({ name, arguments: args = {} }) {
     }
     case 'check':
       return text('[error] meta.title is missing', true)
+    case 'env':     // unlisted: what the pool's tests read of the server's environment
+      return text(`PYTHONSAFEPATH=${process.env.PYTHONSAFEPATH ?? 'unset'}`)
     default:
       return text(`no tool ${name}`, true)
   }
@@ -98,7 +100,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       reply({ tools: TOOLS })
       break
     case 'tools/call':
-      reply(call(message.params ?? {}))
+      // unlisted `slow` stands in for a long render
+      if (message.params?.name === 'slow') setTimeout(() => reply(text('slept')), Number(message.params.arguments?.ms ?? 1000))
+      else reply(call(message.params ?? {}))
       break
     default:
       send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `unknown method ${message.method}` } })

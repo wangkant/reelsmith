@@ -5,9 +5,9 @@ codex: `codex exec --json` (OpenAI Codex CLI). The host's config.toml and rules 
 workspace-write rooted at the project with the workspace library writable too; commands get no network and no
 inherited secrets; approval is never; the server comes in as `-c mcp_servers.reelsmith.*` overrides. Codex reports
 its token usage once, when the turn ends.
-dsh: `dsh --profile headless --json` (DeepSeek Harness), in its own DSH_HOME, with a --patch overlay that mounts the
-server, picks the model and turns session-log upload off; preset workspace-write, approval never. It reports usage
-per model call, so a session stops at the budget and at max_turns.
+dsh: `dsh --profile headless --json` (DeepSeek Harness 0.2.1-rc.3), in its own DSH_HOME, with a --patch overlay that
+mounts the server, picks the model, pins a workspace-write / approval-never permission preset and turns session-log
+upload and session titles off. It reports usage per model call, so a session stops at the budget and at max_turns.
 """
 from __future__ import annotations
 
@@ -27,7 +27,9 @@ from . import agentconf, backends, guard
 from .providers.config import NO_WINDOW, _kill_tree
 
 ENGINES = ("codex", "dsh")
-DSH_PACKAGE = "@deepseek-ai/dsh"
+DSH_VERSION = "0.2.1-rc.3"         # the dsh this engine is tested with: its CLI and events change between releases
+DSH_PACKAGE = f"@deepseek-ai/dsh@{DSH_VERSION}"
+DSH_PRESET = "reelsmith-run"
 DSH_PROVIDER = "deepseek-official"
 DSH_DEFAULT_MODEL = "deepseek-flash"
 DSH_EFFORTS = ("off", "low", "high", "max")
@@ -55,7 +57,7 @@ def find_codex() -> list[str] | None:
 
 
 def find_dsh(env=None) -> list[str] | None:
-    """DSH_EXE, else dsh on PATH, else `npx -y @deepseek-ai/dsh`."""
+    """DSH_EXE, else dsh on PATH, else `npx -y @deepseek-ai/dsh@<DSH_VERSION>`."""
     env = os.environ if env is None else env
     pinned = env.get("DSH_EXE")
     if pinned:
@@ -132,33 +134,43 @@ def codex_env(proxy: str | None = None, base=None) -> dict:
 
 # ------------------------------------------------------------------ dsh
 def dsh_patch(srv: dict, model: str, effort: str | None = None, tool_timeout_s: float = 3600) -> str:
-    """The overlay of one run: the reelsmith server, the model, and no session-log upload to DeepSeek."""
+    """The overlay of one run: the reelsmith server, the model, the permission preset, no session-log upload."""
     j = lambda v: json.dumps(v, ensure_ascii=False)   # noqa: E731
     rows = ["# written by `reelsmith run` for the dsh engine; rewritten every session",
             agentconf.dsh_rows(srv, tool_timeout_s).rstrip("\n"),
             "- id: agent-default-model", "  config:", f"    provider: {DSH_PROVIDER}", f"    model: {j(model)}"]
     if effort:
         rows.append(f"    reasoningEffort: {j(effort)}")
-    rows += ["- id: session-log-deepseek", "  disabled: true"]
+    # headless dsh takes no permission flags: pin the base rows, which otherwise follow DSH_PERMISSION_MODE
+    rows += ["- id: sandbox-policy", "  config:", "    mode: workspace-write",
+             "- id: approval", "  config:", "    policy: never",
+             "- id: permission", "  config:", "    presets:", f"      {DSH_PRESET}:", "        sandbox: workspace-write",
+             "        approval: never", f"    defaultPreset: {DSH_PRESET}",
+             "- id: session-log-deepseek", "  disabled: true",
+             "- id: session-title-llm", "  disabled: true"]       # a paid model call per session nobody reads
     return "\n".join(rows) + "\n"
 
 
-def dsh_command(exe: list[str], patch: Path, scope: guard.Scope, resume: str | None = None,
-                windows: bool | None = None) -> list[str]:
-    args = [*exe, "--patch", str(patch), "--profile", "headless", "--json", "--permission-mode", "workspace-write",
-            "--approval-policy", "never"]
-    # DSH's Windows sandbox refuses every shell call once extra roots are granted: there the library stays read-only
-    if not (os.name == "nt" if windows is None else windows):
-        for root in _writable(scope):
-            args += ["--add-dir", root]
-    if resume:
-        args += ["--session-id", resume]
-    return args + ["-"]
+def dsh_command(exe: list[str], patch: Path, resume: str | None = None) -> list[str]:
+    return [*exe, "--patch", str(patch), "--profile", "headless", "--json",
+            *(["--session-id", resume] if resume else []), "-"]
+
+
+def dsh_version(exe: list[str]) -> str:
+    """`dsh --version`, or "" when it does not answer."""
+    try:
+        done = subprocess.run([*exe, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120, creationflags=NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    lines = (done.stdout or "").strip().splitlines()
+    return lines[-1].strip() if done.returncode == 0 and lines else ""
 
 
 def dsh_env(key: str, dsh_home: Path, proxy: str | None = None, base=None) -> dict:
     env = dict(os.environ if base is None else base)
-    env.update(DEEPSEEK_API_KEY=key, DSH_HOME=str(dsh_home), DSH_TELEMETRY_MODE="DISABLED")
+    env.update(DEEPSEEK_API_KEY=key, DSH_HOME=str(dsh_home), DSH_TELEMETRY_MODE="DISABLED",
+               DSH_TELEMETRY_DISABLED="1")
     if proxy:
         env.update(HTTPS_PROXY=proxy, HTTP_PROXY=proxy, NO_PROXY="localhost,127.0.0.1")
     return env
@@ -277,19 +289,27 @@ class CodexStream(Stream):
 
 
 class DshStream(Stream):
-    """`dsh --profile headless --json`: session, status (step_end carries usage), text, thinking, tool_call,
-    tool_result, final {reason, text}, error."""
+    """`dsh --profile headless --json` (0.2.1-rc.3): session, status (step_end carries usage, turn_end the turn's
+    reason), text, thinking, tool_call, tool_result, final {text}, error (a failure outside a turn)."""
     engine = "dsh"
 
     def __init__(self, log, price=None, on_progress=None, max_turns: int | None = None):
         super().__init__(log, price, on_progress)
         self.max_turns = max_turns
+        self.turn_failed = False
 
     def handle(self, ev: dict) -> None:
-        kind = ev.get("type")
+        kind, phase = ev.get("type"), ev.get("phase")
         if kind == "session":
             self.session(ev.get("sessionId"))
-        elif kind == "status" and ev.get("phase") == "step_end":
+        elif kind == "status" and phase == "turn_start":
+            # the last turn decides, as it does dsh's exit status
+            if self.turn_failed:
+                self.outcome["error"] = None
+            self.outcome["done"] = self.turn_failed = False
+        elif kind == "status" and phase == "turn_end":
+            self.turn_end(ev.get("reason") if isinstance(ev.get("reason"), dict) else {})
+        elif kind == "status" and phase == "step_end":
             self.outcome["turns"] += 1
             if isinstance(ev.get("usage"), dict):
                 self.add_usage(ev["usage"])
@@ -304,20 +324,23 @@ class DshStream(Stream):
         elif kind == "tool_result" and ev.get("status") == "error":
             self.log.line("<- error " + _flat(ev.get("result") or (ev.get("error") or {}).get("reason")))
         elif kind == "final":
-            self.session(ev.get("sessionId"))
             if str(ev.get("text") or "").strip():
                 self.outcome["result"] = str(ev["text"])
-            reason = ev.get("reason") if isinstance(ev.get("reason"), dict) else {}
-            if reason.get("kind") == "completed":
-                self.outcome["done"] = True
-            elif reason.get("kind") == "error":
-                err = reason.get("error") if isinstance(reason.get("error"), dict) else {}
-                self.outcome["error"] = _flat(err.get("message") or err.get("code") or "the turn failed", 400)
-            else:
-                self.outcome["error"] = f"the turn ended: {reason.get('kind') or 'without a terminal event'}"
         elif kind == "error":
             self.outcome["error"] = _flat(ev.get("message") or "dsh failed", 400)
             self.log.line(f"session error {self.outcome['error']}")
+
+    def turn_end(self, reason: dict) -> None:
+        if reason.get("kind") == "completed":
+            self.outcome["done"] = True
+            return
+        self.turn_failed = True
+        if reason.get("kind") == "error":
+            err = reason.get("error") if isinstance(reason.get("error"), dict) else {}
+            self.outcome["error"] = _flat(err.get("message") or err.get("code") or "the turn failed", 400)
+        else:
+            self.outcome["error"] = f"the turn ended: {reason.get('kind') or 'without a reason'}"
+        self.log.line(f"session error {self.outcome['error']}")
 
     def cost(self, t: dict) -> float:
         # DSH counts disjoint buckets: uncached input, cache reads, cache writes, output

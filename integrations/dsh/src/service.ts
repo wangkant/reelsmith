@@ -180,7 +180,8 @@ export class ReelsmithService {
     const server = this.pool.get(place)
     const result = await server.call(tool, sent, exec.signal, s.timeoutMs)
     this.record(exec, tool, sent, result, place)
-    return await withImages(tool, result, s.attachStills)
+    const project = typeof sent.project === 'string' ? projectDir(sent.project, place.cwd) : undefined
+    return await withImages(tool, result, s.attachStills, project)
   }
 
   private record(exec: ExecutionLike, tool: string, sent: Record<string, unknown>, result: unknown, place: ServerPlace): void {

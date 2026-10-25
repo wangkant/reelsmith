@@ -23,8 +23,8 @@ Tested with `@deepseek-ai/dsh` **0.2.1-rc.3** (a developer preview: pin that ver
    ```sh
    dsh plugin --profile web add dsh-plugin-reelsmith                  # from npm, once published
    dsh plugin --profile web add ./dsh-plugin-reelsmith-0.1.0.tgz      # a tarball from `npm pack`
-   cd integrations/dsh && npm install && npm run build                # or a checkout of this folder:
-   dsh plugin --profile web add ./integrations/dsh
+   (cd integrations/dsh && npm install && npm run build)              # or a checkout of this folder, from
+   dsh plugin --profile web add ./integrations/dsh                    # the repository root
    ```
 
    The Web UI's **Plugins > Add plugin** accepts the same package name, tarball or folder. A plain git install is
@@ -81,7 +81,9 @@ reelsmith server, so the agent's file tools and reelsmith agree on what `demo/pr
 
 YAML only: `env` (extra environment for the server, merged over DSH's scrubbed environment: credential-shaped
 variables are dropped, so give reelsmith its keys through its workspace `.env` or here), `idleMinutes` (close an
-idle working directory's server, default 30), `skillDir` (where `reelsmith/SKILL.md` lives).
+idle working directory's server, default 30; a server with a call running stays), `skillDir` (where
+`reelsmith/SKILL.md` lives). The server starts with `PYTHONSAFEPATH=1`, so a `json.py` or `queue.py` in the session
+folder cannot shadow reelsmith's imports.
 
 ```yaml
 - id: reelsmith
@@ -96,7 +98,7 @@ idle working directory's server, default 30), `skillDir` (where `reelsmith/SKILL
 |---|---|
 | `reelsmith` row: settings, servers, panel routes | a host plugin providing the `reelsmith` service; `.volatile()` Config fields are the Plugins page form |
 | Tools | `dsh-plugin-reelsmith/tools` registers each server tool through `createMcpToolDefinition` from `@deepseek-ai/dsh-mcp-client`, so results, errors and images follow DSH's MCP contract (images become durable attachments when the model takes images) |
-| Images | reelsmith answers with PNG paths; the plugin adds the named contact sheets (and few stills) to the MCP result as image content |
+| Images | reelsmith answers with PNG paths; for `preview`, `review`, `frames` and `scenes` the plugin adds the named contact sheets (and few stills) to the MCP result as image content, files inside the called project's `build/` only |
 | Video editor mode | a `@deepseek-ai/dsh-agent-preset` row (persona, tools, skill provider, DSH's standard tool set) |
 | Skill | a `@deepseek-ai/dsh-skill-filesystem` row reading `skills/reelsmith` from the packaged copy or the reelsmith checkout |
 | Panel and rows | the browser half (`lib/client.js`): a `sidebarRightTabs` tab type, `tool.call.toolview` rows, a `plugins.row.config` page |

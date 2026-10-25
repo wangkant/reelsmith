@@ -8,12 +8,15 @@ nothing. Formats (checked against each agent's docs, 2026-10): Claude Code `.mcp
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,8 +27,8 @@ TARGETS = ("claude-code", "codex", "dsh", "cursor", "generic")
 TOOL_TIMEOUT_S = 3600           # one render call may take many minutes
 STARTUP_TIMEOUT_S = 60
 # Codex hands an MCP server a minimal environment: the names the tools read from it are forwarded
-CODEX_ENV_VARS = ["OPENROUTER_API_KEY", "REELSMITH_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "CODEX_EXE",
-                  "CODEX_HOME", "REELSMITH_BUDGET_USD", "REELSMITH_MIN_BALANCE_USD", "REELSMITH_RENDERER"]
+CODEX_ENV_VARS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "REELSMITH_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+                  "CODEX_EXE", "CODEX_HOME", "REELSMITH_BUDGET_USD", "REELSMITH_MIN_BALANCE_USD", "REELSMITH_RENDERER"]
 DSH_BEGIN = "# >>> reelsmith (managed by `reelsmith setup dsh`)"
 DSH_END = "# <<< reelsmith"
 DSH_PROJECT_PATCH = Path(".dsh") / "reelsmith.cordis.yml"
@@ -301,6 +304,21 @@ def _claude_exe() -> str | None:
     return shutil.which("claude")
 
 
+def _fence(base: Path, *paths: Path) -> None:
+    """Refuse a project-level path that a symlink or junction below base sends elsewhere: a checkout can carry
+    one (.codex -> ~/.codex), and setup would then write or remove the file it leads to."""
+    real_base = os.path.realpath(base)
+    for path in paths:
+        try:
+            parts = path.relative_to(base).parts
+        except ValueError:
+            raise SetupError(f"{path} is outside {base}") from None
+        real = os.path.realpath(path)
+        if os.path.normcase(real) != os.path.normcase(os.path.join(real_base, *parts)):
+            raise SetupError(f"{path} leads through a link to {real}: setup writes only inside {base}; remove the "
+                             "link (or set the agent up by hand), then run setup again")
+
+
 def plan(target: str, cwd=None, home=None, env=None, user: bool = False, uninstall: bool = False, root=None,
          python=None) -> Plan:
     """What `reelsmith setup <target>` would change. cwd, home and env default to the process's own."""
@@ -316,27 +334,39 @@ def plan(target: str, cwd=None, home=None, env=None, user: bool = False, uninsta
     def add(*changes):
         p.changes.extend(c for c in changes if c is not None)
 
+    def skill_dir(base: Path, *parts: str) -> Path:
+        folder = base.joinpath(*parts)
+        if not user:
+            _fence(base, folder / NAME / "SKILL.md")
+        return folder
+
     if target == "claude-code":
         entry = {"type": "stdio", **spec}
         if user:
-            add(*skill_changes(home / ".claude" / "skills", uninstall))
+            # Claude Code keeps its user config, skills included, in CLAUDE_CONFIG_DIR when that is set
+            config_dir = env.get("CLAUDE_CONFIG_DIR")
+            add(*skill_changes(Path(config_dir or home / ".claude") / "skills", uninstall))
             exe = _claude_exe() or "claude"
             remove = [exe, "mcp", "remove", "--scope", "user", NAME]
             add(Change(None, "run", command=remove, allow_fail=True, what="drop a previous user-scope reelsmith"))
             if not uninstall:
                 add(Change(None, "run", command=[exe, "mcp", "add-json", "--scope", "user", NAME,
                                                  json.dumps(entry, ensure_ascii=False)],
-                           what="add reelsmith to the user's MCP servers (~/.claude.json)"))
+                           what="add reelsmith to the user's MCP servers "
+                                f"({'$CLAUDE_CONFIG_DIR' if config_dir else '~'}/.claude.json)"))
         else:
-            add(json_server_change(cwd / ".mcp.json", entry, uninstall), *skill_changes(cwd / ".claude" / "skills",
-                                                                                      uninstall))
+            _fence(cwd, cwd / ".mcp.json")
+            add(json_server_change(cwd / ".mcp.json", entry, uninstall),
+                *skill_changes(skill_dir(cwd, ".claude", "skills"), uninstall))
             if not uninstall:
                 p.notes.append("Claude Code asks once to approve the project's .mcp.json servers; render can run "
                                "for minutes, so raise MCP_TOOL_TIMEOUT (ms) if its calls time out.")
     elif target == "codex":
         codex_home = Path(env.get("CODEX_HOME") or home / ".codex")
         config = codex_home / "config.toml" if user else cwd / ".codex" / "config.toml"
-        skills = (home if user else cwd) / ".agents" / "skills"
+        if not user:
+            _fence(cwd, config)
+        skills = skill_dir(home if user else cwd, ".agents", "skills")
         add(toml_server_change(config, codex_server(spec), uninstall), *skill_changes(skills, uninstall))
         if not uninstall and not user:
             p.notes.append("Codex reads .codex/config.toml only in a trusted project: trust this folder when Codex "
@@ -349,19 +379,23 @@ def plan(target: str, cwd=None, home=None, env=None, user: bool = False, uninsta
                 *skill_changes(dsh_home / "skills", uninstall))
         else:
             patch = cwd / DSH_PROJECT_PATCH
+            _fence(cwd, patch)
             if uninstall:
                 add(Change(patch, "remove", what="the reelsmith DSH patch") if patch.exists() else None)
             else:
-                add(_write_change(patch, "# Mounts the reelsmith MCP server: dsh --patch <this file> <profile>\n"
+                # the launcher reads `dsh <profile>` only as its first word: the profile goes before --patch
+                add(_write_change(patch, "# Mounts the reelsmith MCP server: dsh <profile> --patch <this file>\n"
                                   + rows, "the reelsmith DSH patch"))
-                p.notes.append(f"DSH has no per-project MCP config: start it with `dsh --patch {patch} web` (or "
+                p.notes.append(f"DSH has no per-project MCP config: start it with `dsh web --patch {patch}` (or "
                                "any profile), or run `reelsmith setup dsh --user` to mount reelsmith in every profile. "
                                "The reelsmith DSH plugin package (integrations/dsh) is the richer option.")
-            add(*skill_changes(_git_root(cwd) / ".dsh" / "skills", uninstall))
+            add(*skill_changes(skill_dir(_git_root(cwd), ".dsh", "skills"), uninstall))
     elif target == "cursor":
         base = home if user else cwd
+        if not user:
+            _fence(cwd, base / ".cursor" / "mcp.json")
         add(json_server_change(base / ".cursor" / "mcp.json", {"type": "stdio", **spec}, uninstall),
-            *skill_changes(base / ".cursor" / "skills", uninstall))
+            *skill_changes(skill_dir(base, ".cursor", "skills"), uninstall))
     else:                                           # generic: nothing to write, everything to paste
         p.notes.append(generic_text(spec))
     return p
@@ -387,6 +421,32 @@ def _prune(path: Path, stop: Path) -> None:
             return
 
 
+def _write_atomic(path: Path, content: str) -> None:
+    """Write through a fresh, exclusively created temp file (a planted link at a fixed name would be followed), then
+    rename it over path, keeping an existing file's permission bits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        mode = 0o666 & ~_umask()
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".reelsmith-tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _umask() -> int:
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
+
 def _run(command: list[str]) -> tuple[int, str]:
     try:
         done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -403,10 +463,7 @@ def apply(p: Plan, cwd=None, home=None, run=_run) -> list[str]:
     lines = []
     for c in p.changes:
         if c.action == "write":
-            c.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = c.path.with_name(c.path.name + ".reelsmith-tmp")
-            tmp.write_text(c.content, encoding="utf-8", newline="\n")
-            os.replace(tmp, c.path)
+            _write_atomic(c.path, c.content)
             lines.append(f"wrote {c.path} ({c.what})")
         elif c.action == "remove":
             try:

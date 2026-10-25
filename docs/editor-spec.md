@@ -677,7 +677,7 @@ the agent's user-level config. `--print` shows every file and command it would w
 
 | target | server (folder) | server (`--user`) | skills dir (folder / `--user`) |
 |---|---|---|---|
-| `claude-code` | `.mcp.json` | `claude mcp add-json --scope user reelsmith <json>` | `.claude/skills` / `~/.claude/skills` |
+| `claude-code` | `.mcp.json` | `claude mcp add-json --scope user reelsmith <json>` | `.claude/skills` / `$CLAUDE_CONFIG_DIR/skills` (`~/.claude/skills`) |
 | `codex` | `.codex/config.toml` | `$CODEX_HOME/config.toml` | `.agents/skills` / `~/.agents/skills` |
 | `dsh` | `.dsh/reelsmith.cordis.yml` (a `--patch` overlay) | `$DSH_HOME/cordis.patch.yml` | `<git root>/.dsh/skills` / `$DSH_HOME/skills` |
 | `cursor` | `.cursor/mcp.json` | `~/.cursor/mcp.json` | `.cursor/skills` / `~/.cursor/skills` |
@@ -686,19 +686,25 @@ the agent's user-level config. `--print` shows every file and command it would w
 - **The server**: `{"command": <the absolute path of the Python running setup>, "args": ["-m",
   "reelsmith.mcp_server"], "env": {"PYTHONSAFEPATH": "1", "REELSMITH_ROOT": <--root>}}`. JSON targets add
   `"type": "stdio"` under `mcpServers.reelsmith`. Codex's `[mcp_servers.reelsmith]` adds `env_vars` (the variables
-  the tools read: `OPENROUTER_API_KEY`, the proxies, `CODEX_EXE`, `CODEX_HOME`, the budget overrides,
-  `REELSMITH_RENDERER`), `startup_timeout_sec = 60` and `tool_timeout_sec = 3600`. DSH gets one patch row,
+  the tools read: `OPENROUTER_API_KEY`, `OPENAI_API_KEY` (transcribe's default key), the proxies, `CODEX_EXE`,
+  `CODEX_HOME`, the budget overrides, `REELSMITH_RENDERER`; a key named by another `providers.transcribe.key_env`
+  belongs in the workspace `.env`), `startup_timeout_sec = 60` and `tool_timeout_sec = 3600`. DSH gets one patch row,
   `- insert: [{id: mcp-reelsmith, name: '@deepseek-ai/dsh-mcp-client', config: {serverName: reelsmith, transport:
-  stdio, command, args, env, toolCallTimeoutMs: 3600000}}]`.
+  stdio, command, args, env, toolCallTimeoutMs: 3600000}}]`; the project-level patch is loaded with `dsh <profile>
+  --patch .dsh/reelsmith.cordis.yml` (the profile first: the launcher reads `dsh <name>` only as its first word).
 - **Merging.** JSON: `mcpServers.reelsmith` is set and every other key kept; uninstalling from a file that held
   nothing else removes it. TOML: the `[mcp_servers.reelsmith]` table and its sub-tables are replaced in the text, so
   comments and other tables stay; a definition as dotted keys or an inline table is refused; the result is read back
   before it is written. DSH's home patch: a block between `# >>> reelsmith` and `# <<< reelsmith` is appended to the
   row list. A file that does not parse is refused (exit status 2) and nothing is written; a second run changes
-  nothing.
-- `claude-code --user` runs `claude mcp remove --scope user reelsmith`, then `add-json`; a command that fails is
-  printed for the user to run (exit status 1). `generic` prints an instructions block for the agent's instructions
-  file, the `mcpServers` JSON and the skill's path.
+  nothing. Every file is written to a fresh temp file opened exclusively beside it (an existing file keeps its
+  permission bits), then renamed over it. Project-level setup refuses (exit status 2, nothing written) a target that
+  a symlink or junction below the folder sends elsewhere (a checkout can carry `.codex` -> `~/.codex`); `--user`
+  follows such links, since the home is the user's own.
+- `claude-code --user` runs `claude mcp remove --scope user reelsmith`, then `add-json` (which write
+  `$CLAUDE_CONFIG_DIR/.claude.json`, by default `~/.claude.json`); a command that fails is printed for the user to
+  run (exit status 1). `generic` prints an instructions block for the agent's instructions file, the `mcpServers`
+  JSON and the skill's path.
 - **The plugin.** `integrations/claude-code/` is a Claude Code plugin (`.claude-plugin/plugin.json`, the server as
   `reelsmith-mcp` from `PATH`, the skill), listed by the marketplace `.claude-plugin/marketplace.json` at the
   repository root (`/plugin marketplace add wangkant/reelsmith`, `/plugin install reelsmith@reelsmith`). Its copy of
@@ -812,18 +818,24 @@ Codex reports its tokens (`input_tokens` with `cached_input_tokens` inside, `out
 are priced with `prices`, so the budget is checked between sessions, and a model without a price is reported as
 `cost_known: false` with its tokens.
 
-**The dsh session.** `dsh --patch <project>/build/dsh-patch.yml --profile headless --json --permission-mode
-workspace-write --approval-policy never [--add-dir <library>] [--session-id <id>] -` with the prompt on stdin, in the
-project folder. The binary is `DSH_EXE`, else `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`. The process gets
-`DEEPSEEK_API_KEY` (workspace `.env`, else the environment), its own `DSH_HOME` (`<workspace>/.cache/dsh`, so the
-host's DSH profiles, patches, saved keys and servers stay out) and `DSH_TELEMETRY_MODE=DISABLED`. The overlay mounts
-the reelsmith server (setup's row, plus `REELSMITH_GUARD_PROJECT`, `toolCallTimeoutMs` = `stall_minutes`), sets
-`agent-default-model` to `deepseek-official` with the model (and `reasoningEffort` when an effort is set) and turns
-the `session-log-deepseek` upload off. On Windows the library is not added (DSH's Windows sandbox refuses every shell
-call once extra roots are granted), so the session cannot write library components there. Each `status` step end
-carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, disjoint), priced with
-`prices`, else DeepSeek's table: the session stops at the budget and at `max_turns`. The `final` event's
-`reason.kind` is `completed` for a finished turn.
+**The dsh session.** `dsh --patch <project>/build/dsh-patch.yml --profile headless --json [--session-id <id>] -`
+with the prompt on stdin, in the project folder; DSH's headless app takes no other flags. The engine is tested with
+dsh 0.2.1-rc.3 (a developer preview whose flags and events change between releases): the binary is `DSH_EXE`, else
+`dsh` on `PATH`, else `npx -y @deepseek-ai/dsh@0.2.1-rc.3`, and the run log names the version `dsh --version`
+reports, flagging any other. The process gets `DEEPSEEK_API_KEY` (workspace `.env`, else the environment), its own
+`DSH_HOME` (`<workspace>/.cache/dsh`, so the host's DSH profiles, patches, saved keys and servers stay out),
+`DSH_TELEMETRY_MODE=DISABLED` and `DSH_TELEMETRY_DISABLED=1`. The overlay mounts the reelsmith server (setup's row,
+plus `REELSMITH_GUARD_PROJECT`, `toolCallTimeoutMs` = `stall_minutes`), sets `agent-default-model` to
+`deepseek-official` with the model (and `reasoningEffort` when an effort is set), pins the permission rows
+(`sandbox-policy` mode `workspace-write`, `approval` policy `never`, and `permission` with the one preset
+`reelsmith-run` of those two as `defaultPreset`, so an inherited `DSH_PERMISSION_MODE` changes nothing) and turns the
+`session-log-deepseek` upload and the `session-title-llm` call off. The sandbox is rooted at the project: headless
+DSH grants no extra writable roots, so the session cannot write library components, and a request to escalate is
+refused. Each `status` step end carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+`outputTokens`, disjoint), priced with `prices`, else DeepSeek's table: the session stops at the budget and at
+`max_turns`. The `status` `turn_end` event's `reason.kind` is `completed` for a finished turn (`error` carries
+`reason.error.message`); the last turn decides, as it does dsh's exit status (0 only for `completed`). The closing
+`final` event carries the answer text only.
 
 **Common to all engines.**
 
@@ -838,8 +850,8 @@ carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `output
   `source`, `src` and `asset`, at any depth, edit ops included) are held to the same rules, except values in the Time
   grammar (section 3.1), which covers a captions track's `"clip:<id>"`. Every reelsmith tool call is refused while
   the project's workspace (the nearest `workspace.json`) is not the one the run started with. On the codex and dsh
-  engines the agent's own sandbox fences its shell and file tools instead (writes to the project and the library;
-  reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP server applies the rules for
+  engines the agent's own sandbox fences its shell and file tools instead (writes to the project, and on codex the
+  library too; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP server applies the rules for
   tool arguments and the workspace itself (`REELSMITH_GUARD_PROJECT`, section 10.1). Because those sandboxes write
   the project folder, a session that leaves a `workspace.json` there ends the run (no fix-up runs on it), and
   `reelsmith run` refuses to start on a project whose own `workspace.json` hides the workspace above it. A project
@@ -1015,7 +1027,7 @@ profile by `check`).
 | `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project, its workspace and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
 | `REELSMITH_MCP_TOKEN` | the bearer token `reelsmith mcp --http` requires of every request when set, and needs for `--allow-remote` (`--token-env` names another variable) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw` and the codex engine, and Codex's home folder (default `~/.codex`; `reelsmith setup codex --user` writes its `config.toml`) |
-| `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`) |
+| `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh@0.2.1-rc.3`) |
 | `DSH_HOME` | DeepSeek Harness's home, where `reelsmith setup dsh --user` writes (default `~/.dsh`); the dsh engine sets its own, `<workspace>/.cache/dsh` |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
 | `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, `--backend deepseek` on the agent-sdk engine, or the dsh engine) |

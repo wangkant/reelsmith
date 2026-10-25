@@ -18,7 +18,7 @@ reelsmith setup dsh --uninstall        # take out what setup added
 
 | target | MCP server: this folder (default) | MCP server: `--user` | skill: this folder / `--user` |
 |---|---|---|---|
-| `claude-code` | `.mcp.json` | `claude mcp add-json --scope user` (`~/.claude.json`) | `.claude/skills/reelsmith/` / `~/.claude/skills/reelsmith/` |
+| `claude-code` | `.mcp.json` | `claude mcp add-json --scope user` (`$CLAUDE_CONFIG_DIR/.claude.json`, `~/.claude.json`) | `.claude/skills/reelsmith/` / `$CLAUDE_CONFIG_DIR/skills/reelsmith/` (`~/.claude`) |
 | `codex` | `.codex/config.toml` | `$CODEX_HOME/config.toml` (`~/.codex`) | `.agents/skills/reelsmith/` / `~/.agents/skills/reelsmith/` |
 | `dsh` | `.dsh/reelsmith.cordis.yml`, passed with `--patch` | `$DSH_HOME/cordis.patch.yml` (`~/.dsh`) | `<git root>/.dsh/skills/reelsmith/` / `$DSH_HOME/skills/reelsmith/` |
 | `cursor` | `.cursor/mcp.json` | `~/.cursor/mcp.json` | `.cursor/skills/reelsmith/` / `~/.cursor/skills/reelsmith/` |
@@ -27,7 +27,8 @@ reelsmith setup dsh --uninstall        # take out what setup added
 The server is the Python that ran setup, by absolute path, running `-m reelsmith.mcp_server`, so it works without
 `reelsmith-mcp` on `PATH`; run setup again after moving or recreating that environment. Config files are merged:
 other servers, keys and comments stay, a second run changes nothing, and a file setup cannot parse is left alone
-with an error. The installed skill is a copy: run setup again after upgrading reelsmith.
+with an error. In a project folder, setup refuses to write through a symlink or junction that leads out of it (a
+cloned repository can carry one). The installed skill is a copy: run setup again after upgrading reelsmith.
 
 ## The skill
 
@@ -49,8 +50,8 @@ sends the agent to the `manual` tool for the contract.
 ## Codex
 
 - `reelsmith setup codex` writes `[mcp_servers.reelsmith]` with `tool_timeout_sec = 3600` (render is long) and
-  `startup_timeout_sec = 60`, and lists the variables the tools read (OpenRouter key, proxies, Codex location) in
-  `env_vars`, Codex's allowlist for what reaches a server's environment. Codex reads a project's
+  `startup_timeout_sec = 60`, and lists the variables the tools read (OpenRouter and OpenAI keys, proxies, Codex
+  location) in `env_vars`, Codex's allowlist for what reaches a server's environment. Codex reads a project's
   `.codex/config.toml` only once the project is trusted; `--user` sets it up for every project.
 - The skill goes to `.agents/skills/`, where Codex looks for skills; mention it as `$reelsmith` or let it trigger.
 - **Headless:** `reelsmith run <project> --engine codex` drives `codex exec` with the server injected and no setup
@@ -60,13 +61,14 @@ sends the agent to the `manual` tool for the contract.
 
 - `reelsmith setup dsh` writes a patch overlay that mounts the server through `@deepseek-ai/dsh-mcp-client` (with
   a one-hour `toolCallTimeoutMs`; DSH's default of 60 s would cut a render) and the skill. DSH has no per-project MCP
-  config: start it with `dsh --patch .dsh/reelsmith.cordis.yml web`, or use `--user` to add the rows to
-  `$DSH_HOME/cordis.patch.yml` for every profile.
+  config: start it with `dsh web --patch .dsh/reelsmith.cordis.yml` (the profile comes first), or use `--user` to add
+  the rows to `$DSH_HOME/cordis.patch.yml` for every profile.
 - DSH drops variables named like `*KEY*`, `*TOKEN*`, `*SECRET*` or `*PASSWORD*` from an MCP server's
   environment: keep provider keys in the workspace `.env`, where the tools read them.
 - The reelsmith DSH plugin package (`integrations/dsh`) is the richer option when it fits your setup.
 - **Headless:** `reelsmith run <project> --engine dsh` drives `dsh --profile headless` with its own DSH home and the
-  server attached; it needs `DEEPSEEK_API_KEY`.
+  server attached; it needs `DEEPSEEK_API_KEY`. It is tested with dsh 0.2.1-rc.3, which it runs through `npx` when
+  `dsh` is not on `PATH`.
 
 ## Cursor
 
