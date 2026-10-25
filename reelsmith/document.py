@@ -340,6 +340,7 @@ class CaptionsTrack(_M):
     kind: Literal["captions"]
     hidden: bool = False
     source: Annotated[str, PlainValidator(_caption_source)] = "voice"
+    mode: Literal["phrase", "words", "build"] = "phrase"       # words: the word said lights up; build: words appear
     box: Optional[BoxValue] = None
     style: Optional[TextStyle] = None
     emphasis: list[str] = Field(default_factory=list)

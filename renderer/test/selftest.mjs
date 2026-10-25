@@ -1,7 +1,7 @@
 // Renderer self-test: stills + inspect on test/basic.resolved.json, word-aware text layout and evidence crops
 // (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, a film with
-// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, transient
-// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, word-by-word
+// captions, transient failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
@@ -250,6 +250,38 @@ console.log("narrowing, missing and crashing components");
       !/JSHandle|bundle\.js/.test(err + JSON.stringify(r.result?.browserErrors ?? [])),
     `${mode}: a crashing component is reported as itself with file:line (${r.s} s): ${err.split("\n")[0]}`);
   }
+}
+
+console.log("word-by-word captions");
+{
+  const words = [{ from: 0, to: 10, chars: [0, 3] }, { from: 10, to: 20, chars: [4, 7] }, { from: 20, to: 30, chars: [8, 13] }];
+  const cap = (id, mode, y) => ({
+    id, kind: "captions", mode, box: { x: 20, y, w: 500, h: 90 }, style: {},
+    items: [{ from: 0, to: 30, runs: [{ text: "one two three", accent: false }], words }],
+  });
+  const dir = path.join(OUT, "words");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "resolved.json");
+  fs.writeFileSync(file, JSON.stringify({
+    ...mini([]), durationInFrames: 30, tracks: [cap("kw", "words", 100), cap("kb", "build", 300), cap("kp", "phrase", 500)],
+  }));
+  const r = run(["inspect", file, dir, path.join(dir, "out"), "5", "15", "25"]);
+  check(r.code === 0 && r.result?.ok === true, `inspect ok (${r.s} s) ${r.result?.error ?? ""}`);
+  const insp = path.join(dir, "out", "inspect.json");
+  const data = fs.existsSync(insp) ? JSON.parse(fs.readFileSync(insp, "utf8")) : { frames: [] };
+  const texts = (f, clip) => (data.frames.find((x) => x.frame === f)?.items ?? []).filter((i) => i.clip === clip && i.kind === "text");
+  const colour = (f, clip, word) => texts(f, clip).find((i) => i.text === word)?.color;
+  const GOLD = "rgb(217, 164, 65)";
+  const WHITE = "rgb(255, 255, 255)";
+  check(colour(5, "kw", "one") === GOLD && colour(5, "kw", "two three") === WHITE,
+    `words: the first word is lit while it is said ${JSON.stringify(texts(5, "kw").map((i) => [i.text, i.color]))}`);
+  check(colour(15, "kw", "two") === GOLD && colour(15, "kw", "one") === WHITE && colour(15, "kw", "three") === WHITE,
+    "words: then the second, and the first goes back to white");
+  check(texts(5, "kb").map((i) => i.text).join("|") === "one" && texts(15, "kb").map((i) => i.text).join("|") === "one two" &&
+    texts(25, "kb").map((i) => i.text).join("|") === "one two three", "build: words appear as they are said");
+  const left = (f) => texts(f, "kb")[0]?.rect[0];
+  check(left(5) !== undefined && Math.abs(left(5) - left(25)) <= 1, "build: the phrase is laid out whole, so nothing moves");
+  check(texts(15, "kp").map((i) => `${i.text} ${i.color}`).join("|") === `one two three ${WHITE}`, "phrase: the item shows whole");
 }
 
 console.log("word-aware line breaking (unit)");

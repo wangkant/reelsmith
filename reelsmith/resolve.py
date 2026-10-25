@@ -553,16 +553,73 @@ def text_runs(text: str, emphasis: list[str] | None = None) -> list[dict]:
     return _runs([(c, f or e) for c, f, e in zip(plain, flags, emph)])
 
 
+def _wordy(s: str) -> bool:
+    return bool(re.search(r"\w", s))
+
+
+def word_spans(text: str, lengths: list[int]) -> list[list[int]]:
+    """[a, b] spans of the words of `text` (`lengths`: its words and spaces in order, as segment.mjs gives them):
+    spaces are left out and punctuation joins the word just before it."""
+    out: list[list[int]] = []
+    pos = 0
+    for n in lengths:
+        a, b = pos, pos + n
+        pos = b
+        seg = text[a:b]
+        if not seg.strip():
+            continue
+        if not _wordy(seg):
+            if out and out[-1][1] == a:
+                out[-1][1] = b
+            continue
+        out.append([a, b])
+    return out
+
+
+def _phrase_words(plain: str, idx: list[int | None], words: list[int]) -> list[tuple[int, int, int]]:
+    """The words of one phrase (`idx`: its characters in `plain`, None for an added space) as (a, b, n): their span in
+    the phrase's text and how many characters of the line come before them in the phrase."""
+    tok, pos = [0] * len(plain), 0
+    for k, n in enumerate(words):
+        tok[pos:pos + n] = [k] * n
+        pos += n
+    pieces: list[list[int]] = []                    # [a, b, token] over the phrase's text
+    for p, i in enumerate(idx):
+        t = -1 if i is None else tok[i]
+        if pieces and pieces[-1][2] == t and pieces[-1][1] == p:
+            pieces[-1][1] = p + 1
+        else:
+            pieces.append([p, p + 1, t])
+    text = "".join(" " if i is None else plain[i] for i in idx)
+    spans = word_spans(text, [b - a for a, b, _ in pieces])
+    return [(a, b, sum(1 for i in idx[:a] if i is not None)) for a, b in spans]
+
+
 def line_phrases(text: str, max_chars: int, emphasis: list[str],
-                 words: list[int] | None = None) -> list[tuple[list[dict], int]]:
-    """[(runs, length)] for one voice line: phrases with their accents and character counts."""
+                 words: list[int] | None = None) -> list[tuple[list[dict], int, list[tuple[int, int, int]]]]:
+    """[(runs, length, words)] for one voice line: phrases with their accents, character counts and words
+    (_phrase_words)."""
     plain, flags = _plain(text)
     emph = _emphasis(plain, emphasis)
+    if words is None or not _fits(plain, words):
+        words = word_breaks([plain]).get(plain) or char_words(plain)
     out = []
     for spans in phrase_spans(plain, max_chars, words):
         idx = _join(plain, spans)
         chars = [(" ", False) if i is None else (plain[i], flags[i] or emph[i]) for i in idx]
-        out.append((_runs(chars), sum(1 for i in idx if i is not None)))
+        out.append((_runs(chars), sum(1 for i in idx if i is not None), _phrase_words(plain, idx, words)))
+    return out
+
+
+def timed_words(starts: list[tuple[int, int, float]], begin: int, end: int, fps: float) -> list[dict]:
+    """Word timings for a caption item on frames begin-end: [{"from", "to", "chars": [a, b]}] from (a, b, start
+    seconds); a word lasts until the next one starts, the last until the item ends."""
+    out: list[dict] = []
+    for a, b, t in starts:
+        f = max(begin, min(T.to_frame(t, fps), end - 1), out[-1]["from"] if out else begin)
+        if out:
+            out[-1]["to"] = f
+        out.append({"from": f, "to": end, "chars": [a, b]})
     return out
 
 
@@ -589,16 +646,23 @@ def _voice_items(voice: D.Voice, track: D.CaptionsTrack, fps: float, words: dict
         plain = _plain(text)[0]
         chars = track.max_chars or locales.CJK_CAPTION_CHARS
         parts = line_phrases(text, chars, track.emphasis, words.get(plain) or char_words(plain))
-        total = sum(n for _, n in parts) or 1
+        total = sum(n for _, n, _ in parts) or 1
+        t0, length = ln.t0, ln.t1 - ln.t0           # the line is timed by characters
         acc = 0
-        for runs, n in parts:
-            a = ln.t0 + (ln.t1 - ln.t0) * acc / total
+        for runs, n, said in parts:
+            item = {"from": T.to_frame(t0 + length * acc / total, fps),
+                    "to": T.to_frame(t0 + length * (acc + n) / total, fps), "runs": runs, "line": ln.i}
+            if track.mode != "phrase":
+                item["words"] = [(a, b, t0 + length * (acc + k) / total) for a, b, k in said]
             acc += n
-            b = ln.t0 + (ln.t1 - ln.t0) * acc / total
-            out.append({"from": T.to_frame(a, fps), "to": T.to_frame(b, fps), "runs": runs, "line": ln.i})
+            out.append(item)
     for i in range(len(out) - 1):
         out[i]["to"] = max(out[i]["to"], out[i + 1]["from"])
-    return [it for it in out if it["to"] > it["from"]]
+    out = [it for it in out if it["to"] > it["from"]]
+    for it in out:
+        if "words" in it:
+            it["words"] = timed_words(it["words"], it["from"], it["to"], fps)
+    return out
 
 
 def voice_captions(voice: D.Voice, track: D.CaptionsTrack, fps: float, words: dict | None = None) -> list[dict]:
@@ -620,7 +684,13 @@ def caption_items(track: D.CaptionsTrack, voice: D.Voice | None, sched: T.Schedu
         except T.TimeError:
             continue
         if b > a:
-            items.append({"from": a, "to": b, "runs": text_runs(it.text, track.emphasis)})
+            runs = text_runs(it.text, track.emphasis)
+            items.append({"from": a, "to": b, "runs": runs})
+            if track.mode != "phrase":              # no word times given: spread over the item by characters
+                plain = "".join(r["text"] for r in runs)
+                spans = word_spans(plain, char_words(plain))
+                said = [(x, y, (a + (b - a) * x / max(1, len(plain))) / fps) for x, y in spans]
+                items[-1]["words"] = timed_words(said, a, b, fps)
     return items
 
 
@@ -629,7 +699,7 @@ PAUSE_S = 0.5                   # a pause this long between words ends a phrase
 HOLD_S = 1.0                    # a phrase stays up until the next one across a gap shorter than this
 TAIL_S = 0.3                    # ... else this long after its last word
 _SENTENCE_END = tuple(".?!…。？！")
-_CLAUSE_END = tuple(",;:，；：、")
+_PHRASE_END = ",.;:，。；：、 "                # dropped at a phrase's end; ? and ! stay
 _NO_SPACE_BEFORE = set(",.!?;:%)]}'’”…。，！？；：、）】」』")
 _NO_SPACE_AFTER = set("([{‘“（【「『")
 
@@ -641,34 +711,63 @@ def _unspaced(ch: str) -> bool:
             or 0xFF00 <= o <= 0xFFEF or 0x0E00 <= o <= 0x0EFF or 0x1780 <= o <= 0x17FF or 0x1000 <= o <= 0x109F)
 
 
+def joined(words: list[str]) -> tuple[str, list[tuple[int, int]]]:
+    """Transcript words as text (spaced between words of spaced scripts, not around CJK or punctuation) and the span
+    of each word in it."""
+    out, spans = "", []
+    for w in words:
+        if out and w and not (w[0] in _NO_SPACE_BEFORE or out[-1] in _NO_SPACE_AFTER or _unspaced(out[-1])
+                              or _unspaced(w[0])):
+            out += " "
+        spans.append((len(out), len(out) + len(w)))
+        out += w
+    return out, spans
+
+
 def join_words(words: list[str]) -> str:
     """Transcript words as text: spaced between words of spaced scripts, not around CJK or punctuation."""
-    out = ""
-    for w in words:
-        if out and not (w[0] in _NO_SPACE_BEFORE or out[-1] in _NO_SPACE_AFTER or _unspaced(out[-1])
-                        or _unspaced(w[0])):
-            out += " "
-        out += w
+    return joined(words)[0]
+
+
+def _phrase_run(run: list[dict], max_chars: int) -> list[list[dict]]:
+    """Words spoken without a pause or a sentence end, cut into phrases the way voice lines are (phrase_spans: at
+    clause ends, long parts halved, never right after an article or preposition when another cut fits)."""
+    text, spans = joined([w["word"] for w in run])
+    if len(text) <= max_chars:
+        return [run]
+    lengths, pos = [], 0
+    for a, b in spans:
+        if a > pos:
+            lengths.append(a - pos)
+        if b > a:
+            lengths.append(b - a)
+        pos = b
+    owner = [-1] * len(text)
+    for n, phrase in enumerate(phrase_spans(text, max_chars, lengths)):
+        for a, b in phrase:
+            owner[a:b] = [n] * (b - a)
+    out: list[list[dict]] = []
+    last = 0
+    for w, (a, _) in zip(run, spans):
+        n = owner[a] if a < len(text) and owner[a] >= 0 else last  # a word the cut dropped (lone punctuation)
+        if n != last or not out:
+            out.append([])
+            last = n
+        out[-1].append(w)
     return out
 
 
 def transcript_phrases(words: list[dict], max_chars: int) -> list[list[dict]]:
-    """Words ({"word", "a", "b"} film seconds) grouped into caption phrases by their timing: a pause, the end of a
-    sentence, a clause end past half the length, or max_chars ends one; a short phrase joins the one before it."""
-    phrases: list[list[dict]] = []
-    cur: list[dict] = []
+    """Words ({"word", "a", "b"} film seconds) grouped into caption phrases: a pause or the end of a sentence ends
+    one; longer stretches are cut as voice lines are (_phrase_run); a short phrase joins the one before it."""
+    runs: list[list[dict]] = []
     for w in words:
-        if cur:
-            prev = cur[-1]
-            long = len(join_words([x["word"] for x in cur + [w]])) > max_chars
-            said = len(join_words([x["word"] for x in cur]))
-            if (w["a"] - prev["b"] >= PAUSE_S or long or prev["word"].endswith(_SENTENCE_END)
-                    or (prev["word"].endswith(_CLAUSE_END) and said >= max_chars // 2)):
-                phrases.append(cur)
-                cur = []
-        cur.append(w)
-    if cur:
-        phrases.append(cur)
+        if runs and runs[-1] and not (w["a"] - runs[-1][-1]["b"] >= PAUSE_S
+                                      or runs[-1][-1]["word"].endswith(_SENTENCE_END)):
+            runs[-1].append(w)
+        else:
+            runs.append([w])
+    phrases = [ph for run in runs for ph in _phrase_run(run, max_chars)]
     merged: list[list[dict]] = []
     for ph in phrases:
         text = join_words([x["word"] for x in ph])
@@ -711,12 +810,15 @@ def transcript_items(root, doc: D.Document, track: D.CaptionsTrack, sched: T.Sch
             continue
         rate = float(getattr(c, "rate", 1.0) or 1.0)
         trim = float(c.trim_in or 0.0)
-        out = trim + (b - a) * rate
+        # the source the renderer plays (from its trimIn frame, for the clip's frames at rate), half-open so a word
+        # at a split goes to one piece only
+        lo = T.to_frame(trim, fps) / fps
+        hi = lo + (T.to_frame(b, fps) - T.to_frame(a, fps)) / fps * rate
         for w in transcript["words"]:
             mid = (w["start"] + w["end"]) / 2
-            if trim <= mid <= out:
+            if lo <= mid < hi:
                 words.append({"word": w["word"], "a": a + (max(w["start"], trim) - trim) / rate,
-                              "b": a + (min(w["end"], out) - trim) / rate, "clip_end": b})
+                              "b": a + (min(w["end"], hi) - trim) / rate, "clip_end": b})
     words.sort(key=lambda w: w["a"])
     items = []
     phrases = transcript_phrases(words, track.max_chars)
@@ -729,9 +831,22 @@ def transcript_items(root, doc: D.Document, track: D.CaptionsTrack, sched: T.Sch
             end = min(end + TAIL_S, nxt if nxt is not None else end + TAIL_S)
         end = min(end, stop)
         fa, fb = T.to_frame(start, fps), T.to_frame(end, fps)
-        if fb > fa:
-            items.append({"from": fa, "to": fb, "runs": text_runs(join_words([w["word"] for w in ph]),
-                                                                  track.emphasis)})
+        text, spans = joined([w["word"] for w in ph])
+        text = text.rstrip(_PHRASE_END)             # as voice phrases drop the punctuation they end at
+        if fb <= fa or not text.strip():
+            continue
+        items.append({"from": fa, "to": fb, "runs": text_runs(text, track.emphasis)})
+        if track.mode != "phrase":
+            said: list[tuple[int, int, float]] = []
+            for w, (x, y) in zip(ph, spans):
+                y = min(y, len(text))
+                if y <= x:
+                    continue
+                if said and said[-1][1] == x and not _wordy(text[x:y]):
+                    said[-1] = (said[-1][0], y, said[-1][2])      # punctuation joins the word before it
+                elif _wordy(text[x:y]):
+                    said.append((x, y, w["a"]))
+            items[-1]["words"] = timed_words(said, fa, fb, fps)
     return items
 
 
@@ -958,7 +1073,7 @@ class _Resolver:
             items = transcript_items(self.root, self.doc, track, self.sched, self.fps)
         else:
             items = caption_items(track, self.voice, self.sched, self.fps, self.words)
-        return {"id": track.id, "kind": "captions", "hidden": track.hidden, "box": box,
+        return {"id": track.id, "kind": "captions", "hidden": track.hidden, "box": box, "mode": track.mode,
                 "style": caption_style(track.style), "items": items}
 
     def audio_clip(self, c: D.AudioClip) -> dict | None:
@@ -1319,6 +1434,9 @@ class _Window:
         else:
             n = len(voice_captions(self.voice, t, self.fps, self.words)) if self.voice else 0
             bits.append(f"from the voice, {n} phrase(s), max {t.max_chars} chars")
+        if t.mode != "phrase":
+            bits.append(f"mode {t.mode} (" + ("the word said lights up" if t.mode == "words" else "words appear as said")
+                        + ")")
         if t.emphasis:
             bits.append("emphasis " + ", ".join(t.emphasis))
         if t.overrides:

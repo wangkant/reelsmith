@@ -429,7 +429,7 @@ def test_captions_follow_the_transcript_through_the_clip(cut):
     caption_track(cut, emphasis=["friend"])
     assert errors(cut) == []
     items, texts = caption_texts(cut)
-    assert texts == ["Hello there,", "my friend.", "This is", "footage"]      # "cut" is trimmed away (trim_in 2)
+    assert texts == ["Hello there", "my friend", "This is", "footage"]        # "cut" is trimmed away (trim_in 2)
     assert (items[0]["from"], items[0]["to"]) == (15, 45)                    # 0.5 s; held until the next phrase
     assert items[2]["from"] == 120 and items[-1]["to"] <= 180                # within c1 (0-6 s)
     assert any(r["accent"] and r["text"] == "friend" for r in items[1]["runs"])
@@ -471,6 +471,19 @@ def test_transcript_phrases_break_at_pauses_sentences_and_length():
     out = R.transcript_phrases([w("one", 0, 0.2), w("two", 0.3, 0.5), w("three", 1.5, 1.8), w("four.", 1.9, 2.1),
                                 w("five", 2.2, 2.4), w("sixsix", 2.5, 2.7)], 12)
     assert [R.join_words([x["word"] for x in ph]) for ph in out] == ["one two", "three four.", "five sixsix"]
+
+
+def spoken(tokens, start=0.0, step=0.3):
+    return [{"word": t, "a": start + n * step, "b": start + n * step + step * 0.8} for n, t in enumerate(tokens)]
+
+
+def test_transcript_phrases_are_cut_the_way_voice_lines_are():
+    phrases = R.transcript_phrases(spoken("Hello and welcome to the integration test.".split()), 32)
+    assert [R.join_words([w["word"] for w in ph]) for ph in phrases] == ["Hello and welcome", "to the integration test."]
+    assert R.phrases("Hello and welcome to the integration test", 32) == ["Hello and welcome", "to the integration test"]
+    # no orphan that splits a compound: the voice keeps this one line too
+    zh = R.transcript_phrases(spoken(["大家好，", "欢迎", "来到", "这次", "集成", "测试。"]), 14)
+    assert [R.join_words([w["word"] for w in ph]) for ph in zh] == ["大家好，欢迎来到这次集成测试。"]
 
 
 # ------------------------------------------------------------------ split and ripple edge cases
@@ -549,6 +562,45 @@ def test_insert_gap_off_the_millisecond_grid_still_opens_a_gap(cut):
     sp = spans(cut)
     assert sp["c1"] == (0, 1.067) and sp["c1_2"] == (2.067, 7)
     assert clip(raw(cut), "c1_2")["trim_in"] == 3.067
+
+
+def test_a_split_off_the_frame_grid_repeats_no_word_and_warns_of_nothing(cut):
+    transcript(cut, [("Hello", 2.2, 2.5), ("and", 2.55, 2.75), ("welcome", 2.8, 3.2), ("to", 3.25, 3.4),
+                     ("the", 3.45, 3.6), ("integration", 3.65, 4.1), ("test.", 4.15, 4.5)])
+    caption_track(cut, max_chars=32)
+    ok(cut, {"op": "set_keyframes", "id": "c1", "prop": "volume", "frames": [{"t": 0, "v": 1}, {"t": 6, "v": 0.5}]})
+    ok(cut, {"op": "split_clip", "id": "c1", "at": 1.0, "new_id": "c1b"},        # "welcome" is centred on 1.0 s
+       {"op": "split_clip", "id": "c1b", "at": 1.875, "new_id": "c1c"})          # "integration" on 1.875 s
+    assert caption_texts(cut)[1] == ["Hello and welcome", "to the integration test"]
+    assert clip(raw(cut), "c1b")["end"] == 1.867 and clip(raw(cut), "c1c")["dur"] == 4.133
+    assert [str(i) for i in D.check_data(cut, raw(cut))[1] if "after it ends" in i.msg] == []
+
+
+# ------------------------------------------------------------------ word-by-word captions
+def test_word_captions_carry_each_word_s_time_from_the_transcript(cut):
+    transcript(cut, WORDS)
+    caption_track(cut, mode="words")
+    r = R.resolve(cut)
+    cap = next(t for t in r["tracks"] if t["id"] == "cap")
+    assert cap["mode"] == "words"
+    first = cap["items"][0]
+    assert "".join(x["text"] for x in first["runs"]) == "Hello there"
+    assert first["words"] == [{"from": 15, "to": 30, "chars": [0, 5]}, {"from": 30, "to": 45, "chars": [6, 11]}]
+    assert all(it["words"][-1]["to"] == it["to"] for it in cap["items"])
+    assert "mode words (the word said lights up)" in R.describe(cut)
+    caption_track(cut, mode="phrase")
+    assert all("words" not in it for it in caption_texts(cut)[0])
+    data = raw(cut)
+    track(data, "cap")["mode"] = "karaoke"
+    assert any("cap.mode" in str(i) for i in D.check_data(cut, data)[1])
+
+
+def test_word_captions_on_given_items_spread_by_characters(cut):
+    data = raw(cut)
+    track(data, "cap").update({"mode": "build", "items": [{"start": 1, "end": 2, "text": "one two"}]})
+    write(cut, data)
+    items = caption_texts(cut)[0]
+    assert items[0]["words"] == [{"from": 30, "to": 47, "chars": [0, 3]}, {"from": 47, "to": 60, "chars": [4, 7]}]
 
 
 # ------------------------------------------------------------------ describe

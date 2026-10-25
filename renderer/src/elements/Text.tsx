@@ -6,9 +6,11 @@ import React from "react";
 import { useCurrentFrame } from "remotion";
 import { measureText } from "@remotion/layout-utils";
 import { fontFamily } from "../fonts";
-import type { Reveal, Run, TextStyle, Theme } from "../types";
+import type { DrawnRun, Reveal, TextStyle, Theme } from "../types";
 import { balanced, type Fits, greedy, makeSpan, type Range, type Unit, unitsOf, wordSegments } from "./linebreak";
 import { clamp01, color } from "./util";
+
+type Run = DrawnRun;
 
 export const TEXT_DEFAULTS: TextStyle = {
   font: "sans", size: 64, max_size: 160, min_size: 28, weight: 700, color: null, accent: null, align: "left",
@@ -58,7 +60,7 @@ const splitLines = (runs: Run[]): Run[][] => {
   for (const r of runs) {
     String(r.text ?? "").split("\n").forEach((part, j) => {
       if (j > 0) lines.push([]);
-      if (part) lines[lines.length - 1].push({ text: part, accent: !!r.accent });
+      if (part) lines[lines.length - 1].push({ ...r, text: part, accent: !!r.accent });
     });
   }
   return lines;
@@ -72,8 +74,8 @@ const cutRuns = (runs: Run[], k: number): [Run[], Run[]] => {
   for (const r of runs) {
     const cs = chars(r.text);
     const take = Math.max(0, Math.min(cs.length, k - pos));
-    if (take > 0) a.push({ text: cs.slice(0, take).join(""), accent: r.accent });
-    if (take < cs.length) b.push({ text: cs.slice(take).join(""), accent: r.accent });
+    if (take > 0) a.push({ ...r, text: cs.slice(0, take).join("") });
+    if (take < cs.length) b.push({ ...r, text: cs.slice(take).join("") });
     pos += cs.length;
   }
   return [a, b];
@@ -227,7 +229,7 @@ const layoutUncached = (runs: Run[], s: TextStyle, w: number, h: number, maxLine
 
 // ---------------------------------------------------------------- reveal
 
-type Piece = { text: string; accent: boolean; unit: number };
+type Piece = { text: string; accent: boolean; unit: number; o: number };
 
 const words = (s: string): string[] => {
   const out: string[] = [];
@@ -248,19 +250,20 @@ const segment = (lines: Run[][], mode: Reveal["mode"]): { pieces: Piece[][]; uni
     if (mode === "lines" && li > 0) unit++;
     for (const r of line) {
       const accent = !!r.accent;
+      const o = typeof r.o === "number" ? clamp01(r.o) : 1;
       if (mode === "chars") {
-        for (const c of chars(r.text)) out.push({ text: c, accent, unit: /\s/.test(c) ? unit : unit++ });
+        for (const c of chars(r.text)) out.push({ text: c, accent, unit: /\s/.test(c) ? unit : unit++, o });
       } else if (mode === "words") {
-        for (const wd of words(r.text)) out.push({ text: wd, accent, unit: unit++ });
+        for (const wd of words(r.text)) out.push({ text: wd, accent, unit: unit++, o });
       } else if (mode === "lines") {
         // hard breaks inside a flowing text start a new unit too
         r.text.split("\n").forEach((part, j) => {
           if (j > 0) unit++;
-          if (j > 0) out.push({ text: "\n", accent, unit });
-          if (part) out.push({ text: part, accent, unit });
+          if (j > 0) out.push({ text: "\n", accent, unit, o });
+          if (part) out.push({ text: part, accent, unit, o });
         });
       } else {
-        out.push({ text: r.text, accent, unit: 0 });
+        out.push({ text: r.text, accent, unit: 0, o });
       }
     }
     return out;
@@ -330,7 +333,7 @@ export const TextBlock: React.FC<TextBlockProps> = ({ runs, style, base, reveal,
   const lines = L.lines ?? [clean];
   const { pieces, units } = segment(lines, mode ?? "none");
   const total = Math.max(1, Math.round((reveal?.dur && reveal.dur > 0 ? reveal.dur : 0.8) * fps));
-  const shown = (p: Piece) => ({ text: p.text, accent: p.accent, o: mode ? unitOpacity(p.unit, units, f, total) : 1 });
+  const shown = (p: Piece) => ({ text: p.text, accent: p.accent, o: p.o * (mode ? unitOpacity(p.unit, units, f, total) : 1) });
 
   const pad = s.bg ? Math.max(0, s.bg.pad ?? 0) : 0;
   const sw = s.stroke ? Math.max(0, s.stroke.width ?? 0) : 0;

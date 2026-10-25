@@ -93,7 +93,7 @@ def test_tracks_and_clips_match_types_ts(resolved):
             seen.add(c["type"])
     assert seen == set(content)
     for item in rtrack(resolved, "cap")["items"]:
-        assert set(item) == ts_fields("CaptionItem")
+        assert set(item) == ts_fields("CaptionItem") - {"words"}            # words: only in "words"/"build" mode
         assert all(set(r) == ts_fields("Run") for r in item["runs"])
     for a in resolved["audio"]:
         optional = {"volumeKeys", "duck"}                               # only when the clip has them
@@ -354,6 +354,24 @@ def test_voice_captions_timing_accents_and_overrides(resolved):
     assert all(a["to"] > a["from"] for a in items)
     # 8 characters of 15 in a line from 0.00 to 3.20 s
     assert items[0]["to"] == round(3.2 * 8 / 15 * 30)
+
+
+def test_voice_word_captions_time_each_word_by_characters(demo):
+    data = raw(demo)
+    data["tracks"][-1]["mode"] = "words"
+    write(demo, data)
+    items = rtrack(R.resolve(demo), "cap")["items"]
+    assert items[0]["runs"] == [{"text": "一杯十八块的奶茶", "accent": False}]
+    for it in items:
+        text = "".join(r["text"] for r in it["runs"])
+        words = it["words"]
+        assert words[0]["from"] == it["from"] and words[-1]["to"] == it["to"]
+        assert all(a["to"] == b["from"] and a["from"] <= b["from"] for a, b in zip(words, words[1:]))
+        assert [text[w["chars"][0]:w["chars"][1]] for w in words if not text[w["chars"][0]:w["chars"][1]].strip()] == []
+        assert words[-1]["chars"][1] == len(text) and len(words) > 1
+    # line 1 runs 0-3.2 s over 15 characters; its first phrase has 8, so the second word starts at its 2nd+ char
+    first = items[0]["words"]
+    assert first[1]["from"] == round(3.2 * first[1]["chars"][0] / 15 * 30)
 
 
 def test_given_caption_items(demo):
