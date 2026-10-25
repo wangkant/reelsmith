@@ -362,9 +362,9 @@ def preview(project: str, times: list[float | str] = [], sweep: bool = False) ->
     """Render stills at the given moments straight from the project (no full render): seconds or Times like
     "line:3", "clip:c2+0.5", "end-1" ("clip:c2.end" = c2's last frame). Up to 24 per call. Returns PNG paths (look
     at them with Read), a contact sheet with the platform's UI bands darkened and the safe area outlined, and
-    measured layout problems. sweep=true also measures a still every second of the whole film, as render does
-    before it encodes (no film is made): every layout problem that would stop render shows now, with stills of the
-    flagged moments."""
+    measured layout problems. sweep=true also measures the whole film as render does before it encodes (a still
+    every second, spread out on films over 10 minutes, plus one in any text or caption between them; no film is
+    made): every layout problem that would stop render shows now, with stills of the flagged moments."""
     root = _project(project)
     if isinstance(times, str) and times.strip().startswith("["):
         times = _json_arg(times, "times")
@@ -381,7 +381,9 @@ def preview(project: str, times: list[float | str] = [], sweep: bool = False) ->
     rows = list(res.get("crashes") or [])
     if res.get("sweep"):
         sw = res["sweep"]
-        rows.append(f"sweep: measured {sw['measured']} still(s), one a second; kept {sw['kept']} (asked or flagged)")
+        every = "one a second" if sw.get("every_s", 1) <= 1 else f"one every {sw['every_s']:g} s"
+        rows.append(f"sweep: measured {sw['measured']} still(s), {every} and one in any text or caption between them; "
+                    f"kept {sw['kept']} (asked or flagged)")
     rows.append(f"{len(res['frames'])} still(s) of a {res['duration_s']} s film at {res['fps']:g} fps (look with Read):")
     rows += [f"- {f['t']:.2f}s (frame {f['frame']}): {f['png']}" for f in res["frames"]]
     if res.get("contact"):
@@ -414,7 +416,14 @@ def _render_text(rep: dict) -> ToolResult:
                 f"{fc.get('fps'):g} fps, {fc.get('vcodec')}/{fc.get('acodec')}, {fc.get('lufs')} LUFS, "
                 f"{fc.get('size_mb')} MB; rendered in {rep.get('render_s')} s). Look at it with review."]
         rows += [timing] if timing else []
-        rows += [f"note: {n}" for n in fc.get("notes") or []]
+        side = rep.get("sidecars") or {}
+        for c in side.get("captions") or []:
+            rows.append(f"captions {c['track']} ({c['language'] or 'no language'}"
+                        f"{', hidden: file only' if c['hidden'] else ''}, {c['cues']} cue(s)): {c['srt']}, {c['vtt']}")
+        if side.get("chapters"):
+            rows.append(f"chapters ({len(side['chapters'])}, also in the mp4): "
+                        f"{Path(rep['film']).parent / 'chapters.txt'}")
+        rows += [f"note: {n}" for n in (fc.get("notes") or []) + (rep.get("notes") or [])]
         rows += [r for r in rep.get("layout") or []] + issues
         return _ok(_lines(rows))
     if rep.get("stage") == "infra":
@@ -436,13 +445,30 @@ def _render_text(rep: dict) -> ToolResult:
     return _fail(_lines(rows))
 
 
+def _draft_text(res: dict) -> ToolResult:
+    if not res.get("ok"):
+        return _fail(_lines([f"DRAFT FAILED ({res.get('stage')}): {res.get('error')}"] + res.get("issues", [])))
+    return _ok(f"DRAFT (not delivered): {res['film']} ({res['width']}x{res['height']}, {res['from_s']:.2f}-"
+               f"{res['to_s']:.2f} s of the film; rendered in {res['render_s']:g} s). A quick look: fast-encoded, not "
+               "mastered and not checked; render without draft delivers the film.")
+
+
 @tool
-def render(project: str) -> str:
-    """Render the whole film to out/film.mp4: refuses on check errors; measures text layout every second (the same
-    pass as preview sweep=true); renders, masters loudness and runs the delivery checks. Anything failing keeps the
-    previous film and says what to fix; a transient renderer failure is retried once and said to be one. Takes
-    minutes: preview first."""
-    return _render_text(R.render(_project(project)))
+def render(project: str, draft: bool = False, start: float | str = "", end: float | str = "",
+           scale: float = R.DRAFT_SCALE) -> str:
+    """Render the whole film to out/film.mp4: refuses on check errors; measures text layout (the same pass as
+    preview sweep=true); renders, masters loudness and runs the delivery checks; writes every captions track as
+    out/captions/<track>.srt and .vtt and the chapters as out/chapters.txt. Anything failing keeps the previous film
+    and says what to fix; a transient renderer failure is retried once and said to be one. Takes minutes: preview
+    first. draft=true renders a quick low-quality look to build/draft.mp4 instead (no layout pass, no mastering, no
+    delivery checks; out/ untouched): `scale` 0.1-1 of the canvas (default 0.5), `start`/`end` (seconds or Times)
+    for a part of the film."""
+    root = _project(project)
+    if draft:
+        return _draft_text(R.draft(root, start, end, scale))
+    if start not in ("", None) or end not in ("", None):
+        raise ToolInputError("start and end are for a draft (draft=true): a delivered film is always the whole film")
+    return _render_text(R.render(root))
 
 
 @tool
@@ -455,6 +481,20 @@ def review(project: str, n: int = 12) -> str:
     if res.get("contact"):
         rows.append(f"contact sheet ({SHEET_KEY}): {res['contact']}")
     return ToolResult(_lines(rows), bool(res.get("ok")))
+
+
+@tool
+def export_captions(project: str, track: str = "") -> str:
+    """Write captions as subtitle files without rendering: out/captions/<track>.srt (SubRip) and .vtt (WebVTT) for
+    every captions track, or only `track`. A hidden captions track is written too: that is how a second language
+    ships as a file only. Times are the film's as it stands; render writes the same files with the film."""
+    res = R.export_captions(_project(project), track or None)
+    if not res.get("ok"):
+        return _fail(_lines([res["error"]] + res.get("issues", [])))
+    rows = [f"wrote {len(res['files'])} captions track(s):"]
+    rows += [f"- {f['track']} ({f['language'] or 'no language'}{', hidden' if f['hidden'] else ''}, {f['cues']} "
+             f"cue(s)): {f['srt']}, {f['vtt']}" for f in res["files"]]
+    return _lines(rows)
 
 
 # ------------------------------------------------------------------ typecheck
@@ -668,5 +708,5 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
 
 
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, check, library, preview, render, review,
-                                 speak, capture, draw, animate, import_asset, assets, probe, frames, scenes, silences,
-                                 transcribe, notes, note, typecheck)}
+                                 export_captions, speak, capture, draw, animate, import_asset, assets, probe, frames,
+                                 scenes, silences, transcribe, notes, note, typecheck)}

@@ -1272,6 +1272,8 @@ class _Window:
                     + ", ".join(f"{k} {theme[k]}" for k in D.THEME_TOKENS if k in theme))
         if self.doc.markers:
             rows.append("markers (\"mark:NAME\"): " + ", ".join(self.marker(k, v) for k, v in self.doc.markers.items()))
+        if self.doc.chapters:
+            rows.append("chapters: " + "; ".join(self.marker(f'"{ch.title}"', ch.at) for ch in self.doc.chapters))
         return rows
 
     def marker(self, name: str, value) -> str:

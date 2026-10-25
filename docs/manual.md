@@ -38,12 +38,18 @@ All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise
 area is a title-safe margin; on the platform ones (douyin, tiktok, shorts, reels) it is where the phone's UI does
 not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and music at the
 bottom), and there a film needs sound and nothing may stand still for more than 5 s. Backgrounds may bleed to the
-edges; **words must stay inside the safe area** — render measures every second and refuses text outside it. The
+edges; **words must stay inside the safe area** — render measures the film and refuses text outside it. The
 owner may define other canvases (workspace.json `profiles`, or an inline `"profile": {"base": "douyin", "width":
 720, "height": 1280, "fps": 25}`); `new_project(p, canvas="1920x1080@25")` makes one.
 
 Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose short side is 1080 px; the checks
 scale them with your canvas.
+
+**One project, one canvas, one film.** A project renders one mp4 (h264/aac) on its own canvas. For the same edit on
+another canvas (a 9:16 cut of a 16:9 film): `new_project` with that profile, `import_asset` the same files from the
+first project (on one drive they are hard-linked, so nothing is copied), copy the first project's `tracks`,
+`markers` and `chapters` into the new project.json and re-lay the boxes for the new canvas (they are canvas pixels),
+then `preview` it. Other formats (webm, GIF, ProRes, audio only, a transparent overlay) are not made here.
 
 **Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
 (`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language and whether `speak` has a
@@ -120,7 +126,8 @@ The arrow sits on its own track because it starts while `n1` is still on screen:
 need two tracks.
 
 The narration (`voice`) plays by itself at full volume. The film lasts until the voice ends + 0.6 s unless you
-set `"duration"`. Without a captions track there are no captions.
+set `"duration"`. Without a captions track there are no captions. A captions track's `"language"` (default: the
+project's locale) labels its subtitle files; `"chapters": [{"at": Time, "title": "..."}]` names the film's chapters.
 
 ### Time
 
@@ -288,8 +295,10 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    follows every piece of that recording on `a`'s track, drops the words you cut, and phrases by pauses and
    sentence ends within `max_chars`.
 8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
-   goes; markers move with ripple edits.
-9. `describe` to see the cut as text, `preview` the joins and the captions, `render`.
+   goes; markers move with ripple edits. Chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"}, ...]`)
+   anchored on markers move with them too.
+9. `describe` to see the cut as text, `preview` the joins and the captions, `render(p, draft=true, start=...,
+   end=...)` to watch a join or a stretch as video, then `render`.
 
 ## Tools
 
@@ -317,8 +326,9 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 | `silences(project, asset, min_s?, noise_db?)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
 | `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Kant, reelsmith")` |
 | `preview(project, times?, sweep?)` | stills at chosen moments + contact sheet + layout problems; `sweep` measures the whole film | `preview(p, [0, "line:3", "clip:n1+1", "end-1"])`, `preview(p, sweep=true)` |
-| `render(project)` | the film to `out/film.mp4`, mastered and checked | `render(p)` |
+| `render(project, draft?, start?, end?, scale?)` | the film to `out/film.mp4`, mastered and checked, with captions files and chapters; `draft=true` a quick small look to `build/draft.mp4` | `render(p)`, `render(p, draft=true, start="clip:b-2", end="clip:b+3")` |
 | `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
+| `export_captions(project, track?)` | captions as `out/captions/<track>.srt` and `.vtt`, without rendering | `export_captions(p)` |
 
 - `speak`: `pace` is a speed factor relative to normal (1.0; 0.9 a little slower, 1.1 a little faster; 0.5–2) or
   `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"惊讶"`)
@@ -337,8 +347,16 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
   track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film.
 - `preview` is cheap (one bundle, a few seconds a still): use it after every meaningful edit and look at the PNGs.
   In the contact sheet (tiles in your canvas's shape) the dark bands are outside the safe area (the platform's UI,
-  or the title-safe margin), the yellow line is the safe area's edge and each tile shows its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures a still every second, exactly
+  or the title-safe margin), the yellow line is the safe area's edge and each tile shows its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures the film exactly
   as `render` does before it encodes, and keeps the stills of the flagged moments: run it before `render`.
+- Drafts: `render(p, draft=true)` renders the film at half size with a fast encode to `build/draft.mp4`, not
+  mastered and not checked (`out/` is untouched); `start`/`end` (Times) render just that stretch and `scale`
+  (0.1-1) sets the size. Use it to watch joins, pacing and sound on a long film before the real render.
+- Subtitles and chapters ship with the film: every captions track, hidden ones too, becomes
+  `out/captions/<track>.srt` and `.vtt` (a hidden track with its own `items` and `"language": "es"` is a Spanish
+  subtitle file that is never burned in); `export_captions` writes them without rendering. Project `chapters`
+  become `out/chapters.txt` (`0:00 Intro` lines for a YouTube description) and chapter marks in the mp4; YouTube
+  shows them when the first is at 0:00, there are at least 3 and each lasts 10 s or more.
 
 ## Components
 
@@ -405,9 +423,10 @@ where it shows. A component that crashes shows a red box in previews and is repo
    unknown font...); the owner's hard rules from `rules.json`, when there are any (for example a title of at most
    24 characters with at most 2 numbers, at least 1 source with an http(s) url, no banned words in
    title/desc/topic); the length outside the profile's limits, when it has any.
-2. **layout** (measured on a still every second — `preview` with `sweep` runs the same pass): visible text outside
-   the safe area or cut by the canvas edge, text under 20 px, a component that crashes. Text during its
-   enter/exit animation and text fainter than 10 % opacity are not counted.
+2. **layout** (measured on a still every second, spread to 600 stills on a film over 10 minutes, plus one in each
+   text and caption between them — `preview` with `sweep` runs the same pass): visible text outside the safe area
+   or cut by the canvas edge, text under 20 px, a component that crashes. Text during its enter/exit animation and
+   text fainter than 10 % opacity are not counted.
 3. **the film**: the profile's size and fps, h264/aac, length and size within the profile's limits, black ≤ 10 %
    of the film. On the platform profiles also sound present (not near silent) and **no stretch longer than 5 s
    without any motion** (move something: keyframes, `motion`, a reveal, a video); on the generic canvases a silent
