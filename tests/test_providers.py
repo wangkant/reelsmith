@@ -1079,6 +1079,16 @@ def test_codex_runs_locked_down_and_only_its_own_original_counts(tmp_path):
     assert not (home / "generated_images" / thread).exists()
 
 
+def test_draw_prompt_wraps_any_description_in_english():
+    # the wrapper is ours, the description the agent's, in whatever language the film is in
+    text = D.draw_prompt("a cat on a windowsill, photo", (1536, 1024), ref=True)
+    assert text.isascii() and "one landscape image (1536x1024)" in text and "image_gen" in text
+    assert "Picture:\na cat on a windowsill, photo" in text and text.rstrip().endswith(D.STYLE_REF_NOTE)
+    assert "portrait image" in D.draw_prompt("x", (1024, 1536)) and "square image" in D.draw_prompt("x", (1024, 1024))
+    zh = D.draw_prompt("一只猫", (1024, 1024))
+    assert zh.replace("一只猫", "").isascii() and D.STYLE_REF_NOTE not in zh
+
+
 def test_codex_failures_are_classified(tmp_path):
     def answering(final):
         def run(cmd, cwd=None, timeout=None, stdin=None, no_window=False):

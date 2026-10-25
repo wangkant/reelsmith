@@ -256,6 +256,8 @@ def test_providers_delegation(project, monkeypatch):
     assert r.ok and calls[-1] == ("capture", "https://example.com/a", "", "ev1")  # empty match left to the default
     assert T.speak(str(project.path), '["一", {"text": "二", "pace": 0.9}]').ok
     assert calls[-1] == ("speak", ["一", {"text": "二", "pace": 0.9}], 0.22)
+    r = T.speak(str(project.path), [])
+    assert not r.ok and '["First line.", {"text": "Second line.", "pace": 0.95}]' in r and r.isascii()
     r = T.draw(str(project.path), "img1", "a pump")
     assert not r.ok and "codex login" in r
     assert T.assets(str(project.path)) == "no assets"

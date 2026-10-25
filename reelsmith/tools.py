@@ -543,13 +543,14 @@ def _id_arg(value: str, what: str = "id") -> str:
 def speak(project: str, lines: list[str | dict], gap_s: float = 0.22) -> str:
     """Narrate: one item per voice line, a string or {"text", "pace"?, "emotion"?}. pace: "slower", "normal",
     "faster" or a speed factor 0.5-2 relative to normal (1.0 normal, 0.9 a little slower, 1.1 a little faster).
-    emotion: a word or two (at most 20 characters, e.g. "惊讶", "平静", "surprised") passed to the voice as an
+    emotion: a word or two (at most 20 characters, e.g. "surprised", "calm") passed to the voice as an
     instruction; how much it changes depends on the voice model. gap_s: silence between lines. Writes
     voice/voice.wav and voice/voice.json (line times), sets the project's voice if unset. Only changed lines cost
     money (cached). Paid: estimates first and refuses over budget."""
     lines = _json_arg(lines, "lines")
     if not isinstance(lines, list) or not lines:
-        raise ToolInputError('lines must be a non-empty list, e.g. ["第一句。", {"text": "第二句", "pace": 0.95}]')
+        raise ToolInputError('lines must be a non-empty list, e.g. ["First line.", {"text": "Second line.", '
+                             '"pace": 0.95}]')
     return _provider("speak", _project(project), lines=lines, gap_s=gap_s)
 
 
