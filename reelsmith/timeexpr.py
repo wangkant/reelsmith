@@ -1,4 +1,5 @@
-"""Time values (spec 3.1): seconds, or a string anchored on a voice line, a clip or the film end, +/- seconds.
+"""Time values (spec 3.1): seconds, or a string anchored on a voice line, a clip, a marker, a source second of a
+clip or the film end, +/- seconds.
 
 `parse` checks the grammar; `resolve` turns a Time into seconds against a context (voice lines, clip times, film
 end). `Schedule` is that context for a whole project: it times every clip lazily and reports reference cycles.
@@ -12,14 +13,16 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
 
-HINT = ('a Time is seconds (12.5) or "line:N", "line:N.end", "clip:ID", "clip:ID.end" or "end", '
-        'optionally +/- seconds ("line:5+0.3", "clip:c2.end-0.5", "end-2")')
+HINT = ('a Time is seconds (12.5) or "line:N", "line:N.end", "clip:ID", "clip:ID.end", "mark:NAME", '
+        '"src:CLIP@SECONDS" or "end", optionally +/- seconds ("line:5+0.3", "clip:c2.end-0.5", "end-2")')
 TAIL_S = 0.6                    # a breath after the narration before the film ends
 
 _NUMBER = re.compile(r"^\d+(?:\.\d+)?$|^\.\d+$")
 _EXPR = re.compile(
     r"^(?:(?i:line):(?P<n>\d+)(?P<lend>\.(?i:end))?"
     r"|(?i:clip):(?P<id>[A-Za-z0-9_][A-Za-z0-9_-]*?)(?P<cend>\.(?i:end))?"
+    r"|(?i:mark):(?P<mark>[A-Za-z0-9_][A-Za-z0-9_-]*?)"
+    r"|(?i:src):(?P<sid>[A-Za-z0-9_][A-Za-z0-9_-]*?)@(?P<ss>\d+(?:\.\d+)?|\.\d+)"
     r"|(?P<end>(?i:end)))"
     r"(?:\s*(?P<sign>[+-])\s*(?P<off>\d+(?:\.\d+)?|\.\d+))?$")
 
@@ -34,15 +37,21 @@ class CycleError(TimeError):
 
 @dataclass(frozen=True)
 class TimeExpr:
-    anchor: str                 # "abs" | "line" | "clip" | "end"
-    ref: int | str | None       # line number or clip id
+    anchor: str                 # "abs" | "line" | "clip" | "mark" | "src" | "end"
+    ref: int | str | None       # line number, clip id or marker name
     at_end: bool                # "line:N.end" / "clip:ID.end"
     offset: float               # seconds added (the whole value for "abs")
+    at: float | None = None     # "src:ID@S": the source second S
 
     def __str__(self) -> str:
         if self.anchor == "abs":
             return f"{self.offset:g}"
-        base = "end" if self.anchor == "end" else f"{self.anchor}:{self.ref}{'.end' if self.at_end else ''}"
+        if self.anchor == "end":
+            base = "end"
+        elif self.anchor == "src":
+            base = f"src:{self.ref}@{self.at:g}"
+        else:
+            base = f"{self.anchor}:{self.ref}{'.end' if self.at_end else ''}"
         if not self.offset:
             return base
         return f"{base}{'+' if self.offset > 0 else '-'}{abs(self.offset):g}"
@@ -82,6 +91,10 @@ def parse(value) -> TimeExpr:
         return TimeExpr("line", n, bool(m["lend"]), off)
     if m["id"] is not None:
         return TimeExpr("clip", m["id"], bool(m["cend"]), off)
+    if m["mark"] is not None:
+        return TimeExpr("mark", m["mark"], False, off)
+    if m["sid"] is not None:
+        return TimeExpr("src", m["sid"], False, off, float(m["ss"]))
     return TimeExpr("end", None, False, off)
 
 
@@ -91,6 +104,10 @@ def _why(s: str) -> str:
         return " (a voice line is line:N with N a whole number from 1)"
     if low.startswith("clip") and not re.match(r"^clip:[a-z0-9_]", low):
         return " (a clip is clip:ID with the clip's id)"
+    if low.startswith("src") and not re.match(r"^src:[a-z0-9_][a-z0-9_-]*@[\d.]", low):
+        return " (a source second is src:CLIP@SECONDS, e.g. src:c1@12.5)"
+    if low.startswith("mark") and not re.match(r"^mark:[a-z0-9_]", low):
+        return " (a marker is mark:NAME with the marker's name)"
     if low in ("start", "begin", "0s"):
         return " (the film start is 0)"
     if re.match(r"^-\d", s):
@@ -112,6 +129,8 @@ def check(value) -> str | None:
 class TimeContext(Protocol):
     def line(self, n: int, at_end: bool) -> float: ...
     def clip(self, clip_id: str, at_end: bool) -> float: ...
+    def mark(self, name: str) -> float: ...
+    def source(self, clip_id: str, seconds: float) -> float: ...
     def film_end(self) -> float: ...
 
 
@@ -124,6 +143,10 @@ def resolve(value, ctx: TimeContext) -> float:
         base = ctx.line(int(e.ref), e.at_end)  # type: ignore[arg-type]
     elif e.anchor == "clip":
         base = ctx.clip(str(e.ref), e.at_end)
+    elif e.anchor == "mark":
+        base = ctx.mark(str(e.ref))
+    elif e.anchor == "src":
+        base = ctx.source(str(e.ref), float(e.at or 0.0))
     else:
         base = ctx.film_end()
     t = base + e.offset
@@ -166,6 +189,10 @@ class ClipTiming:
     end: object = None          # a Time, or None with dur
     dur: float | None = None    # seconds
     counts: bool = True         # counts towards the film length when no voice or duration sets it
+    kind: str = ""              # the clip type; "src:" takes video and audio ("" = untyped, as in tests)
+    trim_in: float = 0.0        # source seconds skipped at its start
+    rate: float = 1.0           # source seconds per film second
+    loop: bool = False
 
 
 class _NeedsEnd(Exception):
@@ -176,15 +203,16 @@ class Schedule:
     """Times every clip (seconds) and the film end on demand, with cycle detection.
 
     lines: [(t0, t1)] of the voice; clips: {id: ClipTiming}; duration: the project's Time or None;
-    voice_end: the narration's end in seconds or None (the film then lasts voice_end + TAIL_S).
+    voice_end: the narration's end in seconds or None (the film then lasts voice_end + TAIL_S); markers: {name: Time}.
     """
 
     def __init__(self, lines: Iterable[tuple[float, float]], clips: dict[str, ClipTiming],
-                 duration=None, voice_end: float | None = None):
+                 duration=None, voice_end: float | None = None, markers: dict | None = None):
         self.lines = [(float(a), float(b)) for a, b in lines]
         self.clips = clips
         self.duration = duration
         self.voice_end = voice_end
+        self.markers = dict(markers or {})
         self._memo: dict[tuple, float | TimeError] = {}
         self._stack: list[tuple] = []
         self._auto_end = False
@@ -201,6 +229,28 @@ class Schedule:
         if clip_id not in self.clips:
             raise TimeError(f"clip:{clip_id}: there is no clip {clip_id!r}")
         return self._get(("clip", clip_id, "end" if at_end else "start"))
+
+    def mark(self, name: str) -> float:
+        if name not in self.markers:
+            known = ", ".join(sorted(self.markers)) or "none yet"
+            raise TimeError(f"mark:{name}: there is no marker {name!r} (markers: {known})")
+        return self._get(("mark", name))
+
+    def source(self, clip_id: str, seconds: float) -> float:
+        """The film time at which source second `seconds` of a video or audio clip plays."""
+        where = f"src:{clip_id}@{seconds:g}"
+        if clip_id not in self.clips:
+            raise TimeError(f"{where}: there is no clip {clip_id!r}")
+        c = self.clips[clip_id]
+        if c.kind and c.kind not in ("video", "audio"):
+            raise TimeError(f"{where}: clip {clip_id} is a {c.kind} clip; src: takes a video or audio clip")
+        if c.loop:
+            raise TimeError(f"{where}: clip {clip_id} loops, so a source second plays more than once; use "
+                            f"clip:{clip_id}+seconds")
+        if seconds < c.trim_in - 1e-6:
+            raise TimeError(f"{where} is before clip {clip_id}'s in point (trim_in {c.trim_in:g} s): that part of the "
+                            "source is cut away")
+        return self.start(clip_id) + (seconds - c.trim_in) / (c.rate or 1.0)
 
     def film_end(self) -> float:
         if self._auto_end and ("film",) in self._stack:
@@ -252,6 +302,8 @@ class Schedule:
     def _compute(self, key: tuple) -> float:
         if key == ("film",):
             return self._film()
+        if key[0] == "mark":
+            return _at(self.markers[key[1]], self, f"marker {key[1]}")
         _, cid, edge = key
         c = self.clips[cid]
         if edge == "start":
@@ -304,6 +356,8 @@ def _at(value, sched: Schedule, what: str) -> float:
 def _name(key: tuple) -> str:
     if key == ("film",):
         return "end"
+    if key[0] == "mark":
+        return f"mark:{key[1]}"
     _, cid, edge = key
     return f"clip:{cid}{'.end' if edge == 'end' else ''}"
 
