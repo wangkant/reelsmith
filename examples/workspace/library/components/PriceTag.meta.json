@@ -6,13 +6,13 @@
     "additionalProperties": false,
     "required": ["price"],
     "properties": {
-      "price": {"type": "string", "minLength": 1, "maxLength": 12, "description": "the price now, formatted: ¥22/杯"},
-      "old": {"type": "string", "maxLength": 12, "description": "the old price, struck through at strike_at"},
-      "label": {"type": "string", "maxLength": 14, "description": "small line on top: 中杯拿铁"},
+      "price": {"type": "string", "minLength": 1, "maxLength": 16, "description": "the price now, formatted: $4.50"},
+      "old": {"type": "string", "maxLength": 16, "description": "the old price, struck through at strike_at"},
+      "label": {"type": "string", "maxLength": 28, "description": "small line on top: Large latte"},
       "at": {"type": ["number", "string"], "description": "Time the tag drops in: \"line:6\" or seconds from the clip start. Default: the clip start"},
       "strike_at": {"type": ["number", "string"], "description": "Time the old price is struck: \"line:7\" or seconds from the clip start. Default: 0.7 s after at"},
       "color": {"type": "string", "default": "accent", "description": "price and strike colour: theme token or CSS"}
     }
   },
-  "example": {"price": "¥22/杯", "old": "¥18/杯", "label": "中杯拿铁"}
+  "example": {"price": "$4.50", "old": "$3.80", "label": "Large latte"}
 }

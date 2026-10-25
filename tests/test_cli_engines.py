@@ -227,7 +227,7 @@ def test_dsh_command_and_patch(ws):
     assert "- id: session-log-deepseek\n  disabled: true" in text and "- id: session-title-llm\n  disabled: true" in text
     assert json.dumps(str(project), ensure_ascii=False) in text    # REELSMITH_GUARD_PROJECT, as a JSON scalar
     assert "reasoningEffort" not in cli_engines.dsh_patch(srv, "deepseek-flash")
-    env = cli_engines.dsh_env("k", w.root / ".cache" / "dsh", "http://127.0.0.1:7890", base={"PATH": "x"})
+    env = cli_engines.dsh_env("k", w.root / ".cache" / "dsh", "http://proxy.example:8080", base={"PATH": "x"})
     assert env["DEEPSEEK_API_KEY"] == "k" and env["DSH_HOME"].endswith("dsh") and env["HTTPS_PROXY"]
     assert env["DSH_TELEMETRY_MODE"] == "DISABLED" and env["DSH_TELEMETRY_DISABLED"] == "1"
 

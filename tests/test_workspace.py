@@ -150,13 +150,36 @@ def test_profile_caption_band_is_the_renderers_default():
 
 
 def test_example_workspace_matches_spec():
+    # the starter is neutral: the default canvas and language, no owner rules, the voice chosen by the locale
     ws = W.Workspace.load(EXAMPLE)
-    assert ws.config["profile"] == "douyin"
-    assert ws.config["providers"]["tts"] == {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus",
-                                             "voice": "longanlufeng"}
+    assert (ws.config["profile"], ws.locale) == ("landscape", "en")
+    assert ws.config["providers"]["tts"] == {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus"}
     assert ws.config["providers"]["image"]["provider"] == "codex"
     assert ws.config["providers"]["video"] == {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro",
                                                "resolution": "720p"}
+    assert ws.config["providers"]["transcribe"]["provider"] == "openai"
     assert ws.config["budget"] == {"per_project_usd": 1.0, "min_balance_usd": 5.0}
-    hard = ws.rules["hard"]
+    assert ws.rules == {"hard": {}, "advice": {}}
+    # one owner's setup, kept as a separate example
+    news = W.Workspace.load(EXAMPLE.parent / "news-explainer-zh")
+    assert (news.config["profile"], news.locale) == ("douyin", "zh-CN")
+    assert news.config["providers"]["tts"]["voice"] == "longanlufeng"
+    hard = news.rules["hard"]
     assert (hard["max_title"], hard["max_title_numbers"], hard["min_sources"]) == (24, 2, 1)
+
+
+def test_the_starter_delivers_any_short_film(tmp_path, monkeypatch):
+    # a copy of the starter with one 6 s clip and no sources passes check: nothing in it assumes a platform or a genre
+    import shutil
+    from reelsmith import tools
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    ws = tmp_path / "studio"
+    shutil.copytree(EXAMPLE, ws)
+    p = ws / "projects" / "first-film"
+    made = tools.new_project(str(p), title="My first film")
+    assert made.ok and "landscape 1920x1080" in made, made
+    ops = [{"op": "add_track", "track": {"id": "v1", "kind": "visual", "clips": [
+        {"id": "t", "type": "text", "text": "Hello", "start": 0, "dur": 6, "box": "safe"}]}}]
+    assert tools.edit(str(p), ops).ok
+    checked = tools.check(str(p))
+    assert checked.ok and "[error]" not in checked, checked

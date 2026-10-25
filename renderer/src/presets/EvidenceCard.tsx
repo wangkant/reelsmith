@@ -8,21 +8,32 @@ import {
 
 const MIN_SOURCE = 28;
 
-/** "www.example.org" -> "example.org"; a site name ("示例日报") stays as it is. */
+/** "www.example.org" -> "example.org"; a site name ("Example Daily") stays as it is. */
 const siteName = (site?: string) => {
   const s = String(site ?? "").trim();
   return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(s) ? s.replace(/^(www|m|wap|mobile)\./i, "") : s;
 };
 
+// the default source line's lead-in, by the film's language (BCP-47); anything else reads "Source: "
+const SOURCE_LABELS: Record<string, string> = {
+  zh: "来源：", "zh-hant": "來源：", ja: "出典：", de: "Quelle: ", es: "Fuente: ", fr: "Source : ", it: "Fonte: ", pt: "Fonte: ",
+};
+const sourceLabel = (locale?: string) => {
+  const tag = String(locale || "en").toLowerCase();
+  const lang = tag.split("-")[0];
+  if (lang === "zh" && /-(hant|tw|hk|mo)(-|$)/.test(tag)) return SOURCE_LABELS["zh-hant"];
+  return SOURCE_LABELS[lang] ?? "Source: ";
+};
+
 export default function EvidenceCard({ props }: { props: any }) {
-  const { w, h, fps, theme } = useClip();
+  const { w, h, fps, theme, locale } = useClip();
   const f = useCurrentFrame();
   const ev = props?.asset;
   if (!isAsset(ev)) return null;
 
   const ink = onGround(theme, props?.ground);
   const site = siteName(ev.site);
-  const source = props?.source !== undefined ? String(props.source).trim() : site ? `来源：${site}` : "";
+  const source = props?.source !== undefined ? String(props.source).trim() : site ? `${sourceLabel(locale)}${site}` : "";
   const srcMax = Math.max(MIN_SOURCE, Math.min(40, h * 0.06, w * 0.06));
   const fitted = source ? fitLines(source, w, srcMax, MIN_SOURCE, FONTS.sans, 600) : { size: 0, lines: [] as string[] };
   const tagSize = source ? Math.max(MIN_SOURCE, fitted.size) : 0;

@@ -46,7 +46,7 @@ def resolved(clips, seconds=60.0, captions=None):
 
 GOOD_META = {"title": "油价为什么又涨了", "desc": "一句话 #油价", "topic": "油价",
              "sources": [{"title": "示例日报", "url": "https://www.example.org/x"}]}
-# a news explainer's rules (the example workspace's rules.json): the defaults are empty
+# a news explainer's rules (examples/news-explainer-zh/rules.json): the defaults are empty
 HOUSE = {"hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
          "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": True}}
 

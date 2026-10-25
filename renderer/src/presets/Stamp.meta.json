@@ -1,12 +1,12 @@
 {
   "name": "Stamp",
-  "description": "A verdict seal slammed down at `at`: overshoots, shakes, settles, tilted. 1-4 characters read best (真香, 亏了, 不值); the seal is sized to the clip box, so give it a square-ish box over the thing it judges.",
+  "description": "A verdict seal slammed down at `at`: overshoots, shakes, settles, tilted. a word or two reads best (APPROVED, SOLD OUT, 真香); the seal is sized to the clip box, so give it a square-ish box over the thing it judges.",
   "props": {
     "type": "object",
     "additionalProperties": false,
     "required": ["text"],
     "properties": {
-      "text": {"type": "string", "minLength": 1, "maxLength": 6, "description": "the verdict; 4+ characters stack on two lines"},
+      "text": {"type": "string", "minLength": 1, "maxLength": 12, "description": "the verdict; two or more words (or 4+ CJK characters) stack on two lines"},
       "at": {"type": ["number", "string"], "description": "Time it lands: \"line:14+0.4\", \"clip:st\" or seconds from the clip start. Nothing shows before it. Default: 0.2 s into the clip"},
       "rotate": {"type": "number", "minimum": -45, "maximum": 45, "default": -12, "description": "tilt in degrees"},
       "shape": {"type": "string", "enum": ["square", "round"], "default": "square"},
@@ -15,5 +15,5 @@
       "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on: light inks into the paper (multiply), dark gets a faint plate so it stays visible"}
     }
   },
-  "example": {"text": "真香", "rotate": -12}
+  "example": {"text": "APPROVED", "rotate": -12}
 }

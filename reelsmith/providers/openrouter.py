@@ -136,7 +136,8 @@ class OpenRouter:
 
 
 # ------------------------------------------------------------------ speech
-ZH_VOICE = "longanlufeng"       # the default model's Mandarin voice: the default for Chinese locales only
+DEFAULT_MODEL = "qwen/qwen-audio-3.0-tts-plus"
+ZH_VOICE = "longanlufeng"       # the default model's voice for Chinese and English locales (it speaks both)
 # Qwen TTS rejects a numeric `speed` (HTTP 400): its pace is steered by words instead.
 QWEN_SLOW_BELOW = 1.18
 QWEN_FAST_FROM = 1.30
@@ -153,7 +154,7 @@ def qwen_pace(speed: float, zh: bool = True) -> str:
 def speech_body(text: str, cfg: dict, speed: float, emotion: str = "") -> dict:
     """The /audio/speech request; its own instructions (pace, emotion) are in Chinese unless cfg["locale"] is a
     non-Chinese locale."""
-    body = {"model": cfg.get("model") or "qwen/qwen-audio-3.0-tts-plus", "input": text,
+    body = {"model": cfg.get("model") or DEFAULT_MODEL, "input": text,
             "voice": cfg.get("voice") or ZH_VOICE, "response_format": "mp3"}
     zh = locales.is_chinese(cfg.get("locale") or "zh")
     sep = "；" if zh else "; "

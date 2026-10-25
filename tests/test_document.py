@@ -237,12 +237,12 @@ def test_clips_past_the_end_warn(demo):
 
 def test_component_checks(demo):
     data = raw(demo)
-    clip(data, "verdict")["props"] = {"text": "太长了不能盖章啊", "at": "line:99", "colour": "red"}
+    clip(data, "verdict")["props"] = {"text": "WAY TOO LONG A VERDICT", "at": "line:99", "colour": "red"}
     clip(data, "count")["name"] = "Counter"
     clip(data, "bill")["props"]["rows"][0]["at"] = "line:7"           # after the clip ends
     issues = issues_of(demo, data)
     assert find(issues, "error", "clip verdict", "props: unknown prop(s) colour")
-    assert find(issues, "error", "clip verdict", "props.text: 8 characters; at most 6")
+    assert find(issues, "error", "clip verdict", "props.text: 22 characters; at most 12")
     assert find(issues, "error", "clip verdict.props.at", "line:99 is past the voice")
     assert find(issues, "error", "clip count.name", "no component 'Counter'; there are: Arrow, BarCompare")
     assert find(issues, "warning", "clip bill.props.rows[0].at", "after the clip ends")
@@ -415,6 +415,56 @@ def test_every_shipped_example_validates_against_its_schema():
         assert comp.path.name == f"{name}.tsx" and comp.path.is_file()
 
 
+def test_the_manuals_complete_projects_validate(tmp_path):
+    # the examples agents copy from: a narrated explainer and a footage edit, both landscape and English
+    import re
+    manual = (Path(__file__).parent.parent / "docs" / "manual.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```json\n(\{\n  \"version\": 2,.*?)\n```", manual, re.S)
+    assert len(blocks) == 2
+    for n, block in enumerate(blocks):
+        data = json.loads(block)
+        assert (data["profile"], data["locale"]) == ("landscape", "en")
+        p = tmp_path / f"p{n}"
+        (p / "assets").mkdir(parents=True)
+        (p / "project.json").write_text(block, encoding="utf-8")
+        for a in data["assets"].values():                                   # placeholders: only presence is checked
+            (p / a["path"]).write_bytes(b"x")
+            if a.get("transcript"):
+                (p / a["transcript"]).write_text('{"version": 1, "words": [], "segments": []}', encoding="utf-8")
+        if data.get("voice"):
+            (p / "voice").mkdir()
+            (p / "voice" / "voice.wav").write_bytes(b"x")
+            lines = [{"i": i, "text": f"line {i}", "t0": 3.0 * i - 3, "t1": 3.0 * i - 0.3} for i in range(1, 9)]
+            (p / "voice" / "voice.json").write_text(json.dumps({"file": "voice/voice.wav", "lines": lines}),
+                                                    encoding="utf-8")
+        assert D.validate(p, D.load(p)) == [], n
+
+
+def test_presets_take_latin_text_and_lead_with_english_examples():
+    # the same strings renderer/test/presets-preview renders at these lengths
+    comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
+    latin = {
+        "Stamp": {"text": "NOT WORTH IT"},
+        "CountUp": {"value": 45, "prefix": "~", "suffix": "minutes a day",
+                    "label": "spent on the phone before getting out of bed"},
+        "Receipt": {"header": "RECEIPT · WHAT A PRIZE REALLY COSTS", "title": "What the grand prize is worth",
+                    "rows": [{"label": "Laptop at the list price", "value": "$1,200",
+                              "sub": "the store sets the price the tax is based on"}],
+                    "total": {"label": "What you keep", "value": "$960"}},
+        "BarCompare": {"unit": " USD", "items": [{"label": "Median household income", "value": 80610}]},
+        "TimelineRule": {"points": [{"when": "January 2024", "text": "Rent goes up for the first time, by $200 a month"}]},
+        "DotGrid": {"total": 50, "lit": 12, "label_lit": "were refused at the first review",
+                    "label_rest": "made it through to the interview"},
+        "Arrow": {"label": "the part the buyer never sees"},
+        "EvidenceCard": {"asset": "ev", "source": "Source: Example Mall member centre, rules of the 100-day challenge"},
+        "PriceTag": {"price": "$4.50", "old": "$3.80", "label": "Large latte, oat milk"},
+    }
+    for name, props in latin.items():
+        assert L.validate_props(comps[name], props) == [], name
+    for name, comp in comps.items():
+        assert not any("　" <= ch <= "鿿" for ch in json.dumps(comp.example, ensure_ascii=False)), name
+
+
 def make_lib(tmp_path) -> Path:
     ws = tmp_path / "ws"
     comps = ws / "library" / "components"
@@ -454,10 +504,10 @@ def test_library_shadows_presets_and_reports_broken_metas(tmp_path):
 def test_validate_props_messages():
     comps = L.components(FIXTURE)
     receipt = comps["Receipt"]
-    rows = L.validate_props(receipt, {"rows": [{"label": "x" * 20, "value": 1, "foo": 2}], "bar": 1})
+    rows = L.validate_props(receipt, {"rows": [{"label": "x" * 40, "value": 1, "foo": 2}], "bar": 1})
     assert rows[0] == "props: unknown prop(s) bar; allowed: header, rows, title, total"
     assert "props.rows[0]: unknown prop(s) foo; allowed: at, label, sub, tone, value" in rows
-    assert "props.rows[0].label: 20 characters; at most 14" in rows
+    assert "props.rows[0].label: 40 characters; at most 28" in rows
     assert L.validate_props(receipt, []) == ["props must be an object"]
     assert L.validate_props(comps["Arrow"], {"label_pos": "middle"}) == [
         "props.label_pos: 'middle' is not one of 'start', 'end'"]

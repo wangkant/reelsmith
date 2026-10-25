@@ -63,6 +63,7 @@ def test_top_level_matches_types_ts(resolved):
     assert resolved["version"] == 2 and resolved["fps"] == 30 and (resolved["width"], resolved["height"]) == (1080, 1920)
     assert resolved["durationInFrames"] == 654                       # (21.2 + 0.6) * 30
     assert resolved["safe"] == {"x": 40, "y": 220, "w": 840, "h": 1240}
+    assert resolved["locale"] == "zh-CN"
     assert set(resolved["theme"]) <= ts_fields("Theme") and resolved["theme"]["accent"] == "#C8372D"
     assert resolved["inspect"] is False
     json.dumps(resolved, allow_nan=False)                            # plain JSON, no NaN
@@ -245,6 +246,25 @@ def test_theme_from_workspace_and_project(tmp_path):
     theme = R.resolve(p)["theme"]
     assert theme["name"] == "night" and theme["accent"] == "#111111" and theme["gold"] == "#333333"
     assert theme["paper"] == "#E9EEF3"                                   # the night base
+
+
+def test_locale_reaches_the_renderer(tmp_path, monkeypatch):
+    # components choose the words they add by it (EvidenceCard's source line)
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    film = {"version": 2, "duration": 2, "tracks": [{"id": "v", "kind": "visual", "clips": [
+        {"id": "t", "type": "text", "text": "x", "start": 0, "dur": 2}]}]}
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    write(alone, film)
+    assert R.resolve(alone)["locale"] == "en"
+    ws = tmp_path / "ws"
+    p = ws / "projects" / "t"
+    p.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({"locale": "ja"}), encoding="utf-8")
+    write(p, film)
+    assert R.resolve(p)["locale"] == "ja"
+    write(p, {**film, "locale": "es-MX"})
+    assert R.resolve(p)["locale"] == "es-MX"
 
 
 # ------------------------------------------------------------------ captions

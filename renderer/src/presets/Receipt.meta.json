@@ -1,13 +1,13 @@
 {
   "name": "Receipt",
-  "description": "A till receipt that prints one row per fact at its own time, then a ruled total: a price breakdown, what you really pay, a running sum. The finished receipt fits the clip box; 2-6 rows read best on a phone.",
+  "description": "A till receipt that prints one row per fact at its own time, then a ruled total: a price breakdown, what you really pay, a running sum. The finished receipt fits the clip box; 2-6 rows read best.",
   "props": {
     "type": "object",
     "additionalProperties": false,
     "required": ["rows"],
     "properties": {
-      "title": {"type": "string", "maxLength": 16, "description": "headline at the top, e.g. 这份奖品到手多少 (omit for none)"},
-      "header": {"type": "string", "maxLength": 24, "description": "small grey line above the title, e.g. RECEIPT · 中奖小票"},
+      "title": {"type": "string", "maxLength": 32, "description": "headline at the top, e.g. What the prize is worth (omit for none)"},
+      "header": {"type": "string", "maxLength": 40, "description": "small grey line above the title, e.g. RECEIPT · PRIZE"},
       "rows": {
         "type": "array",
         "minItems": 1,
@@ -18,9 +18,9 @@
           "additionalProperties": false,
           "required": ["label", "value"],
           "properties": {
-            "label": {"type": "string", "minLength": 1, "maxLength": 14, "description": "left text"},
-            "value": {"type": ["string", "number"], "description": "right text, already formatted: ¥22/杯, ¥11,714, -¥2,343"},
-            "sub": {"type": "string", "maxLength": 24, "description": "small grey note under the label"},
+            "label": {"type": "string", "minLength": 1, "maxLength": 28, "description": "left text"},
+            "value": {"type": ["string", "number"], "description": "right text, already formatted: $1,200, -$240, ¥22/杯"},
+            "sub": {"type": "string", "maxLength": 48, "description": "small grey note under the label"},
             "tone": {"type": "string", "default": "ink", "description": "value colour: theme token (ink, accent, bad, good, gold, muted) or CSS"},
             "at": {"type": ["number", "string"], "description": "Time this row prints: \"line:6\", \"clip:rc+1.2\" or seconds from the clip start. Default: rows spread over the first two thirds of the clip"}
           }
@@ -32,8 +32,8 @@
         "required": ["label", "value"],
         "description": "the ruled bottom line, printed after the rows",
         "properties": {
-          "label": {"type": "string", "minLength": 1, "maxLength": 10},
-          "value": {"type": ["string", "number"], "description": "already formatted, e.g. ¥9,371"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 20},
+          "value": {"type": ["string", "number"], "description": "already formatted, e.g. $960"},
           "tone": {"type": "string", "default": "accent", "description": "value colour: theme token or CSS"},
           "at": {"type": ["number", "string"], "description": "Time the total prints: \"line:9\" or seconds from the clip start. Default: after the last row"}
         }
@@ -41,13 +41,13 @@
     }
   },
   "example": {
-    "header": "RECEIPT · 中奖小票",
-    "title": "这份奖品到手多少",
+    "header": "RECEIPT · PRIZE",
+    "title": "What the prize is worth",
     "rows": [
-      {"label": "笔记本电脑", "value": "¥11,714", "sub": "奖品按商家标价计税"},
-      {"label": "运费", "value": "包邮"},
-      {"label": "个税 20%", "value": "-¥2,343", "tone": "bad"}
+      {"label": "Laptop", "value": "$1,200", "sub": "taxed at the store's list price"},
+      {"label": "Shipping", "value": "free"},
+      {"label": "Tax 20%", "value": "-$240", "tone": "bad"}
     ],
-    "total": {"label": "到手约", "value": "¥9,371"}
+    "total": {"label": "You keep", "value": "$960"}
   }
 }

@@ -14,12 +14,12 @@
       "color": {"type": "string", "default": "accent", "description": "theme token or CSS"},
       "at": {"type": ["number", "string"], "description": "Time it starts drawing: \"line:9+0.3\" or seconds from the clip start. Default: the clip start"},
       "dur": {"type": "number", "exclusiveMinimum": 0, "maximum": 5, "default": 0.6, "description": "seconds the drawing takes"},
-      "label": {"type": "string", "maxLength": 16, "description": "short text at the tail or the head, at least 28 px (a long one takes two lines)"},
+      "label": {"type": "string", "maxLength": 32, "description": "short text at the tail or the head, at least 28 px (a long one takes two lines)"},
       "label_pos": {"type": "string", "enum": ["start", "end"], "default": "start", "description": "start: behind the tail; end: past the head"},
       "label_at": {"type": ["number", "string"], "description": "Time the label appears: \"line:9+0.8\" or seconds from the clip start. Default: with the arrow"},
       "label_style": {"type": "string", "enum": ["pill", "plain"], "default": "pill", "description": "pill: white text on the arrow colour; plain: text in the ground's ink"},
       "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on; sets a plain label's colour"}
     }
   },
-  "example": {"from": [0.1, 0.8], "to": [0.86, 0.22], "curve": 0.3, "label": "多出来的钱", "label_pos": "start"}
+  "example": {"from": [0.1, 0.8], "to": [0.86, 0.22], "curve": 0.3, "label": "the extra cost", "label_pos": "start"}
 }

@@ -257,14 +257,14 @@ def whisper(ws, monkeypatch):
 
 
 def test_transcribe_saves_words_links_the_asset_and_books_the_cost(ws, whisper):
-    r = tools.transcribe(str(ws.project), "talk", language="en", prompt="Kant")
+    r = tools.transcribe(str(ws.project), "talk", language="en", prompt="Ada Lovelace")
     assert r.ok, r
     assert len(FakeWhisper.seen) == 1
     call = FakeWhisper.seen[0]
     assert call["path"] == "/v1/audio/transcriptions" and call["auth"] == "Bearer sk-test-0123456789abcdefghij"
     for part in (b'name="model"\r\n\r\nwhisper-1', b'name="response_format"\r\n\r\nverbose_json',
                  b'name="timestamp_granularities[]"\r\n\r\nword', b'name="language"\r\n\r\nen',
-                 b'name="prompt"\r\n\r\nKant', b'filename="sound.mp3"'):
+                 b'name="prompt"\r\n\r\nAda Lovelace', b'filename="sound.mp3"'):
         assert part in call["body"]
     t = json.loads((ws.project / "assets" / "talk.transcript.json").read_text(encoding="utf-8"))
     assert t["asset"] == "talk" and t["source"] == "assets/talk.wav" and t["language"] == "english"

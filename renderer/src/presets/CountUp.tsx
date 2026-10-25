@@ -37,7 +37,9 @@ export default function CountUp({ props }: { props: any }) {
   // widths at font size 1, so the digits' size can be solved for the box
   const unit = (s: string, k: number) => (s ? textWidth(s, 100 * k, FONTS.sans, 900, true) / 100 : 0);
   const digits = Math.max(unit(fmt(value, decimals, grouping), 1), unit(fmt(start, decimals, grouping), 1)) * 1.02;
-  const perPx = unit(prefix, PRE) + digits + unit(suffix, SUF) + (suffix ? 0.04 : 0);
+  // a word after the number ("12 minutes") takes a word space; a symbol or a CJK unit sits close
+  const sufGap = /^[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}]/u.test(suffix) ? 0.12 : 0.04;
+  const perPx = unit(prefix, PRE) + digits + unit(suffix, SUF) + (suffix ? sufGap : 0);
   const labelSize = label ? Math.min(72, h * 0.13, fit(label, w * 0.94, 72, FONTS.sans, 800)) : 0;
   const labelBlock = label ? labelSize * 0.7 + labelSize * 1.25 : 0;
   const barGap = 0.16; // clear of a comma's descender
@@ -67,7 +69,7 @@ export default function CountUp({ props }: { props: any }) {
           {prefix ? <span style={{ fontSize: size * PRE }}>{prefix}</span> : null}
           <span>{shown}</span>
         </span>
-        {suffix ? <span style={{ fontSize: size * SUF, marginLeft: size * 0.04 }}>{suffix}</span> : null}
+        {suffix ? <span style={{ fontSize: size * SUF, marginLeft: size * sufGap }}>{suffix}</span> : null}
       </div>
       {underline ? (
         <div style={{

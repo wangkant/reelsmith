@@ -37,10 +37,10 @@ const DUR = 90;
 const THEME = { paper: "#F3EBDD", ink: "#1E1A16", night: "#16130F", snow: "#F7F1E6", accent: "#C8372D", gold: "#D9A441", good: "#2E8B57", bad: "#C8372D", muted: "#7A6F62" };
 
 // what asset ids in the examples stand for: made-up captures under public/ (fixtures.py draws them)
-const ARTICLE = { src: "assets/ev_article.png", kind: "evidence", size: [1290, 1489], box: [66, 677, 943, 66], site: "示例日报" };
+const ARTICLE = { src: "assets/ev_article.png", kind: "evidence", size: [1290, 1489], box: [66, 677, 943, 66], site: "Example Daily" };
 const ASSETS: Record<string, object> = {
   ev_article: ARTICLE,
-  ev_notice: { src: "assets/ev_notice.png", kind: "evidence", size: [1290, 892], box: [168, 654, 561, 66], site: "示例商场" },
+  ev_notice: { src: "assets/ev_notice.png", kind: "evidence", size: [1290, 892], box: [168, 654, 561, 66], site: "Example Mall" },
   ev_host: { ...ARTICLE, site: "www.example.org" },
 };
 
@@ -70,7 +70,7 @@ const VARIANTS = [
 const M = 40;
 
 /** Something to highlight, so the Highlighter preview shows what it does. */
-const SAMPLE = "到手约9371元";
+const SAMPLE = "You keep $960";
 const Underlay: React.FC<{ w: number; h: number; dark: boolean }> = ({ w, h, dark }) => (
   <div data-underlay style={{
     position: "absolute", left: M, top: M, width: w, height: h, display: "flex", alignItems: "center", justifyContent: "center",
@@ -118,7 +118,9 @@ const probe = (root: HTMLElement) => {
   return { texts, shapes };
 };
 
-const Stage: React.FC<{ id: string; Comp: Comp; props: unknown; w: number; h: number; dark: boolean; underlay: boolean }> = ({ id, Comp, props, w, h, dark, underlay }) => {
+const Stage: React.FC<{ id: string; Comp: Comp; props: unknown; w: number; h: number; dark: boolean; underlay: boolean; locale?: string }> = ({
+  id, Comp, props, w, h, dark, underlay, locale = "en",
+}) => {
   const ready = useFontsReady();
   const ref = useRef<HTMLDivElement>(null);
   const [handle] = useState(() => delayRender("probe"));
@@ -133,7 +135,7 @@ const Stage: React.FC<{ id: string; Comp: Comp; props: unknown; w: number; h: nu
     <AbsoluteFill style={{ background: dark ? THEME.night : THEME.paper }}>
       {underlay ? <Underlay w={w} h={h} dark={dark} /> : null}
       <div ref={ref} style={{ position: "absolute", left: M, top: M, width: w, height: h, outline: "2px dashed rgba(120,120,120,0.55)" }}>
-        <ClipContext.Provider value={{ w, h, dur: DUR, fps: FPS, theme: THEME, width: w + 2 * M, height: h + 2 * M, safe: { x: 0, y: 0, w: w + 2 * M, h: h + 2 * M }, progress: 0 }}>
+        <ClipContext.Provider value={{ w, h, dur: DUR, fps: FPS, theme: THEME, width: w + 2 * M, height: h + 2 * M, safe: { x: 0, y: 0, w: w + 2 * M, h: h + 2 * M }, locale, progress: 0 }}>
           {ready ? <Comp props={props} /> : null}
         </ClipContext.Provider>
       </div>
@@ -142,7 +144,59 @@ const Stage: React.FC<{ id: string; Comp: Comp; props: unknown; w: number; h: nu
 };
 
 /** Props beyond the examples: other orientations, shapes and edge cases ("x-" ids). */
-const EXTRAS: { id: string; Comp: Comp; props: Record<string, unknown>; w: number; h: number; dark?: boolean; underlay?: boolean }[] = [
+const EXTRAS: { id: string; Comp: Comp; props: Record<string, unknown>; w: number; h: number; dark?: boolean; underlay?: boolean; locale?: string }[] = [
+  // the examples as they were in Chinese, so CJK layout stays covered
+  {
+    id: "x-Receipt-zh", Comp: Receipt, w: 840, h: 700, locale: "zh-CN",
+    props: { header: "RECEIPT · 中奖小票", title: "这份奖品到手多少", rows: [
+      { label: "笔记本电脑", value: "¥11,714", sub: "奖品按商家标价计税" }, { label: "运费", value: "包邮" },
+      { label: "个税 20%", value: "-¥2,343", tone: "bad" },
+    ], total: { label: "到手约", value: "¥9,371" } },
+  },
+  { id: "x-Stamp-zh", Comp: Stamp, w: 500, h: 500, locale: "zh-CN", props: { text: "真香", rotate: -12 } },
+  { id: "x-CountUp-zh", Comp: CountUp, w: 840, h: 700, locale: "zh-CN", props: { value: 12860, suffix: "人", label: "报名百日挑战，全勤的不到一成" } },
+  {
+    id: "x-BarCompare-zh", Comp: BarCompare, w: 840, h: 700, locale: "zh-CN",
+    props: { items: [{ label: "奖品价值", value: 11714 }, { label: "个税", value: 2343, tone: "bad" }, { label: "到手", value: 9371 }], unit: "元" },
+  },
+  {
+    id: "x-TimelineRule-zh", Comp: TimelineRule, w: 840, h: 700, locale: "zh-CN",
+    props: { points: [{ when: "第1天", text: "报名百日挑战" }, { when: "第100天", text: "全勤打卡，进抽奖池" }, { when: "第108天", text: "抽中一台笔记本" }], highlight: 2 },
+  },
+  { id: "x-DotGrid-zh", Comp: DotGrid, w: 840, h: 700, locale: "zh-CN", props: { total: 100, lit: 20, label_lit: "交给个税", label_rest: "落进口袋" } },
+  // Latin text at the schemas' longest
+  { id: "x-Stamp-two-words", Comp: Stamp, w: 500, h: 500, props: { text: "NOT WORTH IT", shape: "round", double: true } },
+  { id: "x-Stamp-one-long-word", Comp: Stamp, w: 500, h: 500, props: { text: "UNBELIEVABLE" } },
+  {
+    id: "x-CountUp-latin-long", Comp: CountUp, w: 840, h: 700,
+    props: { value: 45, prefix: "~", suffix: "minutes a day", label: "spent on the phone before getting out of bed" },
+  },
+  {
+    id: "x-Receipt-latin-long", Comp: Receipt, w: 840, h: 700,
+    props: { header: "RECEIPT · WHAT A PRIZE REALLY COSTS", title: "What the grand prize is worth", rows: [
+      { label: "Laptop at the list price", value: "$1,200", sub: "the store sets the price the tax is based on" },
+      { label: "Delivery to your door", value: "free" }, { label: "Income tax at 20 %", value: "-$240", tone: "bad" },
+    ], total: { label: "What you keep", value: "$960" } },
+  },
+  {
+    id: "x-BarCompare-latin-long", Comp: BarCompare, w: 840, h: 700,
+    props: { unit: " USD", items: [{ label: "Median household income", value: 80610 }, { label: "Median rural income", value: 66250 }, { label: "Median urban income", value: 84490 }] },
+  },
+  {
+    id: "x-TimelineRule-latin-long", Comp: TimelineRule, w: 840, h: 700,
+    props: { points: [
+      { when: "January 2024", text: "Rent goes up for the first time, by $200 a month" },
+      { when: "June 2024", text: "Graduation season: the busiest month to rent" },
+      { when: "October 2024", text: "Back to where it was at the start of the year" },
+    ] },
+  },
+  { id: "x-DotGrid-latin-long", Comp: DotGrid, w: 840, h: 700, props: { total: 50, lit: 12, label_lit: "were refused at the first review", label_rest: "made it through to the interview" } },
+  { id: "x-Arrow-latin-long", Comp: Arrow, w: 840, h: 700, props: { from: [0.1, 0.85], to: [0.85, 0.2], label: "the part the buyer never sees", label_pos: "start" } },
+  {
+    id: "x-EvidenceCard-latin-long-source", Comp: EvidenceCard, w: 840, h: 500,
+    props: { asset: "ev_notice", source: "Source: Example Mall member centre, rules of the 100-day challenge, June 2025" },
+  },
+  { id: "x-EvidenceCard-hostname-zh", Comp: EvidenceCard, w: 840, h: 420, locale: "zh-CN", props: { asset: "ev_host" } },
   { id: "x-TimelineRule-horizontal", Comp: TimelineRule, w: 840, h: 700, props: { ...TimelineRuleMeta.example, orientation: "horizontal" } },
   { id: "x-TimelineRule-horizontal-wide", Comp: TimelineRule, w: 840, h: 340, props: { ...TimelineRuleMeta.example, orientation: "horizontal" } },
   {
@@ -197,8 +251,8 @@ const EXTRAS: { id: string; Comp: Comp; props: Record<string, unknown>; w: numbe
   { id: "x-Arrow-long-label-tall", Comp: Arrow, w: 320, h: 760, props: { from: [0.2, 0.9], to: [0.8, 0.15], label: "比去年同期多出来的这笔钱", label_pos: "start" } },
   { id: "x-PriceTag-600x500", Comp: PriceTag, w: 600, h: 500, props: PriceTagMeta.example },
   // docs/kit.md's complete component, kept in step by check.mjs
-  { id: "x-RingStat-doc", Comp: RingStat, w: 600, h: 700, props: { pct: 62, label: "城镇居民占比", at: 0.3 } },
-  { id: "x-RingStat-doc-dark", Comp: RingStat, w: 600, h: 700, dark: true, props: { pct: 62, label: "城镇居民占比", ground: "dark" } },
+  { id: "x-RingStat-doc", Comp: RingStat, w: 600, h: 700, props: { pct: 62, label: "live in cities", at: 0.3 } },
+  { id: "x-RingStat-doc-dark", Comp: RingStat, w: 600, h: 700, dark: true, props: { pct: 62, label: "live in cities", ground: "dark" } },
   { id: "x-Arrow-empty", Comp: Arrow, w: 840, h: 300, props: { from: [0.5, 0.5], to: [0.5, 0.5] } },
   { id: "x-BarCompare-empty", Comp: BarCompare, w: 840, h: 300, props: { items: [] } },
   { id: "x-EvidenceCard-missing", Comp: EvidenceCard, w: 840, h: 300, props: { asset: "nope" } },
@@ -210,7 +264,7 @@ export const Root: React.FC = () => (
       <Composition
         key={x.id}
         id={x.id}
-        component={() => <Stage id={x.id} Comp={x.Comp} props={prepare(x.props)} w={x.w} h={x.h} dark={!!x.dark} underlay={!!x.underlay} />}
+        component={() => <Stage id={x.id} Comp={x.Comp} props={prepare(x.props)} w={x.w} h={x.h} dark={!!x.dark} underlay={!!x.underlay} locale={x.locale} />}
         durationInFrames={DUR}
         fps={FPS}
         width={x.w + 2 * M}

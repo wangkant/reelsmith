@@ -1,17 +1,23 @@
 # reelsmith manual
 
-reelsmith is your video editing app. You decide everything — the story, the script, the voice, the pictures, the
-cut — and do it with tools: research the topic, write the script, narrate it (`speak`), gather pictures and proof
-(`capture`, `draw`, `animate`, `import_asset`), then edit a project the way an editor works in an NLE: tracks,
-clips, keyframes, text, shapes, components. reelsmith renders, times everything to the narration, measures where
-your words land on screen, masters the loudness and refuses delivery when something is broken.
+reelsmith is your video editing app. You decide everything — the cut, the story, the words, the pictures, the
+sound — and do it with tools, editing a project the way an editor works in an NLE: tracks, clips, keyframes, text,
+shapes, components. reelsmith renders it, times everything to what it follows (a recording's source seconds, the
+narration, other clips), measures where your words land on screen, masters the loudness and refuses delivery when
+something is broken. Any canvas, any language.
 
 There is no pipeline and no template. Call any tool at any time. A good loop:
 
 1. `notes` — what you learned last time. `manual` once (this text).
-2. Research and write `script.md` in the project folder (your scratchpad: sources, angle, lines).
-3. `speak` the lines → `voice/voice.json` gives every line's start and end.
-4. Gather assets, then `edit` the project in batches. `describe` shows the editor's window as text.
+2. `new_project` with the profile (the canvas) and the locale (the language) the film needs, unless you were given
+   a project.
+3. Bring in the material:
+   - **Footage** (a recording of the user's, clips they have): `import_asset`, then look at it — `probe`, `frames`,
+     `scenes`, `silences`, `transcribe` — and cut it on the timeline at its source seconds (see Editing footage).
+   - **A film from a script**: research and write `script.md` in the project folder (your scratchpad: sources,
+     angle, lines), `speak` the lines (`voice/voice.json` gives every line's start and end), gather pictures and
+     proof (`capture`, `draw`, `animate`, `import_asset`).
+4. `edit` the project in batches. `describe` shows the editor's window as text.
 5. `check` → `preview` key moments and **look at the stills** (Read the PNGs) → fix → repeat.
 6. `preview` with `sweep` (the layout of the whole film) → `render` → `review` the frames as a viewer would →
    `note` what you learned.
@@ -35,19 +41,21 @@ The profile is project.json `"profile"`, else workspace.json's, else `landscape`
 | `douyin-long`, `tiktok`, `shorts`, `reels` | 1080×1920 | each its platform's | each its platform's limits |
 
 All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise. On the generic canvases the safe
-area is a title-safe margin; on the platform ones (douyin, tiktok, shorts, reels) it is where the phone's UI does
-not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and music at the
-bottom), and there a film needs sound and nothing may stand still for more than 5 s. Backgrounds may bleed to the
-edges; **words must stay inside the safe area** — render measures every second and refuses text outside it. The
-owner may define other canvases (workspace.json `profiles`, or an inline `"profile": {"base": "douyin", "width":
-720, "height": 1280, "fps": 25}`); `new_project(p, canvas="1920x1080@25")` makes one.
+area is a title-safe margin; on the platform ones (douyin, douyin-long, tiktok, shorts, reels) it is where the
+phone's UI does not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and
+music at the bottom), and there a film needs sound and nothing may stand still for more than 5 s (`youtube` needs
+sound only). Backgrounds may bleed to the edges; **words must stay inside the safe area** — render measures every
+second and refuses text outside it. The owner may define other canvases (workspace.json `profiles`, or an inline
+`"profile": {"base": "landscape", "width": 1280, "height": 720, "fps": 25}`); `new_project(p,
+canvas="1920x1080@25")` makes one.
 
 Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose short side is 1080 px; the checks
 scale them with your canvas.
 
 **Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
-(`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language and whether `speak` has a
-default voice (only Chinese has one; otherwise the owner sets `providers.tts.voice`).
+(`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language, the words components add
+(EvidenceCard's `Source: `) and `speak`'s default voice: the default voice reads English and Chinese; for another
+language the owner sets `providers.tts.voice`, or an `openai` TTS endpoint, and `speak` says so.
 
 **Captions** (when the project has a captions track) sit in the profile's captions band, the bottom 200 px of the
 safe area — on landscape x 96–1824, y 826–1026; on douyin x 40–880, y 1260–1460 — one line of 36–66 px, white on a
@@ -68,21 +76,23 @@ tool reads it fresh and validates it. `edit` is safer: atomic, validated and und
 ## The project
 
 Tracks are listed bottom to top. Clips on one track must not overlap — layer with more tracks. A complete example,
-a vertical Chinese explainer (its boxes are laid out for the 1080×1920 douyin canvas):
+a narrated explainer on the default `landscape` canvas (its boxes are laid out for 1920×1080; captions use the band
+at y 826–1026, so the other words stay above it):
 
 ```json
 {
   "version": 2,
-  "profile": "douyin",
-  "locale": "zh-CN",
-  "meta": {"title": "一件T恤要喝多少水", "desc": "一件棉T恤背后的水账 #环保", "topic": "一件棉T恤从种棉到成衣的用水量",
+  "profile": "landscape",
+  "locale": "en",
+  "meta": {"title": "How much water does a T-shirt drink?", "desc": "The water behind one cotton T-shirt",
+           "topic": "water used from the cotton field to a finished T-shirt",
            "shape": "count-up explainer, verdict at the end",
-           "sources": [{"title": "棉花用水报告", "url": "https://example.com/report/cotton"}]},
+           "sources": [{"title": "Cotton water report", "url": "https://example.com/report/cotton"}]},
   "voice": "voice/voice.json",
   "assets": {
     "field":    {"path": "assets/field.png", "kind": "image"},
     "mill":     {"path": "assets/mill.mp4", "kind": "video"},
-    "ev_water": {"path": "assets/ev_water.png", "kind": "evidence", "box": [40, 820, 1210, 150],
+    "ev_water": {"path": "assets/ev_water.png", "kind": "evidence", "box": [120, 1320, 1600, 80],
                  "site": "example.com", "url": "https://example.com/report/cotton"},
     "bed":      {"path": "assets/bed.m4a", "kind": "audio"}
   },
@@ -91,36 +101,39 @@ a vertical Chinese explainer (its boxes are laid out for the 1080×1920 douyin c
       {"id": "c1", "type": "image", "asset": "field", "start": 0, "end": "line:3", "motion": "push"},
       {"id": "c2", "type": "video", "asset": "mill", "start": "line:3", "end": "line:5", "filter": {"brightness": 0.7}},
       {"id": "c3", "type": "evidence", "asset": "ev_water", "start": "line:5", "end": "end",
-       "box": {"x": 40, "y": 360, "w": 840, "h": 420}, "highlight": {"at": 0.8}}
+       "box": {"x": 120, "y": 160, "w": 1000, "h": 600}, "highlight": {"at": 0.8}}
     ]},
     {"id": "fg", "kind": "visual", "clips": [
-      {"id": "hook", "type": "text", "text": "一件T恤，**要喝多少水**？", "start": 0, "end": "line:2.end",
-       "box": {"x": 60, "y": 300, "w": 800, "h": 360},
+      {"id": "hook", "type": "text", "text": "How much water does **a T-shirt** drink?", "start": 0,
+       "end": "line:2.end", "box": {"x": 160, "y": 220, "w": 1600, "h": 400},
        "style": {"font": "display", "size": "fit", "max_size": 140, "color": "snow", "stroke": {"color": "night", "width": 8}},
        "keyframes": {"scale": [{"t": 0, "v": 1}, {"t": 2, "v": 1.05, "ease": "inOut"}]}},
       {"id": "n1", "type": "component", "name": "CountUp", "start": "line:6", "dur": 3.5,
-       "box": {"x": 60, "y": 800, "w": 800, "h": 360},
-       "props": {"value": 2700, "suffix": "升", "label": "种棉到成衣", "at": "line:6+0.3", "ground": "dark"}}
+       "box": {"x": 1180, "y": 200, "w": 640, "h": 480},
+       "props": {"value": 2700, "suffix": "litres", "label": "from the field to the shirt", "at": "line:6+0.3",
+                 "ground": "dark"}}
     ]},
     {"id": "marks", "kind": "visual", "clips": [
       {"id": "arrow", "type": "shape", "shape": "arrow", "start": "clip:n1.end-1", "dur": 1.5,
-       "box": {"x": 220, "y": 1160, "w": 460, "h": 140}, "d": "M0 70 L460 70", "stroke": "accent",
+       "box": {"x": 1270, "y": 700, "w": 460, "h": 100}, "d": "M0 50 L460 50", "stroke": "accent",
        "stroke_width": 10, "draw": true}
     ]},
     {"id": "music", "kind": "audio", "clips": [
       {"id": "m1", "type": "audio", "asset": "bed", "start": 0, "end": "end", "volume": 0.12, "loop": true,
        "fade_out": 1.5}
     ]},
-    {"id": "cap", "kind": "captions", "source": "voice", "emphasis": ["T恤"]}
+    {"id": "cap", "kind": "captions", "source": "voice", "emphasis": ["T-shirt"]}
   ]
 }
 ```
 
 The arrow sits on its own track because it starts while `n1` is still on screen: two clips that overlap in time
-need two tracks.
+need two tracks. On another canvas lay the boxes out for its size (a `vertical` film is 1080×1920). Words in any
+language go in the same fields; the project's `locale` (`"zh-CN"`, `"ja"`, ...) tells reelsmith how to cut the
+captions. A film made from footage: see Editing footage.
 
 The narration (`voice`) plays by itself at full volume. The film lasts until the voice ends + 0.6 s unless you
-set `"duration"`. Without a captions track there are no captions.
+set `"duration"` (without a voice, until its last clip ends). Without a captions track there are no captions.
 
 ### Time
 
@@ -181,7 +194,7 @@ clip's `volume` (0 silent, 1 full).
 | `audio` (audio tracks) | `asset`, `trim_in`, `volume`, `fade_in`, `fade_out`, `loop` (repeat the file to fill the clip), `keyframes` (`volume` only), `transition` (`crossfade` only), `duck` `{"under": "<track id>" or "voice", "to": 0.25, "fade": 0.3}` |
 
 **Text.** TextStyle: `font`, `size` px or `"fit"`, `max_size` 160, `min_size` 28 (defaults scale with the canvas),
-`weight` 400–900, `color`
+`weight` 100–900, `color`
 (default `snow` with a soft shadow, for pictures and dark grounds: **on paper set `ink`**), `accent`, `align`,
 `valign`, `line_height` 1.15, `letter_spacing`, `wrap`, `balance` (exactly two even lines), `stroke` `{color, width}`,
 `shadow`, `bg` `{color, radius, pad}` (a plate behind the text).
@@ -236,18 +249,18 @@ Each applied batch can be undone with `undo`.
 
 ```json
 {"op": "add_track", "track": {"id": "v3", "kind": "visual", "clips": []}, "index": 2}
-{"op": "update_track", "id": "cap", "set": {"emphasis": ["T恤", "两千七百升"], "hidden": null}}
+{"op": "update_track", "id": "cap", "set": {"emphasis": ["T-shirt", "2,700 litres"], "hidden": null}}
 {"op": "remove_track", "id": "v3"}
-{"op": "add_clip", "track": "fg", "clip": {"id": "s1", "type": "component", "name": "Stamp", "start": "line:8", "dur": 2, "box": {"x": 560, "y": 900, "w": 300, "h": 300}, "props": {"text": "省着穿"}}}
+{"op": "add_clip", "track": "fg", "clip": {"id": "s1", "type": "component", "name": "Stamp", "start": "line:8", "dur": 2, "box": {"x": 1400, "y": 380, "w": 360, "h": 360}, "props": {"text": "KEEP IT"}}}
 {"op": "update_clip", "id": "hook", "set": {"style": {"color": "gold"}, "enter": null}}
 {"op": "remove_clip", "id": "arrow"}
 {"op": "move_clip", "id": "c2", "start": "line:3", "end": "line:4.end", "track": "bg"}
 {"op": "split_clip", "id": "c2", "at": "line:4", "new_id": "c2b"}
 {"op": "set_keyframes", "id": "c1", "prop": "zoom", "frames": [{"t": 0, "v": 1}, {"t": "line:3", "v": 1.2, "ease": "inOut"}]}
 {"op": "add_asset", "id": "chart", "asset": {"path": "assets/chart.png", "kind": "image"}}
-{"op": "update_asset", "id": "ev_water", "set": {"box": [70, 300, 890, 62]}}
+{"op": "update_asset", "id": "ev_water", "set": {"box": [120, 1300, 1700, 80]}}
 {"op": "remove_asset", "id": "chart"}
-{"op": "set", "path": "meta.title", "value": "一件T恤要喝多少水"}
+{"op": "set", "path": "meta.title", "value": "How much water does a T-shirt drink?"}
 {"op": "ripple_delete", "start": "src:a@12.3", "end": "src:a@13.9"}
 {"op": "insert_gap", "at": "clip:a2", "dur": 1.5, "tracks": ["v1"]}
 {"op": "trim_clip", "id": "a", "in": 4.2, "out": 31, "ripple": true}
@@ -297,6 +310,49 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    goes; markers move with ripple edits.
 9. `describe` to see the cut as text, `preview` the joins and the captions, `render`.
 
+A complete example: a talk recorded in one take on the default `landscape` canvas, with a pause cut out (the
+pieces `a` and `a_2`), b-roll over it, a title, a music bed that ducks under the talk and captions from the
+transcript. No narration: the film lasts until `a_2` ends.
+
+```json
+{
+  "version": 2,
+  "profile": "landscape",
+  "locale": "en",
+  "meta": {"title": "Three things I learned building a bike"},
+  "assets": {
+    "talk": {"path": "assets/talk.mp4", "kind": "video", "transcript": "assets/talk.transcript.json"},
+    "shop": {"path": "assets/shop.mp4", "kind": "video"},
+    "bed":  {"path": "assets/bed.m4a", "kind": "audio"}
+  },
+  "markers": {"punch": "src:a_2@61.4"},
+  "tracks": [
+    {"id": "v1", "kind": "visual", "clips": [
+      {"id": "a", "type": "video", "asset": "talk", "start": 0, "end": "src:a@38.2", "trim_in": 2.5, "volume": 1},
+      {"id": "a_2", "type": "video", "asset": "talk", "start": "clip:a.end", "end": "src:a_2@95", "trim_in": 41,
+       "volume": 1}
+    ]},
+    {"id": "v2", "kind": "visual", "clips": [
+      {"id": "b1", "type": "video", "asset": "shop", "start": "src:a@20", "dur": 4, "trim_in": 12,
+       "enter": {"preset": "fade", "dur": 0.4}, "exit": {"preset": "fade", "dur": 0.4}}
+    ]},
+    {"id": "titles", "kind": "visual", "clips": [
+      {"id": "title", "type": "text", "text": "Three things I learned **building a bike**", "start": 0.5, "dur": 3.5,
+       "box": {"x": 96, "y": 80, "w": 1100, "h": 220},
+       "style": {"size": "fit", "max_size": 96, "bg": {"color": "night", "radius": 12, "pad": 24}},
+       "enter": {"preset": "rise", "dur": 0.5}},
+      {"id": "big", "type": "text", "text": "**Measure twice**", "start": "mark:punch", "dur": 2,
+       "box": {"x": 96, "y": 560, "w": 1000, "h": 200}, "style": {"size": "fit", "max_size": 140}}
+    ]},
+    {"id": "music", "kind": "audio", "clips": [
+      {"id": "m1", "type": "audio", "asset": "bed", "start": 0, "end": "end", "volume": 0.3, "loop": true,
+       "fade_out": 2, "duck": {"under": "v1", "to": 0.25}}
+    ]},
+    {"id": "cap", "kind": "captions", "source": "clip:a"}
+  ]
+}
+```
+
 ## Tools
 
 | tool | what it does | example |
@@ -311,7 +367,7 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 | `check(project)` | errors (block render), warnings, advice | `check(p)` |
 | `library(project, name?)` | components with their prop names; with a name, schema, example and source | `library(p, "Receipt")` |
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
-| `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["一件T恤，", {"text": "要喝多少水？", "pace": 0.95, "emotion": "惊讶"}])` |
+| `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["How much water", {"text": "does a T-shirt drink?", "pace": 0.95, "emotion": "surprised"}])` |
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on vertical and portrait canvases, desktop on landscape and square) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
 | `draw(project, id, prompt, style_ref_asset?, size?)` | an original picture | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a short clip from a picture | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
@@ -321,20 +377,23 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 | `frames(project, asset, times?, every?, n?)` | stills of a source at source seconds + a timed contact sheet | `frames(p, "talk", ["0:12", 41.2])` |
 | `scenes(project, asset, threshold?)` | shot cuts (source seconds) + each shot's first frame | `scenes(p, "trip")` |
 | `silences(project, asset, min_s?, noise_db?)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
-| `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Kant, reelsmith")` |
+| `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Ada Lovelace, reelsmith")` |
 | `preview(project, times?, sweep?)` | stills at chosen moments + contact sheet + layout problems; `sweep` measures the whole film | `preview(p, [0, "line:3", "clip:n1+1", "end-1"])`, `preview(p, sweep=true)` |
 | `render(project)` | the film to `out/film.mp4`, mastered and checked | `render(p)` |
 | `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
 
 - `speak`: `pace` is a speed factor relative to normal (1.0; 0.9 a little slower, 1.1 a little faster; 0.5–2) or
-  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"惊讶"`)
+  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"calm"`)
   given to the voice as an instruction; how much it changes depends on the voice model, so listen before relying on
-  it. `speak` caches per line — only changed lines are paid for again. The voice is the workspace's
-  `providers.tts.voice`; without one only a Chinese locale has a default (a Mandarin voice), and `speak` says so.
+  it. Write the lines in the film's language (`"一件T恤，要喝多少水？"` in a `zh-CN` film). `speak` caches per
+  line — only changed lines are paid for again. The voice is the workspace's
+  `providers.tts.voice`; without one, English and Chinese films get the default model's voice (it speaks both), and
+  any other language needs the owner to choose a voice, which `speak` says.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
-- `speak`, `draw`, `animate` and `transcribe` may cost money: they estimate first and refuse when the project
-  budget or the account floor would be crossed.
+- `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
+  limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
+  crossed. Transcribe a recording once; re-speak only the lines that changed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
@@ -393,15 +452,16 @@ export default function Tally({ props }: { props: any }) {
  "props": {"type": "object", "required": ["value"], "additionalProperties": false,
            "properties": {"value": {"type": "string"}, "at": {"description": "Time it pops (default: clip start)"},
                           "color": {"type": "string", "description": "theme token or CSS colour"}}},
- "example": {"value": "2,700升", "at": "line:4"}}
+ "example": {"value": "2,700 L", "at": "line:4"}}
 ```
 
-Fuller worked examples: the sample component in the example workspace's `library/components/`, and every preset's
-source (`library(p, name)` gives the path). Lay yourself out in
-`w × h`; keep text at 28 px or more at a 1080 px short side (on other canvases scale by `Math.min(width, height)
-/ 1080`, both from `useClip()`); animate from the frame, never from time or randomness; give SVG ids
-(`clipPath`, gradients) `React.useId()` so two instances do not collide. Then `typecheck` and `preview` a moment
-where it shows. A component that crashes shows a red box in previews and is reported first, with its source line.
+Fuller worked examples: the sample component in `examples/workspace/library/components/` (the starter workspace),
+and every preset's source (`library(p, name)` gives the path). Lay yourself out in `w × h`; keep text at 28 px or
+more at a 1080 px short side (on other canvases scale by `Math.min(width, height) / 1080`, both from `useClip()`);
+choose the words a component adds itself by `useClip().locale`; animate from the frame, never from time or
+randomness; give SVG ids (`clipPath`, gradients) `React.useId()` so two instances do not collide. Then `typecheck`
+and `preview` a moment where it shows. A component that crashes shows a red box in previews and is reported first,
+with its source line.
 
 ## What blocks delivery
 
@@ -415,9 +475,10 @@ where it shows. A component that crashes shows a red box in previews and is repo
    the safe area or cut by the canvas edge, text under 20 px, a component that crashes. Text during its
    enter/exit animation and text fainter than 10 % opacity are not counted.
 3. **the film**: the profile's size and fps, h264/aac, length and size within the profile's limits, black ≤ 10 %
-   of the film. On the platform profiles also sound present (not near silent) and **no stretch longer than 5 s
-   without any motion** (move something: keyframes, `motion`, a reveal, a video); on the generic canvases a silent
-   film or a held frame is delivered as it is.
+   of the film. A profile that requires sound (`youtube` and the platform ones) refuses a silent or near-silent
+   film, and the platform ones (douyin, douyin-long, tiktok, shorts, reels) **any stretch longer than 5 s without
+   motion** (move something: keyframes, `motion`, a reveal, a video); on the generic canvases a silent film or a
+   held frame is delivered as it is.
 
 The report lists what failed with clip ids and times (`hook @ 1.0s`) — fix those, `preview` them, render again. A
 failure of the renderer itself (its local server or browser) is retried once and reported as a transient problem,

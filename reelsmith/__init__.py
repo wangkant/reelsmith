@@ -1,2 +1,2 @@
-"""reelsmith: a video editor built for AI agents."""
+"""reelsmith: a video editing harness for AI coding agents."""
 __version__ = "0.1.0"

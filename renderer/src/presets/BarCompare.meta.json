@@ -16,15 +16,15 @@
           "additionalProperties": false,
           "required": ["label", "value"],
           "properties": {
-            "label": {"type": "string", "maxLength": 12, "description": "name under (or beside) the bar"},
+            "label": {"type": "string", "maxLength": 24, "description": "name under (or beside) the bar"},
             "value": {"type": "number", "description": "bar length; negative values are drawn by their size"},
-            "display": {"type": "string", "maxLength": 12, "description": "text shown instead of the counting value, e.g. 1.2万"},
+            "display": {"type": "string", "maxLength": 16, "description": "text shown instead of the counting value, e.g. 1.2M"},
             "tone": {"type": "string", "description": "this bar's colour: theme token or CSS (default: muted, accent for the highlighted one)"},
             "at": {"type": ["number", "string"], "description": "Time this bar starts growing: \"line:9\" or seconds from the clip start. Default: one after another from `at`"}
           }
         }
       },
-      "unit": {"type": "string", "maxLength": 6, "default": "", "description": "appended to each counting value, e.g. 元, %, 升"},
+      "unit": {"type": "string", "maxLength": 12, "default": "", "description": "appended to each counting value as written, e.g. %, \" L\" (a leading space for a word), 元"},
       "decimals": {"type": "integer", "minimum": 0, "maximum": 4, "description": "decimal places of the values; default: as written"},
       "orientation": {"type": "string", "enum": ["auto", "vertical", "horizontal"], "default": "auto", "description": "auto: columns, or rows when the column labels or values would read small (narrow boxes, long labels); vertical forces columns"},
       "highlight": {"type": "integer", "minimum": -1, "description": "index of the bar in the accent colour; -1 for none. Default: the last"},
@@ -37,10 +37,10 @@
   },
   "example": {
     "items": [
-      {"label": "奖品价值", "value": 11714},
-      {"label": "个税", "value": 2343, "tone": "bad"},
-      {"label": "到手", "value": 9371}
+      {"label": "Coffee", "value": 140},
+      {"label": "Jeans", "value": 7500},
+      {"label": "T-shirt", "value": 2700}
     ],
-    "unit": "元"
+    "unit": " L"
   }
 }

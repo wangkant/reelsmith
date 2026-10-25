@@ -18,14 +18,15 @@ from mcp.types import CallToolResult, TextContent
 
 from . import __version__, tools
 
-INSTRUCTIONS = """reelsmith is your video editing app. You write the script, gather the assets (speak, capture, draw,
-animate, import_asset) and edit an NLE-style project (tracks, clips, keyframes, text, shapes, components) with edit;
-reelsmith renders, measures layout and enforces delivery. There is no fixed order and no template.
-Start with manual (once) and notes. Every tool takes `project` = the folder holding project.json (new_project
-makes one). Loop: edit -> check -> preview (look at the stills; sweep=true measures the whole film's layout as render
-would) -> fix -> render -> review. To edit recordings, look first (probe, frames, scenes, silences, transcribe), then
-cut with ripple_delete at "src:<clip>@<seconds>" Times. Paid tools (speak, draw, animate, transcribe) estimate first
-and refuse over budget. Failures come back as text that says what to do."""
+INSTRUCTIONS = """reelsmith is your video editing app: you edit an NLE-style project (tracks, clips, keyframes, text,
+shapes, components) with edit; reelsmith renders, measures layout and enforces delivery. Any canvas, any language;
+no fixed order and no template. Start with manual (once) and notes. Every tool takes `project` = the folder holding
+project.json (new_project makes one, with a profile and a locale). To edit footage, import_asset it and look first
+(probe, frames, scenes, silences, transcribe), then cut with ripple_delete and trim_clip at "src:<clip>@<seconds>"
+Times. To make a film from a script, gather assets with speak, capture, draw, animate and import_asset. Loop: edit
+-> check -> preview (look at the stills; sweep=true measures the whole film's layout as render would) -> fix ->
+render -> review. speak, animate and transcribe cost money and draw spends Codex tries: they estimate first and
+refuse over budget. Failures come back as text that says what to do."""
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN_ENV = "REELSMITH_MCP_TOKEN"

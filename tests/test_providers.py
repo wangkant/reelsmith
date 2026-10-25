@@ -254,8 +254,10 @@ def test_context_budget_from_workspace_and_env_override(env, monkeypatch):
     assert ctx.budget == {"per_project_usd": 1.0, "min_balance_usd": 5.0}
     assert ctx.ledger_path == env.ws / "ledger.jsonl" and ctx.cache_dir == env.ws / ".cache"
     assert ctx.project_key == "projects/oil" and ctx.key("OPENROUTER_API_KEY") == KEY
-    assert ctx.providers["tts"]["model"] == "qwen/qwen-audio-3.0-tts-plus"   # defaults fill what workspace.json leaves
-    assert ctx.providers["tts"]["voice"] is None                    # out; the voice follows the locale (speak)
+    assert ctx.providers["tts"]["line_lufs"] == -12.0               # defaults fill what workspace.json leaves out;
+    assert ctx.providers["tts"]["voice"] is ctx.providers["tts"]["model"] is None   # these follow the provider
+    assert TTS.default_model(ctx.providers["tts"]) == "qwen/qwen-audio-3.0-tts-plus"    # and the locale (speak)
+    assert TTS.default_model({"provider": "openai"}) == "gpt-4o-mini-tts"
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "0.25")
     assert P.context(env.project).budget["per_project_usd"] == 0.25
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "lots")
@@ -1079,6 +1081,16 @@ def test_codex_runs_locked_down_and_only_its_own_original_counts(tmp_path):
     assert not (home / "generated_images" / thread).exists()
 
 
+def test_draw_prompt_wraps_any_description_in_english():
+    # the wrapper is ours, the description the agent's, in whatever language the film is in
+    text = D.draw_prompt("a cat on a windowsill, photo", (1536, 1024), ref=True)
+    assert text.isascii() and "one landscape image (1536x1024)" in text and "image_gen" in text
+    assert "Picture:\na cat on a windowsill, photo" in text and text.rstrip().endswith(D.STYLE_REF_NOTE)
+    assert "portrait image" in D.draw_prompt("x", (1024, 1536)) and "square image" in D.draw_prompt("x", (1024, 1024))
+    zh = D.draw_prompt("一只猫", (1024, 1024))
+    assert zh.replace("一只猫", "").isascii() and D.STYLE_REF_NOTE not in zh
+
+
 def test_codex_failures_are_classified(tmp_path):
     def answering(final):
         def run(cmd, cwd=None, timeout=None, stdin=None, no_window=False):
@@ -1848,11 +1860,16 @@ def test_speak_picks_the_voice_by_locale(env, monkeypatch):
             seen.append(dict(self.cfg))
             raise P.ProviderError("stop here")
     monkeypatch.setitem(TTS.ENGINES, "openrouter", lambda ctx, cfg: Engine(cfg, "k"))
-    text, err = P.speak(env.project, lines=["一句话"])                 # zh-CN: the Mandarin default voice
+    text, err = P.speak(env.project, lines=["一句话"])                 # zh-CN: the default voice
     assert err and "stop here" in text and seen[-1]["voice"] == "longanlufeng" and seen[-1]["locale"] == "zh-CN"
-    env.config(locale="en")
+    assert seen[-1]["model"] == "qwen/qwen-audio-3.0-tts-plus"
+    env.config(locale="en-GB")                                         # it speaks English too
     text, err = P.speak(env.project, lines=["One line."])
-    assert err and "no voice for locale en" in text and "providers.tts.voice" in text and len(seen) == 1
+    assert err and "stop here" in text and seen[-1]["voice"] == "longanlufeng" and seen[-1]["locale"] == "en-GB"
+    env.config(locale="ja")
+    text, err = P.speak(env.project, lines=["一行。"])
+    assert err and "no voice for locale ja" in text and "providers.tts.voice" in text and "openai" in text
+    assert len(seen) == 2
     env.config(providers={"tts": {"voice": "Cherry"}})
     text, err = P.speak(env.project, lines=["One line."])
     assert err and "stop here" in text and seen[-1]["voice"] == "Cherry"
@@ -1869,3 +1886,89 @@ def test_speech_body_speaks_the_locales_language_to_the_model():
                                  "line: surprised"
     zh = OR.speech_body("一句话", {"model": "qwen/qwen-audio-3.0-tts-plus", "voice": "v", "locale": "zh-CN"}, 1.10)
     assert "放慢" in zh["instructions"]
+
+
+# ------------------------------------------------------------------ speak through an OpenAI-compatible endpoint
+OPENAI_KEY = "sk-test-0123456789abcdefghij"
+
+
+@pytest.fixture
+def speech_server(env, monkeypatch):
+    """A local /v1/audio/speech: answers mp3, or `status` with a body that repeats the key."""
+    import http.server
+    state = types.SimpleNamespace(seen=[], status=200)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            state.seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "json": json.loads(body)})
+            data = tone_mp3(0.4) if state.status == 200 else \
+                json.dumps({"error": {"message": f"Incorrect API key provided: {OPENAI_KEY}"}}).encode()
+            self.send_response(state.status)
+            self.send_header("Content-Type", "audio/mpeg" if state.status == 200 else "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # straight to the local server, past any system proxy
+    monkeypatch.setattr(urllib.request, "urlopen", urllib.request.build_opener(urllib.request.ProxyHandler({})).open)
+    monkeypatch.setattr(TTS.time, "sleep", lambda s: None)
+    (env.ws / ".env").write_text(f"OPENROUTER_API_KEY={KEY}\nOPENAI_API_KEY={OPENAI_KEY}\n", encoding="utf-8")
+    env.config(locale="en", providers={"tts": {"provider": "openai", "usd_per_1k_chars": 0.5,
+                                               "base_url": f"http://127.0.0.1:{server.server_port}/v1"}})
+    state.url = f"http://127.0.0.1:{server.server_port}/v1"
+    yield state
+    server.shutdown()
+
+
+@needs_ffmpeg
+def test_speak_through_an_openai_compatible_endpoint(env, speech_server):
+    lines = ["First line.", {"text": "Second line.", "pace": "slower", "emotion": "surprised"}]
+    text, err = P.speak(env.project, lines=lines)
+    assert not err, text
+    assert [c["path"] for c in speech_server.seen] == ["/v1/audio/speech"] * 2
+    assert {c["auth"] for c in speech_server.seen} == {f"Bearer {OPENAI_KEY}"}
+    first, second = sorted(speech_server.seen, key=lambda c: c["json"]["input"])
+    assert first["json"] == {"model": "gpt-4o-mini-tts", "input": "First line.", "voice": "alloy",
+                             "response_format": "mp3"}                            # normal pace: OpenAI's own 1.0
+    assert second["json"]["speed"] == round(TTS.PACE["slower"] / TTS.PACE["normal"], 3)
+    assert second["json"]["instructions"] == "The mood of this line: surprised"
+    voice = json.loads((env.project / "voice" / "voice.json").read_text(encoding="utf-8"))
+    assert [ln["text"] for ln in voice["lines"]] == ["First line.", "Second line."]
+    rows = ledger_rows(env.ws)
+    assert [r["status"] for r in rows] == ["reserved", "success"] and rows[-1]["provider"] == "openai"
+    assert rows[-1]["model"] == "gpt-4o-mini-tts" and rows[-1]["cost_source"] == "estimate"
+    assert rows[-1]["cost_usd"] == pytest.approx(len("First line.Second line.") / 1000 * 0.5)
+    assert OPENAI_KEY not in everything_written(env.ws)
+    # the same lines again are cached; another voice is a new line
+    assert not P.speak(env.project, lines=lines)[1] and len(speech_server.seen) == 2
+    env.config(providers={"tts": {"voice": "coral", "model": "tts-1", "instructions": "calm"}})
+    assert not P.speak(env.project, lines=lines[1:])[1]
+    assert speech_server.seen[-1]["json"]["voice"] == "coral" and "instructions" not in speech_server.seen[-1]["json"]
+
+
+@needs_ffmpeg
+def test_speak_openai_endpoint_errors_and_keys(env, speech_server):
+    speech_server.status = 401
+    text, err = P.speak(env.project, lines=["Never said."])
+    assert err and "HTTP 401" in text and OPENAI_KEY not in text and len(speech_server.seen) == 1   # not retried
+    speech_server.status = 503
+    text, err = P.speak(env.project, lines=["Never said."])
+    assert err and "HTTP 503" in text and len(speech_server.seen) == 4                               # 3 tries
+    speech_server.status = 200
+    env.config(providers={"tts": {"key_env": None}})                     # a local server that takes no key
+    assert not P.speak(env.project, lines=["Keyless."])[1] and speech_server.seen[-1]["auth"] is None
+    env.config(providers={"tts": {"key_env": "NO_SUCH_KEY"}})
+    text, err = P.speak(env.project, lines=["Other key."])
+    assert err and "no NO_SUCH_KEY" in text and len(speech_server.seen) == 5
+    env.config(providers={"tts": {"key_env": "bad name!"}})
+    text, err = P.speak(env.project, lines=["Other key."])
+    assert err and "key_env must name an environment variable" in text
+    env.config(providers={"tts": {"key_env": None, "base_url": "ftp://example.com"}})
+    text, err = P.speak(env.project, lines=["Other key."])
+    assert err and "base_url must be an http(s) address" in text and len(speech_server.seen) == 5

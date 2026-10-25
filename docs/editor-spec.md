@@ -78,7 +78,7 @@ looked up in the process environment.
 | key | meaning |
 |---|---|
 | `profile` | output profile (section 15): a name or an inline profile (section 15.1); a project's own `profile` wins; default `landscape` |
-| `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11) and whether the TTS has a default voice (9.1) |
+| `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11), the TTS's default voice (9.1) and the words components add (section 7) |
 | `profiles` | custom profiles by name, each `{"base": name, field: value, ...}` (section 15.1); a name may not be a built-in one |
 | `fonts` | font families for TextStyle `font` and components: `{family: path | {"src", "weight"?, "style"?} | [...]}`, paths inside the workspace (`weight` like `"400"`, or `"100 900"` for a variable font; `style` `normal`, `italic` or `oblique`). Every `library/fonts/*.woff2`, `.woff`, `.ttf` and `.otf` is a family named after its file stem without being listed (a stem other than letters, digits, spaces, `_` and `-`, or one of the built-in names, is skipped, as is a file a link leads to outside the workspace); the map adds families and wins over a stem of the same name |
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
@@ -96,9 +96,10 @@ A malformed `locale`, `profiles` or `fonts` entry makes every tool report the wo
 ```
 
 Every key is optional and none has a default: without rules.json (or with `{}`) there is no hard rule and no
-advice. The example above is a news explainer's set (the example workspace's). Hard rules are errors (they block
-`render`): the title's length in characters, how many numbers it may hold, how many sources with an http(s) url
-`meta.sources` needs, and words that may not appear in the title, description or topic. Advice never blocks: words
+advice. The example above is a news-explainer channel's set (`examples/news-explainer-zh`); the starter workspace
+(`examples/workspace`) has none. Hard rules are errors (they block `render`): the title's length in characters, how
+many numbers it may hold, how many sources with an http(s) url `meta.sources` needs, and words that may not appear
+in the title, description or topic. Advice never blocks: words
 on screen within `hook_seconds`, no still image or evidence held longer than `max_same_visual_s` without movement,
 the length against `target_s`: `[min, max]` seconds, or `true` for the profile's target (section 15; a profile
 without one gives no advice). An empty title is a warning only where a title rule (`max_title` or
@@ -296,7 +297,8 @@ gives `"[level] where: msg"`.
 - `providers/`: the asset tools and the footage tools (section 9).
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
   the runner call these.
-- `mcp_server.py` (stdio), `cli.py`, `runner.py` and its file guard `guard.py` (section 11).
+- `mcp_server.py` (stdio or streamable HTTP, section 10.1), `cli.py`, `runner.py` and its file guard `guard.py`
+  (section 11).
 - `agent/`: the runner's api engine (section 11): `tools.toolbox(project, ws, scope, web)` (function tools),
   `client.ChatClient` (an OpenAI-compatible Chat Completions client), `loop.Agent` (the tool-calling loop) and
   `providers` (who serves the model: endpoint, key, request extras, prices).
@@ -399,7 +401,7 @@ export default function Receipt({ props }: { props: any }) {
 ```
 {
   "version": 2, "fps": 30, "width": 1920, "height": 1080, "durationInFrames": N,
-  "safe": {x,y,w,h}, "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
+  "safe": {x,y,w,h}, "locale": "en", "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
   "fonts": [{"family", "src" (project-relative, build/fonts/...), "weight"?, "style"?}],
   "tracks": [
     {"id", "kind": "visual", "hidden", "clips": [RClip...]},
@@ -428,8 +430,10 @@ content by type:
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
 `zoom`/`pan_x`/`pan_y` keyframes, captions are already phrase-split and timed, and a captions track without a box
-gets the profile's captions band. `fonts` lists the workspace's fonts: the renderer serves only the project folder,
-so resolve links (or copies) each file into `build/fonts/` and the renderer loads them before the first frame.
+gets the profile's captions band. `locale` is the project's (section 2.1); components read it from `useClip()` to
+pick the words they add themselves (EvidenceCard's `Source: ` or `来源：`). `fonts` lists the workspace's fonts: the
+renderer serves only the project folder, so resolve links (or copies) each file into `build/fonts/` and the renderer
+loads them before the first frame.
 `renderer/src/types.ts` is the TypeScript side of this format.
 
 Footage additions: an audio entry may carry `"volumeKeys": [{"f", "v", "ease"}]` (frames from its start; replaces
@@ -463,7 +467,7 @@ like a key are scrubbed from every message.
 
 | tool | provider | needs |
 |---|---|---|
-| `speak` | OpenRouter text-to-speech | `OPENROUTER_API_KEY`; ffmpeg |
+| `speak` | OpenRouter text-to-speech, or an OpenAI-compatible `/audio/speech` endpoint (section 9.1) | `OPENROUTER_API_KEY`, or the endpoint's key; ffmpeg |
 | `capture` | Playwright driving a Chromium browser | the `capture` extra; Microsoft Edge, Google Chrome or Playwright's Chromium |
 | `draw` | Codex CLI image generation | the Codex CLI installed and signed in |
 | `animate` | OpenRouter image-to-video | `OPENROUTER_API_KEY`; ffmpeg |
@@ -481,12 +485,25 @@ is trimmed of the TTS's padding and brought to the same loudness before the line
 silence (at most 1.5 s). `pace` is `"slower"`, `"normal"`, `"faster"` or a factor 0.5-2; `emotion` (at most 20
 characters) is passed to the voice as an instruction.
 
-`providers.tts`: `provider` `"openrouter"`, `model` (default `qwen/qwen-audio-3.0-tts-plus`), `voice` (default:
-`longanlufeng`, the default model's Mandarin voice, for a Chinese locale only; any other locale must name a voice of
-its model that speaks it, and `speak` says so instead of reading the script in a Chinese voice), `instructions` (a
-standing style instruction), `speed_scale` 1.0, `usd_per_1k_chars` 0.02 (the estimate when the provider reports no
-cost), `line_lufs` -12. The words `speak` adds for pace and emotion are Chinese for a Chinese locale and English
-otherwise (a non-Chinese locale is part of the line cache key, so they do not mix).
+`providers.tts`:
+
+| key | default | meaning |
+|---|---|---|
+| `provider` | `openrouter` | `openrouter`: OpenRouter's `/audio/speech`; `openai`: any OpenAI-compatible `/audio/speech` (below) |
+| `model` | the provider's | `qwen/qwen-audio-3.0-tts-plus` on OpenRouter, `gpt-4o-mini-tts` on `openai` |
+| `voice` | by the locale | OpenRouter: `longanlufeng` for a Chinese or an English locale (the default model's two voices, `longanlufeng` and `longanlingxin`, speak Mandarin and English in Alibaba Cloud's Qwen-Audio TTS voice list; OpenRouter's model page lists a model's voices); any other locale must name a voice of its model that speaks it, and `speak` says so instead of reading the script in the wrong language. `openai`: `alloy` (OpenAI's voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; `tts-1` has the first nine bar `ballad`) |
+| `instructions` | `""` | a standing style instruction |
+| `speed_scale` | 1.0 | multiplies the speed a voice that takes a number gets |
+| `usd_per_1k_chars` | 0.02 | the estimate when the provider reports no cost (OpenAI's `tts-1` is $0.015, `tts-1-hd` $0.03) |
+| `line_lufs` | -12 | each line's loudness before the join |
+| `base_url`, `key_env`, `timeout_s` | `https://api.openai.com/v1`, `OPENAI_API_KEY`, 120 | `openai` only: the endpoint (OpenAI, or a local server), the name of its key in `.env` or the environment (`null` sends none) and the timeout per request |
+
+On OpenRouter the words `speak` adds for pace and emotion are Chinese for a Chinese locale and English otherwise (a
+non-Chinese locale is part of the line cache key, so they do not mix); Qwen takes its pace as words. The `openai`
+provider posts `{model, input, voice, response_format: "mp3"}` with `speed` (the line's pace relative to normal,
+times `speed_scale`, 0.25-4) when it is not 1 and `instructions` (the standing ones and the emotion, in English) to
+models other than `tts-1` and `tts-1-hd`; a request is retried on 408, 409, 425, 429, 5xx and dropped connections.
+It reports no cost and has no balance: lines are booked at the estimate against the project budget (section 9.6).
 
 Any narration works: a `voice.json` with `lines` (`t0`, `t1` in seconds) next to its audio file is all the
 project needs.
@@ -543,7 +560,8 @@ box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` se
 
 ### 9.6 Costs: the ledger, the budget and the balance floor
 
-`speak`, `animate` and `transcribe` (with an endpoint) spend money; `draw` spends tries. Every paid call goes
+`speak`, `animate` and `transcribe` (with an endpoint) spend money; `draw` spends tries. A provider with no balance
+to read (`speak` on an `openai` endpoint, `transcribe`) is held to the project budget only. Every paid call goes
 through `ledger.jsonl` (in the workspace, or in the project folder outside one):
 
 1. Estimate the cost.
@@ -1031,7 +1049,7 @@ profile by `check`).
 | `DSH_HOME` | DeepSeek Harness's home, where `reelsmith setup dsh --user` writes (default `~/.dsh`); the dsh engine sets its own, `<workspace>/.cache/dsh` |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
 | `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, `--backend deepseek` on the agent-sdk engine, or the dsh engine) |
-| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`); `transcribe` with the default endpoint (`providers.transcribe.key_env` names another) |
+| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`); `transcribe` with the default endpoint (`providers.transcribe.key_env` names another); `speak` with the `openai` TTS provider (`providers.tts.key_env`) |
 | the name in `runner.key_env` | the runner on a `custom` provider |
 | `TAVILY_API_KEY` | the api engine's `web_search` through Tavily (when ddgs is not installed, or `web.search` is `tavily`) |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic (agent-sdk engine) |

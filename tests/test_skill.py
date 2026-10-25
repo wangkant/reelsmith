@@ -29,6 +29,19 @@ def test_skill_follows_the_agent_skills_format():
     assert len(text.splitlines()) < 120 and "`manual`" in text
 
 
+def test_agent_guides_cover_footage_and_what_costs_money():
+    # the skill, setup's instructions block and the MCP server's instructions: both ways in, the same paid list
+    from reelsmith import agentconf, mcp_server, runner
+    for text in (SKILL.read_text(encoding="utf-8"), agentconf.INSTRUCTIONS, mcp_server.INSTRUCTIONS):
+        plain = text.replace("`", "")
+        for word in ("probe", "frames", "scenes", "silences", "transcribe", "ripple_delete", "src:<clip>@", "speak",
+                     "locale"):
+            assert word in plain, word
+        assert "speak, animate and transcribe cost money" in plain and "draw spends" in plain
+    brief = runner.first_prompt(Path("p"), "Trim my recording to 60 s.")
+    assert "Edit the material it names" in brief and "silences" in brief and "research and script" in brief
+
+
 def test_plugin_copies_match_the_skill():
     sys.path.insert(0, str(ROOT / "integrations"))
     try:
@@ -49,3 +62,6 @@ def test_plugin_and_marketplace_manifests():
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         assert plugin["version"] == pyproject["project"]["version"]
         assert plugin["mcpServers"]["reelsmith"]["command"] in pyproject["project"]["scripts"]
+        # PyPI's summary says what the plugin says: an editing harness, no canvas or genre
+        summary = pyproject["project"]["description"]
+        assert summary.startswith("A video editing harness for AI coding agents") and "vertical" not in summary
