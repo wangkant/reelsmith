@@ -52,9 +52,15 @@ def _parser() -> argparse.ArgumentParser:
     proj(cmd("library", tools.library)).add_argument("name", nargs="?", default="")
     p = proj(cmd("preview", tools.preview))
     p.add_argument("times", nargs="*", help="seconds or Times (line:3, clip:c2+0.5)")
-    p.add_argument("--sweep", action="store_true", help="also measure a still every second of the whole film")
-    proj(cmd("render", tools.render))
+    p.add_argument("--sweep", action="store_true", help="also measure the whole film as render does")
+    p = proj(cmd("render", tools.render))
+    p.add_argument("--draft", action="store_true", help="a quick low-quality look to build/draft.mp4 instead")
+    p.add_argument("--start", default="", help="draft only: where to begin (seconds or a Time)")
+    p.add_argument("--end", default="", help="draft only: where to end (seconds or a Time)")
+    p.add_argument("--scale", type=float, default=0.5, help="draft only: 0.1-1 of the canvas (default 0.5)")
     proj(cmd("review", tools.review)).add_argument("-n", type=int, default=12)
+    p = proj(cmd("captions", tools.export_captions, "export_captions"))
+    p.add_argument("--track", default="", help="one captions track (default: all)")
     p = proj(cmd("speak", tools.speak))
     p.add_argument("lines", help="JSON list, @file (JSON, or one line per line), or - for stdin")
     p.add_argument("--gap", type=float, default=0.22, dest="gap_s")
@@ -127,6 +133,10 @@ def _call(args) -> tools.ToolResult:
         return tools.preview(args.project, args.times, args.sweep)
     if c == "review":
         return tools.review(args.project, args.n)
+    if c == "render":
+        return tools.render(args.project, args.draft, args.start, args.end, args.scale)
+    if c in ("captions", "export_captions"):
+        return tools.export_captions(args.project, args.track)
     if c == "speak":
         return tools.speak(args.project, _lines_arg(args.lines), args.gap_s)
     if c == "capture":
@@ -149,7 +159,7 @@ def _call(args) -> tools.ToolResult:
         return tools.silences(args.project, args.asset, args.min_s, args.noise_db)
     if c == "transcribe":
         return tools.transcribe(args.project, args.asset, args.language, args.prompt)
-    return tools.TOOLS[c](args.project)            # check, render, assets, notes, typecheck
+    return tools.TOOLS[c](args.project)            # check, assets, notes, typecheck
 
 
 def _run_agent(rest: list[str]) -> int:

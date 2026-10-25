@@ -1,8 +1,9 @@
-"""import_asset: a local file or an http(s) download (image, video, audio, evidence) copied into assets/ and
-registered; assets: what the project holds.
+"""import_asset: a local file (hard-linked into assets/ when it is on the same volume, else copied) or an http(s)
+download (image, video, audio, evidence), registered; assets: what the project holds.
 
 Only media the project format takes gets in: the bytes are sniffed (and video/audio probed) whatever the name or the
-server says, the size is capped, and a download goes only to public http(s) hosts, every redirect hop included.
+server says, a download's size is capped, and a download goes only to public http(s) hosts, every redirect hop
+included.
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ _EXTENSIONS = {"image": {".png", ".jpg", ".jpeg", ".webp", ".gif"}, "evidence": 
                "audio": {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac"}}
 EVIDENCE_TYPES = ("image/png", "image/jpeg", "image/jpg", "image/webp")
 _URL_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]+):")     # 2+ letters: "C:" is a drive, not a scheme
+SPARE_BYTES = 256 << 20     # a copy must leave this much of the disk free
 
 
 # ------------------------------------------------------------------ sniffing
@@ -215,11 +217,27 @@ def _local_source(ctx: Context, source: str) -> Path:
     return p
 
 
+def _bring_in(src: Path, dst: Path) -> str:
+    """A local file into the project at `dst`: a hard link on the same volume (a multi-GB recording is not stored
+    twice; tools only ever replace asset files, never write into them), else a copy. "linked" or "copied"."""
+    try:
+        os.link(src, dst)
+        return "linked"
+    except OSError:
+        pass                                    # another volume, or a file system without hard links
+    need, free = src.stat().st_size, shutil.disk_usage(dst.parent).free
+    if need + SPARE_BYTES > free:
+        raise ProviderError(f"{src.name} is {_human(need)} and the project's disk has {_human(free)} free: make room, "
+                            "or keep the file on the project's drive (then it is linked, not copied)")
+    shutil.copyfile(src, dst)
+    return "copied"
+
+
 # ------------------------------------------------------------------ tools
 @safe_tool
 def import_asset(project, id, source, kind=None, *, opener=None, resolve=None):
-    """(text, is_error): copy a local file, or download one from a public http(s) address, into assets/ and register
-    it as asset `id`.
+    """(text, is_error): bring a local file (any size: hard-linked on the same volume, else copied), or download one
+    from a public http(s) address (capped by providers.import.max_mb), into assets/ and register it as asset `id`.
 
     kind: "image", "video", "audio" or "evidence" (a screenshot that proves something: PNG, JPG or WebP only; its box
     starts as the whole picture); left out, it is detected from the file. Files the project format cannot use (e.g.
@@ -233,15 +251,14 @@ def import_asset(project, id, source, kind=None, *, opener=None, resolve=None):
         return "source must be a local file path or an http(s) URL", True
     if kind:
         check_replaceable(ctx, asset_id, kind)          # before the download: a clash wastes nothing
-    cap = int(number(ctx.providers["import"].get("max_mb", 200), 1, 4096, "providers.import.max_mb") * (1 << 20))
+    cap = int(number(ctx.providers["import"].get("max_mb", 200), 1, 1 << 20, "providers.import.max_mb") * (1 << 20))
     scheme = _URL_SCHEME.match(source)
     src = None
+    how = ""
     if scheme and scheme.group(1).lower() not in ("http", "https"):
         return f"source scheme {scheme.group(1)!r} is not allowed: give a local file path or an http(s) URL", True
     if not scheme:
         src = _local_source(ctx, source)
-        if src.stat().st_size > cap:
-            return f"{src.name} is over the {cap // (1 << 20)} MB import limit (providers.import.max_mb)", True
         if kind == "evidence":                          # refused before anything is copied
             with open(src, "rb") as fh:
                 sniffed = sniff(fh.read(64))
@@ -254,8 +271,7 @@ def import_asset(project, id, source, kind=None, *, opener=None, resolve=None):
         if src is None:
             origin = download(source, part, cap, opener, resolve=resolve, evidence=kind == "evidence")
         else:
-            with open(src, "rb") as fh:
-                _copy_capped(fh.read, part, cap)
+            how = _bring_in(src, part)
             origin = str(src)
         found, ext, facts = classify(part)
         want = "image" if kind == "evidence" else kind
@@ -281,12 +297,25 @@ def import_asset(project, id, source, kind=None, *, opener=None, resolve=None):
                      url=source if scheme else "")
     reg = register_asset(ctx, asset_id, entry)
     facts = ", ".join(x for x in (facts, _human(dest.stat().st_size)) if x)
-    return f"Imported {asset_id!r}: {rel(ctx, dest)} ({final}, {facts}).{reg}", False
+    if how == "linked":
+        facts += "; hard-linked to the original, not copied"
+    hdr = _hdr(dest) if final == "video" else None
+    note = f"\nHDR ({hdr}): {importlib.import_module(f'{__package__}.footage').HDR_NOTE}." if hdr else ""
+    return f"Imported {asset_id!r}: {rel(ctx, dest)} ({final}, {facts}).{reg}{note}", False
+
+
+def _hdr(path: Path) -> str | None:
+    if not shutil.which("ffprobe"):
+        return None
+    try:
+        return importlib.import_module(f"{__package__}.footage").hdr_of_file(path)
+    except Exception:  # noqa: BLE001 - only a note
+        return None
 
 
 def _human(n: int) -> str:
-    for unit in ("B", "KB", "MB"):
-        if n < 1024 or unit == "MB":
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} GB"

@@ -23,6 +23,9 @@ MAX_ROWS = 200                  # rows of a range list in the text (the JSON kee
 SCENE_SCALE = 240               # px wide while scoring cuts: faster, and enough to see a cut
 MIN_SHOT_S = 0.1                # cuts closer than this are one flash, not two shots
 _HMS = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$")
+HDR_TRANSFERS = {"smpte2084": "PQ", "arib-std-b67": "HLG"}
+HDR_NOTE = ("the film is SDR (BT.709) and the renderer does not tone-map: its highlights clip and its colours look "
+            "different next to SDR shots; convert it to SDR first if they must match")
 
 
 @dataclass
@@ -101,6 +104,24 @@ def _num(value, cast=float):
     return v if v == v else None
 
 
+def hdr_of(stream: dict) -> str | None:
+    """"PQ", "HLG" or "Dolby Vision" (with its fallback transfer) for an HDR picture stream; None for SDR."""
+    base = HDR_TRANSFERS.get(str(stream.get("color_transfer") or ""))
+    dovi = any(isinstance(s, dict) and "dovi" in str(s.get("side_data_type") or "").lower()
+               for s in stream.get("side_data_list") or [])
+    if dovi:
+        return f"Dolby Vision, {base}" if base else "Dolby Vision"
+    return base
+
+
+def hdr_of_file(path: Path) -> str | None:
+    """hdr_of the file's first picture stream (ffprobe); ProviderError when it cannot be read."""
+    for s in ffprobe(path).get("streams") or []:
+        if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic"):
+            return hdr_of(s)
+    return None
+
+
 def facts(path: Path) -> dict:
     """ffprobe's answer as plain facts: duration, the first picture stream, the first sound stream."""
     info = ffprobe(path)
@@ -123,7 +144,10 @@ def facts(path: Path) -> dict:
                         "display": [h, w] if rot in (90, 270) else [w, h],
                         "fps": _rate(v.get("avg_frame_rate")) or _rate(v.get("r_frame_rate")),
                         "pix_fmt": v.get("pix_fmt"), "frames": _num(v.get("nb_frames"), int),
-                        "bit_rate": _num(v.get("bit_rate"), int), "still": bool(still)}
+                        "bit_rate": _num(v.get("bit_rate"), int), "still": bool(still),
+                        "color": {"primaries": v.get("color_primaries"), "transfer": v.get("color_transfer"),
+                                  "space": v.get("color_space"), "range": v.get("color_range")},
+                        "hdr": hdr_of(v)}
     if sounds:
         a = sounds[0]
         out["audio"] = {"codec": a.get("codec_name"), "channels": _num(a.get("channels"), int),
@@ -158,7 +182,7 @@ def _clock(t: float) -> str:
 # ------------------------------------------------------------------ probe
 @safe_tool
 def probe(project, source):
-    """(text, is_error): what a media file holds, as text and JSON."""
+    """(text, is_error): what a media file holds, as text and JSON (an HDR picture is flagged)."""
     ctx = context(project)
     m = _resolve(ctx, source)
     f = facts(m.path)
@@ -174,7 +198,12 @@ def probe(project, source):
     if v:
         turn = f", rotated {v['rotation']} (shows {v['display'][0]}x{v['display'][1]})" if v["rotation"] else ""
         what = "picture" if v["still"] else f"{v['fps']:g} fps" + (f", {v['frames']} frames" if v["frames"] else "")
-        rows.append(f"  video: {v['codec']} {v['width']}x{v['height']}{turn}, {what}, {v['pix_fmt']}")
+        col = v["color"]
+        tags = "/".join(x for x in (col["primaries"], col["transfer"], col["space"]) if x and x != "unknown")
+        rows.append(f"  video: {v['codec']} {v['width']}x{v['height']}{turn}, {what}, {v['pix_fmt']}"
+                    + (f", colour {tags}" if tags else ""))
+        if v["hdr"]:
+            rows.append(f"  HDR ({v['hdr']}): {HDR_NOTE}")
     else:
         rows.append("  video: none")
     if a:

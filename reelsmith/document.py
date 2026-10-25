@@ -347,6 +347,12 @@ class CaptionsTrack(_M):
     max_chars: Optional[int] = Field(None, ge=4, le=60)       # default: by the locale (locales.caption_chars)
     overrides: list[Override] = Field(default_factory=list)
     items: Optional[list[CaptionItem]] = None
+    language: Optional[str] = None          # the sidecar files' language (BCP-47); default: the project's locale
+
+
+class Chapter(_M):
+    at: Time
+    title: str = Field(min_length=1, max_length=100)
 
 
 Track = Annotated[Union[VisualTrack, AudioTrack, CaptionsTrack], Field(discriminator="kind")]
@@ -362,6 +368,7 @@ class Document(_M):
     voice: Optional[str] = None
     duration: Optional[Time] = None
     markers: dict[str, Time] = Field(default_factory=dict)
+    chapters: list[Chapter] = Field(default_factory=list)
     assets: dict[str, Asset] = Field(default_factory=dict)
     tracks: list[Track] = Field(default_factory=list)
 
@@ -372,7 +379,8 @@ TRACK_MODELS = {"visual": VisualTrack, "audio": AudioTrack, "captions": Captions
 KEY_MODELS = {"style": TextStyle, "enter": Transition, "exit": Transition, "filter": Filter, "highlight": Highlight,
               "transition": Cut, "duck": Duck,
               "reveal": Reveal, "stroke": Stroke, "bg": Bg, "meta": Meta, "box": Box}
-ITEM_MODELS = {"sources": Source, "overrides": Override, "items": CaptionItem, **{p: Keyframe for p in KEYFRAME_PROPS}}
+ITEM_MODELS = {"sources": Source, "overrides": Override, "items": CaptionItem, "chapters": Chapter,
+               **{p: Keyframe for p in KEYFRAME_PROPS}}
 
 
 # ------------------------------------------------------------------ schema errors
@@ -777,6 +785,7 @@ class _Check:
         except T.TimeError as exc:
             self.add("error", "duration", str(exc))
         self.markers()
+        self.chapters()
         for track in self.doc.tracks:
             if track.kind == "captions":
                 self.captions(track)
@@ -894,6 +903,20 @@ class _Check:
                 self.add("error", where, f"marker name {name!r} ends like a time offset (\"mark:{name}\" would read as "
                                          "minus seconds): rename it")
             self.time(value, where)
+
+    def chapters(self) -> None:
+        seen: dict[int, int] = {}
+        for n, ch in enumerate(self.doc.chapters):
+            where = f"chapters[{n}].at"
+            t = self.time(ch.at, where)
+            if t is None:
+                continue
+            f = T.to_frame(t, self.fps)
+            if self.film_end is not None and f >= T.to_frame(self.film_end, self.fps):
+                self.add("error", where, f"{t:.2f} s is not inside the film (it ends at {self.film_end:.2f} s)")
+            elif f in seen:
+                self.add("warning", where, f"starts on the same frame as chapters[{seen[f]}]")
+            seen.setdefault(f, n)
 
     # times
     def time(self, value, where: str) -> float | None:
@@ -1124,6 +1147,11 @@ class _Check:
     def captions(self, track) -> None:
         where = f"track {track.id}"
         self.font(track.style, where)
+        if track.language is not None:
+            try:
+                locales.check(track.language)
+            except ValueError as exc:
+                self.add("error", f"{where}.language", str(exc))
         if track.items is None and track.source != "voice":
             self.transcript_source(track, where)
             return

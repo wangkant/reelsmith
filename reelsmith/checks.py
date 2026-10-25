@@ -606,64 +606,87 @@ def check_layout(inspect: dict, profile: Profile, resolved: dict | None = None,
     and text on a background of about its own brightness (warning, sampled from the frame's still); one issue per
     clip and problem. With `resolved`, frames inside enter/exit animations are skipped; `ignore` = clip ids not
     measured (a crashed component's error box)."""
-    canvas = (0.0, 0.0, float(profile.width), float(profile.height))
-    s = profile.safe
-    safe = (float(s.x), float(s.y), float(s.w), float(s.h))
-    small, tiny = profile.px(SMALL_TEXT_PX), profile.px(TINY_TEXT_PX)
-    transitions = transition_windows(resolved)
-    ignore = set(ignore or ())
-    stills = _Stills(profile.width)
-    found: dict[tuple[str, str], dict] = {}
+    measure = LayoutCheck(profile, resolved, ignore)
+    measure.add(inspect)
+    return measure.issues()
 
-    def note(kind, who, frame, px, side, text, worst=max, **extra):
-        entry = found.setdefault((kind, who), {"frames": [], "px": px, "side": side, "text": text, **extra})
+
+class LayoutCheck:
+    """check_layout fed in batches (a long film's layout pass): add() each inspect.json while its stills exist,
+    then issues(). Only the findings are kept between batches, not the frames."""
+
+    def __init__(self, profile: Profile, resolved: dict | None = None, ignore: set | None = None):
+        self.profile = profile
+        self.canvas = (0.0, 0.0, float(profile.width), float(profile.height))
+        s = profile.safe
+        self.safe = (float(s.x), float(s.y), float(s.w), float(s.h))
+        self.small, self.tiny = profile.px(SMALL_TEXT_PX), profile.px(TINY_TEXT_PX)
+        self.transitions = transition_windows(resolved)
+        self.ignore = set(ignore or ())
+        self.stills = _Stills(profile.width)
+        self.found: dict[tuple[str, str], dict] = {}
+
+    def note(self, kind, who, frame, px, side, text, worst=max, **extra):
+        entry = self.found.setdefault((kind, who), {"frames": [], "px": px, "side": side, "text": text, **extra})
         entry["frames"].append(frame)
         if worst(px, entry["px"]) != entry["px"] or not entry["text"]:
             entry.update(px=px, side=side, text=text or entry["text"], **extra)
 
-    for fr in (inspect or {}).get("frames") or []:
-        frame = fr.get("frame") or 0
-        items = fr.get("items") or []
-        boxes = {it.get("clip"): _rect(it.get("rect")) for it in items if it.get("kind") == "clip"}
-        texts = []
-        for it in items:
-            rect = _rect(it.get("rect"))
-            if it.get("kind") != "text" or rect is None or not _overlaps(rect, canvas):
-                continue                        # wholly off canvas: nobody sees it
-            opacity = it.get("opacity", 1)
-            if isinstance(opacity, (int, float)) and opacity < VISIBLE_OPACITY:
-                continue
-            clip = it.get("clip")
-            if clip in ignore or any(a <= frame < b for a, b in transitions.get(clip, ())):
-                continue
-            who, text, tol = str(clip or it.get("track") or "?"), str(it.get("text") or "").strip(), _tolerance(rect)
-            texts.append((who, text, rect, it))
-            px, side = _sticks_out(rect, canvas)
-            if px > tol:
-                note("cut", who, frame, px, side, text)
-            else:
-                px, side = _sticks_out(rect, safe)
-                if px > tol:
-                    note("unsafe", who, frame, px, side, text)
-            box = boxes.get(clip)
-            if box is not None:
-                px, side = _sticks_out(rect, box)
-                if px > tol:
-                    note("overflow", who, frame, px, side, text)
-            size = it.get("size")
-            if isinstance(size, (int, float)) and 0 < size < small:
-                note("tiny" if size < tiny else "small", who, frame, size, "", text, worst=min)
-            judged = _text_contrast(stills, fr.get("png"), rect, it)
-            if judged and hard_to_read(judged[0], judged[1]):
-                note("contrast", who, frame, judged[0], "", text, worst=min, color=str(it.get("color")),
-                     bg="#%02X%02X%02X" % tuple(min(255, round(v)) for v in judged[2]))
-        for i, (a, ta, ra, ia) in enumerate(texts):
-            for b, tb, rb, ib in texts[i + 1:]:
-                if a == b or min(ia.get("opacity", 1), ib.get("opacity", 1)) < OVERLAP_OPACITY:
+    def _kept(self):
+        # a clip found crashed in a later batch is dropped from the earlier batches' findings too
+        return [(k, e) for k, e in self.found.items() if k[1] not in self.ignore and e.get("other") not in self.ignore]
+
+    def first_frames(self) -> set[int]:
+        """The frame each finding so far is reported at (its first)."""
+        return {min(e["frames"]) for _, e in self._kept()}
+
+    def issues(self) -> list[Issue]:
+        return sort_issues([_layout_issue(kind, who, e, self.profile) for (kind, who), e in self._kept()])
+
+    def add(self, inspect: dict) -> None:
+        canvas, safe, note = self.canvas, self.safe, self.note
+        for fr in (inspect or {}).get("frames") or []:
+            frame = fr.get("frame") or 0
+            items = fr.get("items") or []
+            boxes = {it.get("clip"): _rect(it.get("rect")) for it in items if it.get("kind") == "clip"}
+            texts = []
+            for it in items:
+                rect = _rect(it.get("rect"))
+                if it.get("kind") != "text" or rect is None or not _overlaps(rect, canvas):
+                    continue                        # wholly off canvas: nobody sees it
+                opacity = it.get("opacity", 1)
+                if isinstance(opacity, (int, float)) and opacity < VISIBLE_OPACITY:
                     continue
-                if _collide(ra, rb):
-                    note(f"overlap:{b}", a, frame, 0.0, "", ta, other=b, other_text=tb)
-    return sort_issues([_layout_issue(kind, who, e, profile) for (kind, who), e in found.items()])
+                clip = it.get("clip")
+                if clip in self.ignore or any(a <= frame < b for a, b in self.transitions.get(clip, ())):
+                    continue
+                who, text, tol = str(clip or it.get("track") or "?"), str(it.get("text") or "").strip(), _tolerance(rect)
+                texts.append((who, text, rect, it))
+                px, side = _sticks_out(rect, canvas)
+                if px > tol:
+                    note("cut", who, frame, px, side, text)
+                else:
+                    px, side = _sticks_out(rect, safe)
+                    if px > tol:
+                        note("unsafe", who, frame, px, side, text)
+                box = boxes.get(clip)
+                if box is not None:
+                    px, side = _sticks_out(rect, box)
+                    if px > tol:
+                        note("overflow", who, frame, px, side, text)
+                size = it.get("size")
+                if isinstance(size, (int, float)) and 0 < size < self.small:
+                    note("tiny" if size < self.tiny else "small", who, frame, size, "", text, worst=min)
+                judged = _text_contrast(self.stills, fr.get("png"), rect, it)
+                if judged and hard_to_read(judged[0], judged[1]):
+                    note("contrast", who, frame, judged[0], "", text, worst=min, color=str(it.get("color")),
+                         bg="#%02X%02X%02X" % tuple(min(255, round(v)) for v in judged[2]))
+            for i, (a, ta, ra, ia) in enumerate(texts):
+                for b, tb, rb, ib in texts[i + 1:]:
+                    if a == b or min(ia.get("opacity", 1), ib.get("opacity", 1)) < OVERLAP_OPACITY:
+                        continue
+                    if _collide(ra, rb):
+                        note(f"overlap:{b}", a, frame, 0.0, "", ta, other=b, other_text=tb)
 
 
 def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
@@ -764,7 +787,7 @@ def _check_audio(path: Path, audio: dict, profile: Profile, out: dict) -> None:
     if audio.get("codec_name") != profile.acodec:
         out["problems"].append(f"audio codec {audio.get('codec_name')}; want {profile.acodec}")
     try:
-        lufs, peak = media.loudness(path)
+        lufs, peak = media.loudness(path, timeout=media.scaled_timeout(out.get("duration_s") or 0, 600, 0.5))
     except Exception:  # noqa: BLE001 - reported as unmeasured below
         lufs, peak = None, None
     out.update(lufs=lufs, peak_db=peak)

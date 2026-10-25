@@ -1,7 +1,8 @@
 // Renderer self-test: stills + inspect on test/basic.resolved.json, word-aware text layout and evidence crops
 // (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, a film with
-// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, word-by-word
-// captions, the locale, transient failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// looping video and audio (video.resolved.json), stills on several pages at once, a draft film (scale and frame
+// range), the import guard, context narrowing, component crashes, word-by-word captions, the locale, transient
+// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
@@ -165,12 +166,14 @@ console.log("inspect");
 }
 
 // ------------------------------------------------------------------ keyframes, presets, reveal (motion.resolved.json)
-console.log("motion");
+console.log("motion (stills on three pages at once)");
 {
   const motion = path.join(HERE, "motion.resolved.json");
-  const r = run(["inspect", motion, HERE, path.join(OUT, "motion"), "5", "10", "20", "59"]);
+  const r = run(["inspect", motion, HERE, path.join(OUT, "motion"), "5", "10", "20", "59"], { REELSMITH_STILL_WORKERS: "3" });
   console.log(`  (${r.s} s)`);
   check(r.code === 0 && r.result?.ok === true, `inspect ok (${r.result?.error ?? ""})`);
+  check(r.result?.workers === 3 && JSON.stringify((r.result?.stills ?? []).map((s) => s.frame)) === "[5,10,20,59]",
+    `three workers, stills listed in frame order (${r.result?.workers})`);
   const file = path.join(OUT, "motion", "inspect.json");
   const data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { frames: [] };
   const get = (f, clip, kind = "clip") => (data.frames.find((x) => x.frame === f)?.items ?? []).filter((i) => i.clip === clip && i.kind === kind);
@@ -485,6 +488,31 @@ console.log("film with looping video and audio (video.resolved.json)");
   check(m && Number(m[1]) > -35, `a looping 2 s music clip still plays at 3-4.5 s (${m?.[1]} dB)`);
 }
 
+console.log("draft film: half size, frames 30-59 only");
+{
+  const fx = path.join(HERE, "video.resolved.json");
+  const mp4 = path.join(OUT, "draft.mp4");
+  const r = run(["film", fx, HERE, mp4, "--draft", "--scale=0.5", "--range=30-59"]);
+  console.log(`  (${r.s} s)`);
+  check(r.result?.ok === true && r.result?.draft === true && JSON.stringify(r.result?.frameRange) === "[30,59]",
+    `draft film renders (${r.result?.error ?? ""})`);
+  const p = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+    "stream=width,height,nb_read_frames", "-of", "json", mp4], { encoding: "utf8" });
+  const v = (JSON.parse(p.stdout || "{}").streams ?? [])[0] ?? {};
+  check(v.width === 270 && v.height === 480 && Number(v.nb_read_frames) === 30,
+    `270x480 and 30 frames (${v.width}x${v.height}, ${v.nb_read_frames})`);
+  // the range starts at frame 30: the loop band matches the full film's frame 30, not its frame 0
+  const full = path.join(OUT, "video.mp4");
+  const band = (file, n) => pixels(file, 150, 350, 100, 60, n);
+  const half = (n) => {
+    const r2 = spawnSync("ffmpeg", ["-v", "error", "-i", full, "-vf", `select=eq(n\\,${n}),scale=270:480,crop=100:60:150:350`,
+      "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 1 << 24 });
+    return r2.stdout && r2.stdout.length === 100 * 60 * 3 ? r2.stdout : null;
+  };
+  check(fs.existsSync(full) && diff(band(mp4, 0), half(30)) < diff(band(mp4, 0), half(0)),
+    `the draft's first frame is the film's frame 30 (${diff(band(mp4, 0), half(30)).toFixed(1)} vs ${diff(band(mp4, 0), half(0)).toFixed(1)})`);
+}
+
 console.log("parallel calls");
 {
   const [a, b, c] = await Promise.all([
@@ -510,6 +538,15 @@ console.log("arguments");
   fs.writeFileSync(bad, JSON.stringify({ fps: 30, tracks: [] }));
   const r4 = run(["stills", bad, HERE, OUT, "0"]);
   check(r4.result?.stage === "input" && /width must be a positive number/.test(r4.result?.error ?? ""), "a malformed resolved.json is refused with stage input");
+  const r5 = run(["film", fixture, HERE, path.join(OUT, "x.mp4"), "--scale=2"]);
+  const r6 = run(["film", fixture, HERE, path.join(OUT, "x.mp4"), "--range=9-3"]);
+  const r7 = run(["stills", fixture, HERE, OUT, "0", "--draft"]);
+  check(r5.code === 2 && /--scale must be 0.1-1/.test(r5.result?.error ?? "") && r6.code === 2 &&
+    /--range must be A-B/.test(r6.result?.error ?? "") && r7.code === 2 && /for film only/.test(r7.result?.error ?? ""),
+  "bad film options are refused with stage args");
+  const many = Array.from({ length: 601 }, (_, i) => String(i));
+  const r8 = run(["stills", fixture, HERE, OUT, ...many]);
+  check(r8.code === 2 && /601 frames asked; at most 600 per call/.test(r8.result?.error ?? ""), "more than 600 stills a call are refused");
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");

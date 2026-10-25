@@ -117,6 +117,7 @@ without one gives no advice). An empty title is a warning only where a title rul
   "voice": "voice/voice.json",         optional narration timing file; its audio plays at volume 1 automatically
   "duration": null,                    seconds or a Time; default: end of the voice + 0.6 s, else the last clip end
   "markers": {"<name>": Time},         optional named points of the film ("mark:NAME", section 3.1)
+  "chapters": [{"at": Time, "title": "..."}],   optional: the film's chapters (out/chapters.txt and mp4 marks)
   "assets": {"<id>": Asset},
   "tracks": [Track, ...]               bottom to top
 }
@@ -142,12 +143,14 @@ clip an audio or video asset.
   at most the transition's `dur` (ending with it at the latest).
 - captions: `{"id": "cap", "kind": "captions", "source": "voice" | "clip:<id>", "mode": "phrase" | "words" |
   "build", "box"?, "style"?: TextStyle, "emphasis": [words in the accent colour], "max_chars"?: 4-60,
-  "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start": Time, "end": Time, "text": "..."}]}`.
-  `max_chars` defaults by the locale: 14 for Chinese, Japanese and Korean, 32 otherwise. `mode` (default
-  `"phrase"`: each item whole): `"words"` paints the word being said in the accent colour (emphasis is not shown),
-  `"build"` shows the words as they are said, the item laid out whole so nothing moves. Word times come from the
-  transcript; voice lines and given `items` are timed by characters (voice lines between the locale's words).
-  Without `items`, captions come from the `source`:
+  "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start": Time, "end": Time, "text": "..."}],
+  "language"?: BCP-47}`. `max_chars` defaults by the locale: 14 for Chinese, Japanese and Korean, 32 otherwise.
+  `mode` (default `"phrase"`: each item whole): `"words"` paints the word being said in the accent colour (emphasis
+  is not shown), `"build"` shows the words as they are said, the item laid out whole so nothing moves. Word times
+  come from the transcript; voice lines and given `items` are timed by characters (voice lines between the locale's
+  words). Every captions track, hidden or not, is also delivered as subtitle files (section 14); `language`
+  (default: the project's locale) labels them, and a hidden track with its own `items` is how a second language
+  ships as a file only. Without `items`, captions come from the `source`:
   - `"voice"`: the voice lines, phrase-split between the words of the locale (`Intl.Segmenter`; never inside a word
     or a number, and in English not right after an article, preposition or conjunction when another cut fits) and
     timed by characters.
@@ -164,6 +167,10 @@ clip an audio or video asset.
 
   Without `box` they sit in the profile's captions band (section 15). Without a captions track there are no
   captions.
+
+**Chapters**: `{"at": Time, "title": 1-100 characters}`, in any order (they are sorted by time). `at` must fall
+inside the film (an error otherwise); two chapters on one frame are a warning. Anchor them on markers (`"mark:intro"`)
+or clips so that ripple edits carry them; a number stays where it is.
 
 ### 3.1 Time
 
@@ -291,9 +298,11 @@ gives `"[level] where: msg"`.
 - `resolve.py`: `resolve(project) -> dict` (section 7); `describe(project, at=None) -> str` (section 8);
   `time_of(project, value) -> seconds`.
 - `checks.py`: `check_project(project) -> list[Issue]`; `check_layout(inspect, profile, resolved=None) ->
-  list[Issue]`; `check_film(path, profile) -> dict` (section 14).
-- `render.py`: `preview(project, times, sweep=False) -> dict`, `render(project) -> dict`, `review(project, n=12)
-  -> dict`.
+  list[Issue]` (`LayoutCheck` is the same fed in batches); `check_film(path, profile) -> dict` (section 14).
+- `render.py`: `preview(project, times, sweep=False) -> dict`, `render(project) -> dict`, `draft(project,
+  start=None, end=None, scale=0.5) -> dict`, `export_captions(project, track=None) -> dict`, `review(project, n=12)
+  -> dict`; `layout_frames(resolved)` (the frames the layout pass measures).
+- `sidecar.py`: captions as SubRip and WebVTT, chapters as YouTube lines and ffmpeg chapter metadata (section 14).
 - `providers/`: the asset tools and the footage tools (section 9).
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
   the runner call these.
@@ -396,8 +405,9 @@ export default function Receipt({ props }: { props: any }) {
 
 ## 7. resolved.json (the renderer's input)
 
-`resolve(project)` writes `build/resolved.json`; `render` and `preview` keep their own copies
-(`resolved.film.json`, `resolved.inspect.json`, `resolved.preview.json`).
+`resolve(project)` writes `build/resolved.json`; `render`, `preview`, a draft and `export_captions` keep their own
+copies (`resolved.film.json`, `resolved.inspect.json`, `resolved.preview.json`, `resolved.draft.json`,
+`resolved.captions.json`).
 ```
 {
   "version": 2, "fps": 30, "width": 1920, "height": 1080, "durationInFrames": N,
@@ -550,11 +560,16 @@ paying again, and a finished clip whose download failed is collected again from 
 
 ### 9.5 import_asset and assets
 
-`import_asset(project, id, source, kind?)` copies a local file, or downloads an http(s) image, video or audio file,
-into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video and audio probed) whatever the name or the server
-says; a download goes only to public hosts, every redirect included; the size is capped by
-`providers.import.max_mb` (200). `kind` `evidence` takes a page screenshot you already have (PNG, JPEG or WebP); its
-box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` set, local files must live inside it.
+`import_asset(project, id, source, kind?)` brings a local file, or downloads an http(s) image, video or audio file,
+into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video
+and audio probed) whatever the name or the server says. A local file has no size limit: on the project's volume it
+is hard-linked into `assets/` (one file on disk under two names, so a multi-GB recording is not stored twice; no
+tool writes into an asset file, they only replace it, so the original is never changed), elsewhere it is copied
+once the disk is found to have room for it (with 256 MB to spare); the reply says which. A download goes only to
+public hosts, every redirect included, and is capped by `providers.import.max_mb` (200). `kind` `evidence` takes a
+page screenshot you already have (PNG, JPEG or WebP); its box is the whole picture until `update_asset` sets one.
+A video with an HDR transfer gets the note `probe` gives (section 9.7). With `REELSMITH_ROOT` set, local files must
+live inside it.
 
 `assets(project)` lists the project's assets with kinds, sizes, durations and spend.
 
@@ -584,9 +599,13 @@ project folder (`..`, a link) is refused before anything is opened, as is a `bui
 timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 
 - `probe(project, source)`: container, duration, size and bit rate; the first picture stream's codec, width,
-  height, rotation (the display matrix, with the size it shows at), fps, pixel format and frame count (`still` for
-  a picture); the first sound stream's codec, channels, layout and sample rate, with its integrated loudness
-  (LUFS), loudness range and true peak (ffmpeg `ebur128`).
+  height, rotation (the display matrix, with the size it shows at), fps, pixel format, frame count (`still` for a
+  picture) and colour (`color`: `primaries`, `transfer`, `space`, `range` as ffprobe names them) with `hdr`:
+  `"PQ"` (transfer `smpte2084`), `"HLG"` (`arib-std-b67`), `"Dolby Vision"` (a DOVI configuration record, with its
+  fallback transfer), else null; the first sound stream's codec, channels, layout and sample rate, with its
+  integrated loudness (LUFS), loudness range and true peak (ffmpeg `ebur128`). The film is SDR (BT.709) and an HDR
+  source is not tone-mapped: its highlights clip and its colours differ from SDR shots, so the text says so, and
+  `render` warns for every HDR video the film shows.
 - `frames(project, asset, times?, every?, n?)`: stills of a video at source times: `times` (seconds or `m:ss`, at
   most 24), else one every `every` seconds from 0 (at most 24), else `n` evenly spaced (default 12; at the middle
   of each n-th). A time at the very end shows the last frame. Stills are scaled to at most 960 px on their long
@@ -643,9 +662,10 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 | `check(project)` | validation, hard rules, advice (section 14) | `check` |
 | `library(project, name?)` | components with their props; one in full with its schema, example and source path | `library` |
 | `typecheck(project)` | type-check the library's components | `typecheck` |
-| `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures a still every second as `render` does | `preview [times...] --sweep` |
-| `render(project)` | the film, mastered and checked (section 14) | `render` |
+| `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures the stills `render`'s layout pass does (section 14) | `preview [times...] --sweep` |
+| `render(project, draft?, start?, end?, scale?)` | the film, mastered and checked, with its captions files and chapters (section 14); `draft` a quick look at `scale` (0.5) to `build/draft.mp4`, optionally from `start` to `end` | `render --draft --start --end --scale` |
 | `review(project, n=12)` | 2-24 evenly spaced frames of the delivered film and a contact sheet | `review -n` |
+| `export_captions(project, track?)` | every captions track (or one) as `out/captions/<track>.srt` and `.vtt`, without rendering | `captions --track` |
 | `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw`, `animate`, `import`, `assets` |
 | `probe(project, source)` | streams, codecs, rotation, loudness of a source (section 9.7) | `probe <source>` |
 | `frames(project, asset, times?, every?, n?)` | stills of a source at source seconds and a timed contact sheet | `frames <asset> [times...] --every -n` |
@@ -912,10 +932,15 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
 
 ## 13. render.mjs (node, renderer/scripts)
 
-`node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame...]`, one bundle per call:
+`node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame...] [--option...]`, one
+bundle per call:
 
-- `film`: `<out>` is the mp4 to write (h264 crf 18, yuv420p, BT.709); `stills`: a folder of `still_<frame>.png`;
-  `inspect`: stills plus `inspect.json`.
+- `film`: `<out>` is the mp4 to write (h264 crf 18, yuv420p, BT.709); `--draft` encodes fast (x264 `veryfast`, crf
+  28, JPEG 80 frames), `--scale=S` (0.1-1) renders at that fraction of the canvas (sides rounded to even) and
+  `--range=A-B` renders frames A to B only. `stills`: a folder of `still_<frame>.png`; `inspect`: stills plus
+  `inspect.json`. A call takes at most 600 frames; the stills render on several pages of one browser at once, each
+  with its own local server (`REELSMITH_STILL_WORKERS`, default up to 4 by the CPU count), and the result's
+  `workers` says how many.
 - The public dir is the project dir. Webpack aliases `@reelsmith/kit` → `renderer/src/kit` and `@library` → the
   folder in `REELSMITH_LIBRARY` (reelsmith sets it to the workspace's `library/components`; an empty folder when
   unset). The import guard enforces section 6.
@@ -954,15 +979,19 @@ value.
 `render(project)` stops at the first stage that fails and keeps the previous `out/film.mp4`:
 
 1. **check**: any check error.
-2. **layout**: a still every second, measured (section 12): visible text outside the safe area or cut by the canvas
-   edge, text under 20 px, a component that crashes. Text during its enter/exit animation or a transition between
-   clips, and text fainter than 10 % opacity, are not counted. Warnings: text under 28 px, text overflowing its clip
-   box, text of one clip over text of another (captions included), and contrast under 3:1 against the background
-   sampled from the still (between 2:1 and 3:1 a clearly different hue passes).
+2. **layout**: stills measured (section 12; `render.layout_frames`): one every second (a film over 10 minutes gets
+   600 spread evenly over its length) and the last frame, plus one in the middle of each visible text clip,
+   component and caption that none of those lands on (after its enter and before its exit). Errors: visible text
+   outside the safe area or cut by the canvas edge, text under 20 px, a component that crashes. Text during its
+   enter/exit animation or a transition between clips, and text fainter than 10 % opacity, are not counted.
+   Warnings: text under 28 px, text overflowing its clip box, text of one clip over text of another (captions
+   included), and contrast under 3:1 against the background sampled from the still (between 2:1 and 3:1 a clearly
+   different hue passes). The stills go to render.mjs 200 a call; after each call the stills that show no problem
+   are deleted, so a long film needs no more disk or memory than a short one.
 3. **film**: the renderer encodes the film.
 4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP). A profile with `require_audio`
    refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
-   is not mastered).
+   is not mastered). The project's `chapters` are put into the mp4 as chapter marks (streams copied).
 5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
    profile's cap, sound present and not near silent (`require_audio`), at most `max_black_ratio` black (10 %), and
    no stretch longer than `max_still_s` (5 s on the social profiles) without any motion; a limit that is null is
@@ -970,6 +999,24 @@ value.
 
 Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
 failure that is not the project's (its local server or browser) is retried once and reported as transient.
+
+A delivered film comes with its side files, the stale ones removed: `out/captions/<track>.srt` (SubRip) and `.vtt`
+(WebVTT, with a `Language:` header line) for every captions track, hidden ones included, each item one cue (its
+phrase on one line, accents dropped, times on the film's frames); and, when the project has `chapters`,
+`out/chapters.txt`, one `m:ss Title` line each (`h:mm:ss` for a film of an hour or more), ready for a YouTube
+description. A note says when YouTube would not show them as chapters (the first must start at 0:00, at least 3,
+each 10 s or more). `out/meta.json` lists the captions files (`captions`: track, language, srt, vtt) and the
+chapters (`chapters`: t, title; `chapters_file`). `export_captions` writes the captions files from the project as
+it stands, without rendering. `render` also warns for each HDR video the film shows (section 9.7).
+
+Films of any length render. The encode may run 0.25 s a frame (at least 40 minutes) before it counts as hung, a
+call of stills 3 s a still (at least 15 minutes); mastering and the film checks scale their ffmpeg timeouts with the
+length and read only the sound where the picture is not needed.
+
+`render(project, draft=true, start?, end?, scale=0.5)` (`render.draft`) is a quick look, not a delivery: it renders
+the film, or the part from `start` to `end` (Times; `"clip:X.end"` is X's last frame), at `scale` (0.1-1) of the
+canvas with a fast encode to `build/draft.mp4`. It refuses only on validation errors (not on the owner's rules), has
+no layout pass, no mastering and no film checks, and leaves `out/` and both reports alone.
 
 ## 15. Profiles and themes
 
@@ -1040,6 +1087,7 @@ profile by `check`).
 | `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace; `reelsmith mcp --root` sets it, and `--allow-remote` needs it) |
 | `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
+| `REELSMITH_STILL_WORKERS` | how many stills render.mjs renders at once (1-8; default: up to 4 by the CPU count) |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
 | `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project, its workspace and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |

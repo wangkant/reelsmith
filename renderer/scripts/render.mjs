@@ -1,6 +1,7 @@
-// node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame ...]
-//   film     <out> = the mp4 to write (h264 crf 18, yuv420p, bt709, jpeg 95 frames)
-//   stills   <out> = a folder; each frame -> <out>/still_<frame>.png
+// node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame ...] [--option=value ...]
+//   film     <out> = the mp4 to write (h264 crf 18, yuv420p, bt709, jpeg 95 frames); --draft (fast encode, crf 28),
+//            --scale=0.1..1 (output size), --range=A-B (frames A to B only)
+//   stills   <out> = a folder; each frame -> <out>/still_<frame>.png (at most 600 frames a call, several at once)
 //   inspect  <out> = a folder; stills as above plus <out>/inspect.json = {"frames": [{"frame", "png", "items"}]}
 // One bundle per call; the public dir is the project dir; @reelsmith/kit -> src/kit, @library -> $REELSMITH_LIBRARY
 // (an empty folder when unset); the import guard enforces contract section 6. Progress lines go to stdout and the
@@ -27,6 +28,9 @@ const MAX_FRAMES = 600;
 const MARK = "@@inspect ";
 const TIMEOUT_MS = 120000;
 const FAKE = process.env.REELSMITH_FAKE_SOCKET_ERROR;
+// stills render on this many pages at once, each with its own local server (renderStill starts one per call)
+const WORKERS = Math.max(1, Math.min(8, Number(process.env.REELSMITH_STILL_WORKERS) ||
+  Math.min(4, Math.floor((os.cpus().length - 2) / 2))));
 
 const clip = (text, n = 3000) => (text.length > n ? `${text.slice(0, n)}…` : text);
 const log = (line) => process.stdout.write(`${line}\n`);
@@ -47,20 +51,35 @@ class Stop extends Error {
 
 const parseArgs = (argv) => {
   const [mode, resolvedPath, projectDir, out, ...rest] = argv;
-  const usage = "usage: node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame ...]";
+  const usage = "usage: node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame ...] [--draft --scale=S --range=A-B]";
   if (!MODES.includes(mode)) throw new Stop("args", `unknown mode "${mode ?? ""}"; ${usage}`);
   if (!resolvedPath || !projectDir || !out) throw new Stop("args", usage);
   if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) throw new Stop("args", `resolved.json not found: ${resolvedPath}`);
   if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) throw new Stop("args", `project dir not found: ${projectDir}`);
   const frames = [];
+  const film = { draft: false, scale: 1, range: null };
   for (const item of rest) {
+    const opt = item.match(/^--(draft|scale|range)(?:=(.*))?$/);
+    if (opt) {
+      if (mode !== "film") throw new Stop("args", `--${opt[1]} is for film only`);
+      if (opt[1] === "draft") film.draft = true;
+      else if (opt[1] === "scale") {
+        film.scale = Number(opt[2]);
+        if (!(film.scale >= 0.1 && film.scale <= 1)) throw new Stop("args", `--scale must be 0.1-1, got "${opt[2] ?? ""}"`);
+      } else {
+        const m = String(opt[2] ?? "").match(/^(\d{1,7})-(\d{1,7})$/);
+        if (!m || Number(m[1]) > Number(m[2])) throw new Stop("args", `--range must be A-B frames with A <= B, got "${opt[2] ?? ""}"`);
+        film.range = [Number(m[1]), Number(m[2])];
+      }
+      continue;
+    }
     if (!/^\d{1,7}$/.test(item)) throw new Stop("args", `frame "${item}" is not a whole number`);
     frames.push(Number(item));
   }
   if (mode !== "film" && frames.length === 0) throw new Stop("args", `${mode} needs at least one frame number`);
   if (frames.length > MAX_FRAMES) throw new Stop("args", `${frames.length} frames asked; at most ${MAX_FRAMES} per call`);
   if (mode === "film" && frames.length) throw new Stop("args", "film takes no frame numbers");
-  return { mode, resolvedPath: path.resolve(resolvedPath), projectDir: path.resolve(projectDir), out: path.resolve(out), frames };
+  return { mode, resolvedPath: path.resolve(resolvedPath), projectDir: path.resolve(projectDir), out: path.resolve(out), frames, film };
 };
 
 const readResolved = (file) => {
@@ -304,11 +323,11 @@ const main = async (state) => {
   const bundleMs = Date.now() - t0;
 
   const browserErrors = [];
-  const inspectLines = [];
-  const onBrowserLog = (entry) => {
+  // each still collects its own @@inspect lines: several render at once
+  const logInto = (lines) => (entry) => {
     const text = String(entry.text ?? "");
     if (text.startsWith(MARK)) {
-      if (args.mode === "inspect") inspectLines.push(text.slice(MARK.length));
+      if (lines) lines.push(text.slice(MARK.length));
       return;
     }
     // an object logged without text says nothing
@@ -316,6 +335,7 @@ const main = async (state) => {
     const short = clip(text, 600);
     if (entry.type === "error" && browserErrors.length < 20 && !browserErrors.includes(short)) browserErrors.push(short);
   };
+  const onBrowserLog = logInto(null);
   state.browserErrors = browserErrors;
   const b0 = Date.now();
   try {
@@ -346,18 +366,23 @@ const main = async (state) => {
   if (args.mode === "film") {
     fs.mkdirSync(path.dirname(args.out), { recursive: true });
     const concurrency = Math.max(1, Math.min(6, os.cpus().length - 2));
+    const { draft, scale, range } = args.film;
+    const frameRange = range ? [Math.min(range[0], durationInFrames - 1), Math.min(range[1], durationInFrames - 1)] : null;
+    const total = frameRange ? frameRange[1] - frameRange[0] + 1 : durationInFrames;
     let last = -1;
     const r0 = Date.now();
     try {
       await renderMedia({
-        serveUrl, composition, inputProps, outputLocation: args.out, codec: "h264", crf: 18, pixelFormat: "yuv420p",
-        colorSpace: "bt709", imageFormat: "jpeg", jpegQuality: 95, concurrency, overwrite: true, enforceAudioTrack: true,
+        serveUrl, composition, inputProps, outputLocation: args.out, codec: "h264", crf: draft ? 28 : 18,
+        pixelFormat: "yuv420p", colorSpace: "bt709", imageFormat: "jpeg", jpegQuality: draft ? 80 : 95, concurrency,
+        overwrite: true, enforceAudioTrack: true, scale, ...(draft ? { x264Preset: "veryfast" } : {}),
+        ...(frameRange ? { frameRange } : {}),
         puppeteerInstance: state.browser, logLevel: "error", onBrowserLog, timeoutInMilliseconds: TIMEOUT_MS, port,
         onProgress: ({ progress, renderedFrames }) => {
           const pct = Math.floor(progress * 20) * 5;
           if (pct !== last) {
             last = pct;
-            log(`render ${pct}% (${renderedFrames}/${durationInFrames} frames)`);
+            log(`render ${pct}% (${renderedFrames}/${total} frames)`);
           }
         },
       });
@@ -366,7 +391,8 @@ const main = async (state) => {
     } finally {
       lap("render", r0);
     }
-    return { ok: true, mode: "film", out: args.out, ...base, renderMs: Date.now() - r0, browserErrors };
+    return { ok: true, mode: "film", out: args.out, ...base, ...(frameRange ? { frameRange } : {}), scale, draft,
+      renderMs: Date.now() - r0, browserErrors };
   }
 
   // stills / inspect
@@ -382,13 +408,15 @@ const main = async (state) => {
     if (!frames.includes(fr)) frames.push(fr);
   }
   frames.sort((a, b) => a - b);
-  const stills = [];
-  const inspected = [];
+  const done = new Map();
   const r0 = Date.now();
-  for (const [i, frame] of frames.entries()) {
+  const ports = [port];
+  for (let w = 1; w < Math.min(WORKERS, frames.length); w++) ports.push(await freePort());
+  const stillsSoFar = () => [...done.values()].map(({ frame, png, ms }) => ({ frame, png, ms }));
+  const renderOne = async (w, frame) => {
     const png = path.join(args.out, `still_${String(frame).padStart(5, "0")}.png`);
     const s0 = Date.now();
-    inspectLines.length = 0;
+    let lines = [];
     for (let attempt = 0; ; attempt++) {
       try {
         // test hook (renderer self-test): fail as a dropped local socket does, on the first try or on every try
@@ -397,34 +425,50 @@ const main = async (state) => {
         }
         await renderStill({
           serveUrl, composition, inputProps, frame, output: png, imageFormat: "png", overwrite: true,
-          puppeteerInstance: state.browser, logLevel: "error", onBrowserLog, timeoutInMilliseconds: TIMEOUT_MS, port,
+          puppeteerInstance: state.browser, logLevel: "error", onBrowserLog: logInto(lines),
+          timeoutInMilliseconds: TIMEOUT_MS, port: ports[w],
         });
         break;
       } catch (err) {
-        const stop = await failure("render", err, state.bundleDir, { frame, stills });
+        const stop = await failure("render", err, state.bundleDir, { frame, stills: stillsSoFar() });
         // one still is cheap to redo: once, on a fresh port
-        if (stop.stage !== "infra" || attempt > 0) {
-          lap("render", r0);
-          throw stop;
-        }
+        if (stop.stage !== "infra" || attempt > 0) throw stop;
         log(`still frame ${frame}: ${stop.message.split("\n")[0]}; retrying once`);
-        port = await freePort();
-        state.port = port;
-        inspectLines.length = 0;
+        ports[w] = await freePort();
+        state.port = ports[0];
+        lines = [];
       }
     }
-    stills.push({ frame, png, ms: Date.now() - s0 });
-    log(`still ${i + 1}/${frames.length} frame ${frame} (${Date.now() - s0} ms)`);
+    let items = null;
     if (args.mode === "inspect") {
       // the page may render other frames on the way; keep the line for this one
-      const line = [...inspectLines].reverse().map((l) => JSON.parse(l)).find((x) => x.frame === frame);
-      if (!line) throw new Stop("inspect", `no @@inspect line for frame ${frame}`, { frame, stills });
-      inspected.push({ frame, png, items: line.items });
+      const line = [...lines].reverse().map((l) => JSON.parse(l)).find((x) => x.frame === frame);
+      if (!line) throw new Stop("inspect", `no @@inspect line for frame ${frame}`, { frame, stills: stillsSoFar() });
+      items = line.items;
     }
-  }
+    done.set(frame, { frame, png, ms: Date.now() - s0, items });
+    log(`still ${done.size}/${frames.length} frame ${frame} (${Date.now() - s0} ms)`);
+  };
+  // workers take the next frame until none is left or one has failed; the first failure is the call's
+  let next = 0;
+  let failed = null;
+  await Promise.all(ports.map(async (_, w) => {
+    while (!failed && next < frames.length) {
+      const frame = frames[next++];
+      try {
+        await renderOne(w, frame);
+      } catch (err) {
+        failed ??= err;
+      }
+    }
+  }));
   lap("render", r0);
+  if (failed) throw failed;
+  const stills = frames.map((f) => done.get(f));
+  const inspected = stills.map(({ frame, png, items }) => ({ frame, png, items }));
   const result = {
-    ok: true, mode: args.mode, ...base, renderMs: Date.now() - r0, files: stills.map((s) => s.png), stills, notes, browserErrors,
+    ok: true, mode: args.mode, ...base, renderMs: Date.now() - r0, files: stills.map((s) => s.png),
+    stills: stills.map(({ frame, png, ms }) => ({ frame, png, ms })), notes, browserErrors, workers: ports.length,
   };
   if (args.mode === "inspect") {
     const file = path.join(args.out, "inspect.json");

@@ -160,10 +160,15 @@ def duration(path: Path) -> float | None:
         return None
 
 
-def loudness(path: Path) -> tuple[float | None, float | None]:
+def scaled_timeout(length_s: float, floor: float = 600, per_s: float = 1.0) -> float:
+    """A timeout for an ffmpeg pass over `length_s` seconds of film: `floor`, or longer for a long film."""
+    return max(floor, per_s * max(0.0, float(length_s or 0)))
+
+
+def loudness(path: Path, timeout: float = 600) -> tuple[float | None, float | None]:
     """(integrated LUFS, true peak dBFS) of the whole file; None where it cannot be measured."""
-    r = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path), "-af", "ebur128=peak=true",
-             "-f", "null", "-"])
+    r = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "ebur128=peak=true",
+             "-f", "null", "-"], timeout)
     err = r.stderr or ""
     i = re.findall(r"I:\s+(-?[\d.]+|-inf) LUFS", err)
     p = re.findall(r"Peak:\s+(-?[\d.]+|-inf) dBFS", err)
@@ -174,11 +179,11 @@ class SilentAudio(RuntimeError):
     """The mix has an audio stream with nothing in it."""
 
 
-def master(src: Path, dst: Path, lufs: float, peak: float = -1.0) -> None:
+def master(src: Path, dst: Path, lufs: float, peak: float = -1.0, timeout: float = 600) -> None:
     """Two-pass loudnorm of the whole mix to `lufs`; the picture is copied."""
     target = f"loudnorm=I={lufs}:TP={peak}:LRA=11"
-    first = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(src), "-af", f"{target}:print_format=json",
-                 "-f", "null", "-"])
+    first = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(src), "-vn", "-af",
+                 f"{target}:print_format=json", "-f", "null", "-"], timeout)
     m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", first.stderr or "")
     if first.returncode != 0 or not m:
         raise RuntimeError(f"loudness measure failed: {tail(first.stderr or '', 5, 300)}")
@@ -189,15 +194,34 @@ def master(src: Path, dst: Path, lufs: float, peak: float = -1.0) -> None:
                 f"measured_thresh={s['input_thresh']}:offset={s['target_offset']}:linear=true")
     r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map",
              "0:a:0", "-c:v", "copy", "-af", f"{target}:{measured}", "-ar", "48000", "-c:a", "aac", "-b:a", "192k",
-             "-movflags", "+faststart", str(dst)])
+             "-movflags", "+faststart", str(dst)], timeout)
     if r.returncode != 0 or not Path(dst).is_file() or Path(dst).stat().st_size == 0:
         raise RuntimeError(f"mastering failed: {tail(r.stderr or '', 5, 300)}")
+
+
+def add_chapters(path: Path, meta: str, timeout: float = 600) -> None:
+    """Chapter marks (the text of an ffmpeg metadata file) into an mp4, in place; the streams are copied."""
+    path = Path(path)
+    meta_file, tmp = path.with_name(path.name + ".chapters.txt"), path.with_name(path.name + ".chapters.mp4")
+    meta_file.write_text(meta, encoding="utf-8", newline="\n")
+    try:
+        r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-f", "ffmetadata",
+                 "-i", str(meta_file), "-map", "0", "-map_metadata", "0", "-map_chapters", "1", "-c", "copy",
+                 "-movflags", "+faststart", str(tmp)], timeout)
+        if r.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError(f"ffmpeg: {tail(r.stderr or '', 3, 300) or 'no output'}")
+        os.replace(tmp, path)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ffmpeg ran over {timeout:.0f} s") from None
+    finally:
+        meta_file.unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
 
 
 def scan(path: Path, length: float) -> dict:
     """Seconds of near-black and the longest stretch without any change, from one decode."""
     r = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path), "-an",
-             "-vf", f"{BLACK_FILTER},{FREEZE_FILTER}", "-f", "null", "-"], 900)
+             "-vf", f"{BLACK_FILTER},{FREEZE_FILTER}", "-f", "null", "-"], scaled_timeout(length, 900))
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg could not decode the film: {tail(r.stderr or '', 5, 300)}")
     err = r.stderr or ""

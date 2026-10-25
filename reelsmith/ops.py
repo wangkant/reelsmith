@@ -142,6 +142,8 @@ def _time_slots(data: dict):
     markers = data.get("markers")
     if isinstance(markers, dict):
         yield from ((markers, k) for k in markers)
+    chapters = data.get("chapters") if isinstance(data.get("chapters"), list) else []
+    yield from ((ch, "at") for ch in chapters if isinstance(ch, dict) and "at" in ch)
     for t in _tracks(data):
         if not isinstance(t, dict):
             continue
