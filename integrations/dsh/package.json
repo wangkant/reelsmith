@@ -1,0 +1,86 @@
+{
+  "name": "dsh-plugin-reelsmith",
+  "version": "0.1.0",
+  "description": "reelsmith for DeepSeek Harness: a Video editor agent preset, reelsmith's tools with their images, and a project panel in the Web UI",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "reelsmith",
+    "video-editing",
+    "mcp"
+  ],
+  "license": "MIT",
+  "author": "Qiankang Wang",
+  "homepage": "https://github.com/wangkant/reelsmith/tree/main/integrations/dsh#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangkant/reelsmith.git",
+    "directory": "integrations/dsh"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./tools": {
+      "types": "./lib/tools.d.ts",
+      "default": "./lib/tools.js"
+    },
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./tools/locale/*.json": "./locale/tools/*.json",
+    "./tools/icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "skills",
+    "icon.svg",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "prepack": "npm run build && node scripts/copy-skill.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@deepseek-ai/dsh": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm-mock-server": "0.2.1-rc.3",
+    "@types/node": "^22.20.1",
+    "typescript": "^6.0.3"
+  }
+}
