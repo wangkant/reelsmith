@@ -2,6 +2,7 @@
 // packages and the workspace's component library, and that holds library components to contract section 6:
 // they import only react, remotion, installed @remotion/* packages, @reelsmith/kit and relative files inside the
 // library folder. Built-in presets get the same check as warnings (they are ours, not the agent's).
+import fs from "node:fs";
 import path from "node:path";
 
 const NAME = "reelsmith-import-guard";
@@ -18,6 +19,15 @@ const within = (p, dir) => {
   const n = norm(p);
   return n === dir || n.startsWith(dir + path.sep);
 };
+const withinAny = (p, dirs) => dirs.some((d) => within(p, d));
+// webpack reports real paths, so a symlinked or junctioned node_modules (pnpm, worktrees) is matched by both names
+const realOr = (p) => {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+};
 
 /**
  * @param {{root: string, library: string, warn?: (msg: string) => void}} opts
@@ -27,9 +37,10 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
   const src = norm(path.join(root, "src"));
   const kit = norm(path.join(root, "src", "kit"));
   const presets = norm(path.join(root, "src", "presets"));
-  const modules = norm(path.join(root, "node_modules"));
+  const moduleRoots = [...new Set([path.join(root, "node_modules"), realOr(path.join(root, "node_modules"))])];
+  const modules = moduleRoots.map(norm);
   const lib = norm(library);
-  const loaders = LOADER_PACKAGES.map((p) => norm(path.join(root, "node_modules", p)));
+  const loaders = moduleRoots.flatMap((m) => LOADER_PACKAGES.map((p) => norm(path.join(m, p))));
   const warned = new Set();
 
   const fail = (msg) => {
@@ -42,7 +53,7 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
     if (!file || /^data:/i.test(file)) return;
     if (/^[a-z][a-z0-9+.-]+:/i.test(file) && !/^[a-z]:[\\/]/i.test(file)) fail(`${what} URI ${file} refused`);
     if (!path.isAbsolute(file)) fail(`${what} ${file} refused: not a file path`);
-    if (!(within(file, src) || within(file, modules) || within(file, lib))) {
+    if (!(within(file, src) || withinAny(file, modules) || within(file, lib))) {
       fail(`${what} ${file} refused: only the renderer's src/, its node_modules and the component library may be bundled`);
     }
   };
@@ -62,7 +73,7 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
     }
     if (request === KIT) return file === null || within(file, kit) ? null : said(issuer, request, "it did not resolve to the renderer kit");
     if (PACKAGE.test(request)) {
-      return file === null || within(file, modules) ? null : said(issuer, request, "it did not resolve to the renderer's installed packages");
+      return file === null || withinAny(file, modules) ? null : said(issuer, request, "it did not resolve to the renderer's installed packages");
     }
     return said(issuer, request, "");
   };
