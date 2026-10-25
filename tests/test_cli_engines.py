@@ -2,7 +2,6 @@
 import io
 import json
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -10,8 +9,14 @@ import pytest
 from reelsmith import backends, cli_engines, guard, mcp_server, runner
 from reelsmith.workspace import Workspace
 
+try:
+    import tomllib
+except ImportError:                 # Python 3.10
+    tomllib = None
+
 FAKE = Path(__file__).parent / "fixtures" / "fake_agent_cli.py"
 DS_KEY = "sk-ds-test-abcdef123456"
+needs_toml = pytest.mark.skipif(tomllib is None, reason="tomllib needs Python 3.11+")
 
 
 @pytest.fixture
@@ -130,6 +135,7 @@ def test_effort_and_engine_flags_reach_the_run(ws, monkeypatch):
 
 
 # ------------------------------------------------------------------ commands
+@needs_toml
 def test_codex_command(ws):
     w, project = ws
     scope = guard.scope_for(project, w)
@@ -188,6 +194,7 @@ def test_find_dsh(tmp_path, monkeypatch):
     assert cli_engines.find_dsh({}) == ["/bin/dsh"]
 
 
+@needs_toml
 def test_codex_user_model(tmp_path):
     (tmp_path / "config.toml").write_text('model = "gpt-5.5-codex"\n[other]\nx = 1\n', encoding="utf-8")
     assert cli_engines.codex_user_model({"CODEX_HOME": str(tmp_path)}) == "gpt-5.5-codex"

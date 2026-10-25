@@ -2,14 +2,19 @@
 import json
 import os
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
 
 from reelsmith import agentconf, cli
 
+try:
+    import tomllib
+except ImportError:                 # Python 3.10: setup merges Codex configs unchecked there
+    tomllib = None
+
 ROOT = Path(__file__).resolve().parent.parent
+needs_toml = pytest.mark.skipif(tomllib is None, reason="tomllib needs Python 3.11+")
 
 
 @pytest.fixture
@@ -107,6 +112,7 @@ trust_level = "trusted"
 """
 
 
+@needs_toml
 def test_codex_project_merges_toml(dirs):
     cwd, home = dirs
     config = cwd / ".codex" / "config.toml"
@@ -128,6 +134,7 @@ def test_codex_project_merges_toml(dirs):
     assert "reelsmith" not in doc["mcp_servers"] and doc["mcp_servers"]["other"] and doc["model"]
 
 
+@needs_toml
 def test_codex_user_follows_codex_home(dirs, tmp_path):
     cwd, home = dirs
     codex_home = tmp_path / "codexhome"
@@ -138,6 +145,7 @@ def test_codex_user_follows_codex_home(dirs, tmp_path):
     assert not (codex_home / "config.toml").exists()
 
 
+@needs_toml
 def test_codex_refuses_forms_it_cannot_edit(dirs):
     cwd, home = dirs
     config = cwd / ".codex" / "config.toml"
@@ -151,6 +159,7 @@ def test_codex_refuses_forms_it_cannot_edit(dirs):
         agentconf.plan("codex", cwd=cwd, home=home, env={})
 
 
+@needs_toml
 def test_toml_values_round_trip():
     value = {"command": "C:\\Program Files\\py\\python.exe", "args": ["-m", "x"], "env": {"A B": "\"q\"", "Z": "中"},
              "n": 3, "t": True}

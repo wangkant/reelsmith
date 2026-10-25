@@ -1,8 +1,12 @@
 """The reelsmith Agent Skill, its copy in the CC plugin, and the plugin and marketplace manifests."""
 import json
 import sys
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:                 # Python 3.10: the pyproject asserts are skipped
+    tomllib = None
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL = ROOT / "skills" / "reelsmith" / "SKILL.md"
@@ -40,8 +44,8 @@ def test_plugin_and_marketplace_manifests():
     plugin_dir = ROOT / entry["source"]
     plugin = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert entry["source"].startswith("./") and entry["name"] == plugin["name"] == market["name"] == "reelsmith"
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert plugin["version"] == pyproject["project"]["version"]
-    command = plugin["mcpServers"]["reelsmith"]["command"]
-    assert command in pyproject["project"]["scripts"]
     assert (plugin_dir / "skills" / "reelsmith" / "SKILL.md").is_file()
+    if tomllib is not None:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        assert plugin["version"] == pyproject["project"]["version"]
+        assert plugin["mcpServers"]["reelsmith"]["command"] in pyproject["project"]["scripts"]
