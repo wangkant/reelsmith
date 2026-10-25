@@ -18,11 +18,14 @@ and renders through checks that refuse a broken film. It is not a text-to-video 
 
 1. Ask the user only for: where to install (suggest `~/reelsmith` for `<install>` and `~/studio` for
    `<workspace>`), which coding agent they use if you cannot tell which one you are, and whether you may install
-   missing system tools. Ask these in one message at the start; decide everything else yourself.
+   missing system tools. Ask these in one message at the start; decide everything else yourself, except the
+   changes rule 3 lists.
 2. Never ask the user to paste an API key into the chat, and never print a key's value (no `cat .env`, no echoing
    a key variable). Keys are optional; the user writes them into `<workspace>/.env` themselves.
-3. Do not install system software (Python, Node.js, ffmpeg, Git, Homebrew, browsers) without the user's yes.
-   Packages inside `<install>/.venv` and `<install>/renderer` are part of the setup the user asked for.
+3. Do not install system software (Python, Node.js, ffmpeg, Git, Homebrew, browsers), install anything globally
+   (`npm install -g`) or change the user's `PATH` or shell startup files without the user's yes. Packages inside
+   `<install>/.venv` and `<install>/renderer` are part of the setup the user asked for. Sign-ins (`codex login`)
+   are the user's to do.
 4. When a command fails, stop and report it: the command, the last 20 lines of its output, what you think is wrong
    and the fix you propose. Do not loop on guesses.
 5. Write `<install>` and `<workspace>` as absolute paths in every command. Each of your commands may run in a fresh
@@ -36,9 +39,11 @@ PowerShell:
 
 ```powershell
 $PSVersionTable.PSVersion.ToString(); [Environment]::OSVersion.VersionString
-Get-Command python, py, node, npm, ffmpeg, ffprobe, git, winget -ErrorAction SilentlyContinue | Select-Object Name, Source
+Get-Command python, py, node, npm, ffmpeg, ffprobe, git, winget -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)  $($_.Source)" }
 python --version; node --version; git --version
 ```
+
+A tool missing from the list is not on `PATH`. `npm` shows up as `npm.ps1`: step 3 runs `npm.cmd` instead.
 
 bash:
 
@@ -79,32 +84,35 @@ Both shells:
 git clone https://github.com/wangkant/reelsmith "<install>"
 ```
 
-If `<install>` already holds a reelsmith checkout, update it instead (see Update, below).
+If `<install>` already holds a reelsmith checkout, update it instead (see Update, below). If it exists, is not
+empty and holds something else, ask the user for another folder; never clear it.
 
 ## 3. Install
 
 PowerShell (use `py -3` for `python` if step 1 found the stub):
 
 ```powershell
-cd "<install>"; python -m venv .venv
+python -m venv "<install>\.venv"
 & "<install>\.venv\Scripts\python.exe" -m pip install --upgrade pip
 & "<install>\.venv\Scripts\python.exe" -m pip install -e "<install>[capture,web]"
-cd "<install>\renderer"; npm.cmd ci
+npm.cmd ci --prefix "<install>\renderer"
 ```
 
 bash:
 
 ```bash
-cd "<install>" && python3 -m venv .venv
+python3 -m venv "<install>/.venv"
 "<install>/.venv/bin/python" -m pip install --upgrade pip
 "<install>/.venv/bin/python" -m pip install -e "<install>[capture,web]"
-cd "<install>/renderer" && npm ci
+npm ci --prefix "<install>/renderer"
 ```
 
 - The extras: `capture` (screenshots of web pages as evidence; it drives Edge, Chrome or Playwright's Chromium) and
   `web` (keyless web search for headless runs). Add `transcribe` (faster-whisper, free local speech-to-text, a large
   download) only if the user wants it.
 - `npm.cmd` because PowerShell's execution policy often blocks `npm.ps1`; use `npx.cmd` for `npx` likewise.
+- `npm ci` ends with audit, funding and "new major version of npm" notices: ignore them. Do not run `npm audit fix`
+  (it rewrites the checkout's lock file, and updates then stop applying) or upgrade npm (a global change).
 - Debian/Ubuntu: if `python3 -m venv` fails, the fix is `sudo apt-get install -y python3-venv` (rule 7).
 
 From here on, `reelsmith` means the full path of the installed command:
@@ -126,7 +134,11 @@ for this OS) and `enables` (what an optional check unlocks). Exit status 0 means
   software), then run doctor again. Repeat until `ok` is true.
 - Optional checks (`remotion-browser`, `capture`, `codex`, `faster-whisper`, the `key:` rows, `agents`, `on-path`)
   never block. Note them for your report. If `capture` lacks only a browser, offer its fix (it downloads
-  Playwright's Chromium) for users who want web screenshots; `remotion-browser` downloads itself on the first render.
+  Playwright's Chromium) for users who want web screenshots. `remotion-browser` downloads itself on the first
+  preview or render.
+- `codex`'s fix is a global npm install (rule 3); after it the user runs `codex login` themselves (it opens a
+  browser). `on-path` matters only for the Claude Code and DSH plugins (step 6), not for `reelsmith setup`; its fix
+  changes the user's `PATH`, so run it only if the user wants a plugin and says yes.
 
 ## 5. Make a workspace
 
@@ -153,11 +165,15 @@ footage tools, imports and `capture` need none:
 
 | key | enables |
 |---|---|
-| `OPENROUTER_API_KEY` | `speak` (narration) and `animate` (image-to-video) |
+| `OPENROUTER_API_KEY` | `speak` (narration), `animate` (image-to-video) and the default provider of `reelsmith run` |
 | `OPENAI_API_KEY` | `transcribe` through OpenAI (or install the `transcribe` extra and set `providers.transcribe.provider` to `"local"`) |
-| `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY` | `reelsmith run <project>` (headless films without a coding agent) only |
+| `DEEPSEEK_API_KEY` | `reelsmith run <project> --provider deepseek` (also `--engine dsh` and `--backend deepseek`) |
+| `ANTHROPIC_API_KEY` | `reelsmith run <project> --engine agent-sdk` |
+| `TAVILY_API_KEY` | web search in `reelsmith run` when the `web` extra is not installed |
 
-`draw` (pictures) uses the Codex CLI's own sign-in, not a key. Write `<workspace>/.env` with your file tool,
+`reelsmith run` makes films headless, without a coding agent; the last three keys serve it alone. Doctor's `key:`
+rows list every key reelsmith reads, with what each enables. `draw` (pictures) uses the Codex CLI's own sign-in, not
+a key. Write `<workspace>/.env` with your file tool,
 holding comments only, so the user can fill it in:
 
 ```text
@@ -177,10 +193,10 @@ reelsmith doctor --json --workspace "<workspace>"
 Run setup in the folder the user starts their agent in: `<workspace>` is a good default, never `<install>` (it is a
 git checkout). Change to that folder in the same command, for example:
 
-PowerShell:
+PowerShell (`-ErrorAction Stop` keeps setup from running in the wrong folder if the change fails):
 
 ```powershell
-cd "<workspace>"; & "<install>\.venv\Scripts\reelsmith.exe" setup claude-code
+Set-Location -LiteralPath "<workspace>" -ErrorAction Stop; & "<install>\.venv\Scripts\reelsmith.exe" setup claude-code
 ```
 
 bash:
@@ -209,8 +225,9 @@ writes the MCP server into the agent's config in that folder and copies the reel
   The reelsmith DSH plugin adds a video editor mode and panel: `<install>/integrations/dsh/README.md`.
 - **Cursor:** if the reelsmith server shows as disabled in Cursor's MCP settings, enable it.
 
-The agent loads the server only at start: tell the user to quit it and start it again in that folder. Until then
-you use the CLI, as the next step does.
+Run `reelsmith doctor --json --workspace "<workspace>"` again: its `agents` row now names the agent (doctor looks in
+the current folder and in the workspace). The agent loads the server only at start: tell the user to quit it and
+start it again in that folder. Until then you use the CLI, as the next step does.
 
 ## 7. Smoke test (free)
 
@@ -236,15 +253,16 @@ reelsmith edit "<workspace>/projects/hello" "@<workspace>/projects/hello/ops.jso
 reelsmith preview "<workspace>/projects/hello" 1 2.5
 ```
 
-`preview` prints PNG paths; the first call bundles the renderer and can take a minute. Read the 1.00 s still: it
-shows "Hello from reelsmith" centred on a dark canvas, "reelsmith" in red. Then render (about a minute; the first
-render downloads the renderer's browser if doctor said it was missing):
+`preview` prints PNG paths. The first preview or render bundles the renderer and, if doctor's `remotion-browser`
+row was false, downloads Remotion's browser, so it can take a minute or two. Read the 1.00 s still: it shows "Hello
+from reelsmith" centred on a dark canvas, "reelsmith" in red. Then render:
 
 ```bash
 reelsmith render "<workspace>/projects/hello"
 ```
 
-It ends with `DELIVERED: <workspace>/projects/hello/out/film.mp4`. No step here calls a paid service.
+Its first line starts with `DELIVERED:` and gives the film's path (`<workspace>/projects/hello/out/film.mp4`),
+length and format; stage times and notes follow. No step here calls a paid service.
 
 ## 8. Report to the user
 
@@ -265,7 +283,7 @@ PowerShell:
 ```powershell
 git -C "<install>" pull --ff-only
 & "<install>\.venv\Scripts\python.exe" -m pip install -e "<install>[capture,web]"
-cd "<install>\renderer"; npm.cmd ci
+git -C "<install>" diff --quiet ORIG_HEAD HEAD -- renderer/package-lock.json; if ($LASTEXITCODE -ne 0) { npm.cmd ci --prefix "<install>\renderer" }
 ```
 
 bash:
@@ -273,14 +291,18 @@ bash:
 ```bash
 git -C "<install>" pull --ff-only
 "<install>/.venv/bin/python" -m pip install -e "<install>[capture,web]"
-cd "<install>/renderer" && npm ci
+git -C "<install>" diff --quiet ORIG_HEAD HEAD -- renderer/package-lock.json || npm ci --prefix "<install>/renderer"
 ```
 
-Then run `reelsmith setup <agent>` again in the agent's folder (the skill is a copy) and `reelsmith doctor --json`.
+The last line reinstalls the renderer's packages only when the pull changed their lock file: `npm ci` empties
+`renderer/node_modules`, Remotion's downloaded browser included, which the next preview then downloads again.
+Then run `reelsmith setup <agent>` again in the agent's folder (the skill is a copy) and
+`reelsmith doctor --json --workspace "<workspace>"`.
 
 ## Undo
 
-In the folder you set the agent up in, with your agent's target (add `--user` if you used it there):
+In the folder you set the agent up in (change to it in the same command, as in step 6), with your agent's target
+(add `--user` if you used it there):
 
 ```bash
 reelsmith setup claude-code --uninstall

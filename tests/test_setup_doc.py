@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from reelsmith import cli, tools
+from reelsmith import cli, doctor, tools
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "setup-for-agents.md"
@@ -110,6 +110,23 @@ def test_readme_prompt_names_the_raw_guide():
     assert RAW_URL in section
     assert text.index("## Let your coding agent set it up") > text.index("## Quick start")
     assert "setup-for-agents.md" in (ROOT / "docs" / "agents.md").read_text(encoding="utf-8")
+
+
+def test_the_guide_names_every_key_and_optional_check_doctor_reports(tmp_path, monkeypatch):
+    text = GUIDE.read_text(encoding="utf-8")
+    assert [key for key in doctor.KEYS if f"`{key}`" not in text] == []
+    monkeypatch.chdir(tmp_path)
+    optional = {c["name"] for c in doctor.run_checks()["checks"]
+                if not c["required"] and c["name"] != "workspace" and not c["name"].startswith("key:")}
+    listed = re.search(r"Optional checks \(([^)]*)\)", text).group(1)
+    assert set(SPAN.findall(listed)) - {"key:"} == optional
+
+
+def test_the_guides_powershell_never_cds_without_stopping():
+    # PowerShell's `;` runs the next command after a failed cd, in whatever folder the shell is in
+    lines = [text for _, text, is_span in snippets(GUIDE.read_text(encoding="utf-8")) if not is_span]
+    assert [ln for ln in lines if re.match(r"\s*(cd|Set-Location|Push-Location)\b", ln)
+            and ("&&" not in ln and "-ErrorAction Stop" not in ln)] == []
 
 
 def test_the_guides_smoke_test_ops_apply(tmp_path):

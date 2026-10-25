@@ -813,7 +813,7 @@ in an editable checkout (`docs/`, `skills/` and the renderer beside it), Node.js
 names one. Optional, each with what it enables: Remotion's headless browser already downloaded, the `capture` extra
 and a Chromium (Edge, Chrome or Playwright's), the Codex CLI (`draw`), faster-whisper, the provider keys (present in
 the workspace `.env`, in the environment, or absent; never their values), the agents set up in the current folder
-and `reelsmith-mcp` on `PATH`. Every failed check carries the command that fixes it on this OS (PowerShell on
+or the workspace folder, and `reelsmith-mcp` on `PATH`. Every failed check carries the command that fixes it on this OS (PowerShell on
 Windows). `--json` prints one object, `{ok, reelsmith, system, python, checkout, renderer, workspace, cwd, checks:
 [{name, ok, required, detail, fix, enables}]}`; exit status 0 when every required check passes, else 1.
 [setup-for-agents.md](setup-for-agents.md) walks a coding agent through installing and attaching reelsmith with it.

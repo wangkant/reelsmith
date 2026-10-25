@@ -121,12 +121,12 @@ def test_renderer_packages_missing_or_stale(machine):
     (modules / "remotion" / "package.json").write_text(json.dumps({"version": "4.0.400"}), encoding="utf-8")
     got = rows(doctor.run_checks())["renderer"]
     assert not got["ok"] and "4.0.400" in got["detail"] and "4.0.532" in got["detail"]
-    assert got["fix"] == f"cd {doctor.quote(machine.renderer, 'linux')} && npm ci"
+    assert got["fix"] == f"npm ci --prefix {doctor.quote(machine.renderer, 'linux')}"
     (modules / "remotion" / "package.json").unlink()
     assert "not installed" in rows(doctor.run_checks())["renderer"]["detail"]
     machine.os = "windows"
     fix = rows(doctor.run_checks())["renderer"]["fix"]
-    assert fix == f"cd '{machine.renderer}'; npm.cmd ci"
+    assert fix == f"npm.cmd ci --prefix '{machine.renderer}'"
 
 
 def test_remotion_browser_found(machine):
@@ -149,11 +149,30 @@ def test_optional_tools_missing_never_fail_the_run(machine):
     for name, extra in (("capture", "[capture]"), ("faster-whisper", "[transcribe]")):
         assert not got[name]["ok"] and not got[name]["required"] and f"{ROOT}{extra}" in got[name]["fix"]
         assert got[name]["fix"].startswith(doctor.quote(sys.executable, "linux") + " -m pip install -e")
-    assert got["codex"]["fix"] == "npm install -g @openai/codex && codex login"
+    assert got["codex"]["fix"] == "npm install -g @openai/codex" and "codex login" in got["codex"]["detail"]
     assert not got["on-path"]["ok"]
     machine.modules = {"playwright"}
     machine.browsers = []
     assert rows(doctor.run_checks())["capture"]["fix"].endswith("-m playwright install chromium")
+
+
+@pytest.mark.parametrize("os_name, shell, fix", [
+    ("windows", "", "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', "
+                    "'User') + ';{scripts}', 'User')"),
+    ("linux", "/bin/bash", "echo 'export PATH={scripts}:\"$PATH\"' >> ~/.bashrc"),
+    ("macos", "/bin/zsh", "echo 'export PATH={scripts}:\"$PATH\"' >> ~/.zshrc"),
+    ("macos", "/bin/bash", "echo 'export PATH={scripts}:\"$PATH\"' >> ~/.bash_profile"),
+    ("linux", "/usr/bin/fish", "add {scripts} to PATH in the shell's startup file"),
+])
+def test_on_path_fix_changes_the_users_path_not_this_shell(machine, monkeypatch, os_name, shell, fix):
+    scripts = "venvbin"
+    monkeypatch.setattr(doctor.sysconfig, "get_path", lambda name: scripts)
+    monkeypatch.setenv("SHELL", shell)
+    machine.os = os_name
+    machine.paths.pop("reelsmith-mcp")
+    got = rows(doctor.run_checks())["on-path"]
+    assert not got["ok"] and got["fix"] == fix.format(scripts=str(Path(scripts)))
+    assert "Activate" not in got["fix"] and "restart" in got["detail"]
 
 
 def test_keys_report_where_they_are_never_their_values(machine, tmp_path, monkeypatch, capsys):
@@ -212,6 +231,23 @@ def test_agents_set_up_in_this_folder(machine):
     assert not got["ok"] and gone in got["detail"] and got["fix"].endswith(" setup cursor")
 
 
+def test_agents_set_up_in_the_named_workspace_count_from_any_folder(machine, tmp_path):
+    ws = tmp_path / "studio"
+    ws.mkdir()
+    (ws / "workspace.json").write_text("{}", encoding="utf-8")
+    spec = agentconf.server_spec()
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {"reelsmith": spec}}), encoding="utf-8")
+    assert not rows(doctor.run_checks())["agents"]["ok"]                    # cwd is elsewhere, no workspace named
+    got = rows(doctor.run_checks(str(ws)))["agents"]
+    assert got["ok"] and f"set up in {ws}: claude-code (.mcp.json)" in got["detail"]
+    (ws / ".cursor").mkdir()
+    (ws / ".cursor" / "mcp.json").write_text(json.dumps({"mcpServers": {"reelsmith": {"command": "/gone/python"}}}),
+                                             encoding="utf-8")
+    got = rows(doctor.run_checks(str(ws)))["agents"]
+    assert not got["ok"] and got["fix"] == doctor.in_folder(ws, f"{doctor.reelsmith_command('linux')} setup cursor",
+                                                            "linux")
+
+
 def test_no_agent_set_up_points_at_setup(machine):
     got = rows(doctor.run_checks())["agents"]
     assert not got["ok"] and not got["required"] and got["fix"].endswith(" setup <agent>")
@@ -223,4 +259,5 @@ def test_commands_are_quoted_for_each_shell():
     assert doctor.quote("it's", "windows") == "'it''s'"
     assert doctor.program("/opt/my py/python", ["-V"], "linux") == "'/opt/my py/python' -V"
     assert doctor.in_folder("/a b", "npm ci", "macos") == "cd '/a b' && npm ci"
+    assert doctor.in_folder("C:/a b", "x", "windows") == "Set-Location -LiteralPath 'C:/a b' -ErrorAction Stop; x"
     assert doctor.copy_starter("C:/studio", "windows").startswith("New-Item -ItemType Directory -Force 'C:/studio'")

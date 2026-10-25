@@ -128,7 +128,9 @@ def then(os_name: str) -> str:
 
 
 def in_folder(folder, command: str, os_name: str) -> str:
-    return f"cd {quote(folder, os_name)}{then(os_name)}{command}"
+    if os_name == "windows":                         # `;` runs on after a failed cd; -ErrorAction Stop does not
+        return f"Set-Location -LiteralPath {quote(folder, os_name)} -ErrorAction Stop; {command}"
+    return f"cd {quote(folder, os_name)} && {command}"
 
 
 def npm(os_name: str, name: str = "npm") -> str:
@@ -208,7 +210,7 @@ def check_node(os_name: str) -> Check:
 
 def check_renderer(os_name: str) -> Check:
     folder = renderer_dir()
-    fix = in_folder(folder, f"{npm(os_name)} ci", os_name)
+    fix = f"{npm(os_name)} ci --prefix {quote(folder, os_name)}"
     try:
         pinned = json.loads((folder / "package.json").read_text(encoding="utf-8"))["dependencies"]["remotion"]
     except (OSError, ValueError, KeyError, TypeError):
@@ -309,9 +311,11 @@ def check_codex(os_name: str) -> Check:
     except Exception as exc:  # noqa: BLE001 - a broken optional provider is a finding, not a crash
         return Check("codex", False, False, f"cannot look for Codex: {type(exc).__name__}: {exc}", "", enables)
     if path:
-        return Check("codex", True, False, f"Codex CLI at {path} (sign in once with `codex login`)", enables=enables)
-    return Check("codex", False, False, "the Codex CLI was not found (CODEX_EXE, the desktop app, PATH)",
-                 then(os_name).join([f"{npm(os_name)} install -g @openai/codex", "codex login"]), enables)
+        return Check("codex", True, False, f"Codex CLI at {path} (the user signs in once with `codex login`)",
+                     enables=enables)
+    return Check("codex", False, False, "the Codex CLI was not found (CODEX_EXE, the desktop app, PATH); after the "
+                                        "install the user signs in once with `codex login` (it opens a browser)",
+                 f"{npm(os_name)} install -g @openai/codex", enables)
 
 
 def check_whisper(os_name: str) -> Check:
@@ -329,13 +333,23 @@ def check_on_path(os_name: str) -> Check:
     if found:
         return Check("on-path", True, False, f"reelsmith-mcp on PATH ({found})", enables=enables)
     scripts = Path(sysconfig.get_path("scripts"))
-    if sys.prefix != sys.base_prefix:
-        activate = scripts / ("Activate.ps1" if os_name == "windows" else "activate")
-        fix = f"& {quote(activate, os_name)}" if os_name == "windows" else f". {quote(activate, os_name)}"
-        return Check("on-path", False, False, f"reelsmith-mcp is not on PATH: activate the environment, then start "
-                                              f"the agent from that shell ({scripts})", fix, enables)
-    return Check("on-path", False, False, f"reelsmith-mcp is not on PATH (it is in {scripts})",
-                 f"add {scripts} to PATH", enables)
+    return Check("on-path", False, False, f"reelsmith-mcp is not on PATH (it is in {scripts}): the fix adds that "
+                                          "folder to the user's PATH (ask first); the agent sees it once restarted "
+                                          "from a new terminal", add_to_path(scripts, os_name), enables)
+
+
+def add_to_path(folder, os_name: str) -> str:
+    """A user-level PATH change: no admin rights, no execution policy, and it outlives this shell (activating a venv
+    in the agent's own shell reaches neither the running agent nor the next one)."""
+    if os_name == "windows":
+        return ("[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') "
+                f"+ {quote(';' + str(folder), os_name)}, 'User')")
+    shell = Path(os.environ.get("SHELL", "")).name
+    rc = {"zsh": "~/.zshrc", "bash": "~/.bash_profile" if os_name == "macos" else "~/.bashrc"}.get(shell)
+    if not rc:
+        return f"add {folder} to PATH in the shell's startup file"
+    line = f'export PATH={shlex.quote(str(folder))}:"$PATH"'
+    return f"echo {shlex.quote(line)} >> {rc}"
 
 
 # ------------------------------------------------------------------ workspace, keys, agents
@@ -435,27 +449,32 @@ def _agent_command(path: Path) -> str | None:
     return json.loads(cmd.group(1)) if cmd else ""
 
 
-def check_agents(cwd: Path, os_name: str) -> Check:
-    enables = "the reelsmith tools inside a coding agent started in this folder"
-    good, broken = [], []
-    for agent, rel in AGENT_CONFIGS:
-        command = _agent_command(cwd / rel)
-        if command is None:
-            continue
-        if command and (os.path.isfile(command) or which(command)):
-            same = os.path.normcase(os.path.abspath(command)) == os.path.normcase(os.path.abspath(sys.executable))
-            good.append(f"{agent} ({rel})" + ("" if same or not os.path.isabs(command) else f", runs {command}"))
-        else:
-            broken.append((agent, f"{agent} ({rel}) runs {command or '(no command)'}, which is missing"))
+def check_agents(folders: list[Path], os_name: str) -> Check:
+    """Agent configs in this folder and in the workspace folder (where the setup guide attaches the agent)."""
+    enables = "the reelsmith tools inside a coding agent started in the folder it is set up in"
     setup = reelsmith_command(os_name)
+    found, broken, fixes = [], [], []
+    for folder in folders:
+        good = []
+        for agent, rel in AGENT_CONFIGS:
+            command = _agent_command(folder / rel)
+            if command is None:
+                continue
+            if command and (os.path.isfile(command) or which(command)):
+                same = os.path.normcase(os.path.abspath(command)) == os.path.normcase(os.path.abspath(sys.executable))
+                good.append(f"{agent} ({rel})" + ("" if same or not os.path.isabs(command) else f", runs {command}"))
+            else:
+                broken.append(f"{agent} ({folder / rel}) runs {command or '(no command)'}, which is missing")
+                fixes.append(in_folder(folder, f"{setup} setup {agent}", os_name))
+        if good:
+            found.append(f"set up in {folder}: {', '.join(good)}")
     if broken:
-        return Check("agents", False, False, "; ".join([*(f"set up: {g}" for g in good), *(b for _, b in broken)]),
-                     then(os_name).join(f"{setup} setup {a}" for a, _ in broken), enables)
-    if good:
-        return Check("agents", True, False, f"set up in {cwd}: {', '.join(good)}", enables=enables)
-    return Check("agents", False, False, f"no coding agent in {cwd} has reelsmith set up (<agent>: claude-code, "
-                                         "codex, dsh, cursor or generic; run it in the folder the agent starts in)",
-                 f"{setup} setup <agent>", enables)
+        return Check("agents", False, False, "; ".join([*found, *broken]), then(os_name).join(fixes), enables)
+    if found:
+        return Check("agents", True, False, "; ".join(found), enables=enables)
+    return Check("agents", False, False, f"no coding agent in {' or '.join(map(str, folders))} has reelsmith set up "
+                                         "(<agent>: claude-code, codex, dsh, cursor or generic; run it in the folder "
+                                         "the agent starts in)", f"{setup} setup <agent>", enables)
 
 
 # ------------------------------------------------------------------ report
@@ -465,12 +484,15 @@ def run_checks(workspace=None, cwd=None, os_name: str | None = None) -> dict:
     cwd = Path(os.path.abspath(cwd or os.getcwd()))
     named = workspace is not None and str(workspace).strip() != ""
     ws = Path(os.path.abspath(cwd / Path(workspace).expanduser())) if named else find_workspace_root(cwd)
+    folders = [cwd]
+    if ws is not None and ws.is_dir() and os.path.normcase(str(ws)) != os.path.normcase(str(cwd)):
+        folders.append(ws)
     checks = [check_python(os_name), check_checkout(os_name), check_node(os_name), check_renderer(os_name),
               check_ffmpeg("ffmpeg", os_name), check_ffmpeg("ffprobe", os_name),
               check_workspace(ws, named, cwd, os_name),
               check_remotion_browser(os_name), check_capture(os_name), check_codex(os_name), check_whisper(os_name),
               *check_keys(ws if ws is not None and (ws / WORKSPACE_FILE).is_file() else None, os_name),
-              check_agents(cwd, os_name), check_on_path(os_name)]
+              check_agents(folders, os_name), check_on_path(os_name)]
     return {"ok": all(c.ok for c in checks if c.required), "reelsmith": __version__, "system": os_name,
             "python": sys.executable, "checkout": str(ROOT), "renderer": str(renderer_dir()),
             "workspace": str(ws) if ws is not None else None, "cwd": str(cwd),
