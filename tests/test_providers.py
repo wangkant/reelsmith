@@ -1794,3 +1794,78 @@ def test_capture_in_a_real_browser_boxes_the_sentence_and_keeps_the_page_off_the
     assert count(pixels(png), lambda r, g, b: g > 200 and r < 60 and b < 60) == 0                  # no secret
     assert count(pixels(png, [0, 0, w, min(h, 60)]), lambda r, g, b: b > 200 and r < 60) == 0      # header hidden
     assert entry["site"] == "测试站" and "柴油每吨上调195元。" in text and "the sentence that holds" in text
+
+
+# ------------------------------------------------------------------ canvas and locale
+def test_capture_viewport_follows_the_canvas_and_the_locale(env):
+    world = FakeBrowserWorld()
+    assert not P.capture(env.project, url="https://e.com/a", id="ev1", sync_playwright=world, proxy=None)[1]
+    phone = world.contexts[-1]                                      # douyin, zh-CN: a Chinese phone
+    assert phone["viewport"]["width"] == 430 and phone["device_scale_factor"] == 3 and phone["has_touch"]
+    assert phone["locale"] == "zh-CN" and phone["timezone_id"] == "Asia/Shanghai"
+    env.config(profile="landscape", locale="en-GB")
+    text, err = P.capture(env.project, url="https://e.com/a", id="ev2", sync_playwright=world, proxy=None)
+    assert not err, text
+    desk = world.contexts[-1]
+    assert desk["viewport"]["width"] == 1440 and desk["device_scale_factor"] == 2 and not desk["has_touch"]
+    assert "Mobile" not in desk["user_agent"] and desk["locale"] == "en-GB" and "timezone_id" not in desk
+    assert "(desktop viewport)" in text
+    assert read_project(env.project)["assets"]["ev2"]["box"] == [41, 202, 361, 48]   # FOUND's match x2
+    assert "at 1728 px wide, the safe area's width" in text
+    assert not P.capture(env.project, url="https://e.com/a", id="ev3", viewport="phone", sync_playwright=world,
+                         proxy=None)[1]
+    assert world.contexts[-1]["viewport"]["width"] == 430
+    text, err = P.capture(env.project, url="https://e.com/a", id="ev4", viewport="tablet", sync_playwright=world,
+                          proxy=None)
+    assert err and "viewport must be one of phone, desktop" in text
+    env.config(profile="square")
+    assert C.default_viewport(CFG.project_profile(CFG.context(env.project))) == "desktop"
+    env.config(profile="portrait")
+    assert C.default_viewport(CFG.project_profile(CFG.context(env.project))) == "phone"
+
+
+@needs_ffmpeg
+def test_draw_defaults_to_the_canvas_aspect(env):
+    env.config(profile="landscape")
+    painter = FakePainter(env.tmp, size=(1536, 1024))
+    text, err = P.draw(env.project, id="wide", prompt="a street at dusk", provider=painter)
+    assert not err, text
+    assert painter.calls[0]["gen"] == (1536, 1024)
+    assert CFG.header_size(env.project / "assets" / "wide.png") == (1920, 1080)
+    env.set_project(profile={"base": "square", "width": 1080, "height": 1350})
+    painter = FakePainter(env.tmp)
+    assert not P.draw(env.project, id="tall", prompt="a portrait", provider=painter)[1]
+    assert CFG.header_size(env.project / "assets" / "tall.png") == (1080, 1350)       # 4:5
+    assert [D.nearest_aspect(w, h) for w, h in ((1920, 1080), (1080, 1920), (1080, 1080), (2560, 1080),
+                                                (1000, 1400))] == ["16:9", "9:16", "1:1", "16:9", "3:4"]
+
+
+def test_speak_picks_the_voice_by_locale(env, monkeypatch):
+    seen = []
+
+    class Engine(TTS.OpenRouterTTS):
+        def check(self):
+            seen.append(dict(self.cfg))
+            raise P.ProviderError("stop here")
+    monkeypatch.setitem(TTS.ENGINES, "openrouter", lambda ctx, cfg: Engine(cfg, "k"))
+    text, err = P.speak(env.project, lines=["一句话"])                 # zh-CN: the Mandarin default voice
+    assert err and "stop here" in text and seen[-1]["voice"] == "longanlufeng" and seen[-1]["locale"] == "zh-CN"
+    env.config(locale="en")
+    text, err = P.speak(env.project, lines=["One line."])
+    assert err and "no voice for locale en" in text and "providers.tts.voice" in text and len(seen) == 1
+    env.config(providers={"tts": {"voice": "Cherry"}})
+    text, err = P.speak(env.project, lines=["One line."])
+    assert err and "stop here" in text and seen[-1]["voice"] == "Cherry"
+    english = Engine({"model": "qwen/q", "voice": "Cherry", "locale": "en"}, "k")
+    chinese = Engine({"model": "qwen/q", "voice": "Cherry", "locale": "zh-CN"}, "k")
+    assert english.identity().endswith("|en") and not chinese.identity().endswith("|zh")
+    assert chinese.identity() == Engine({"model": "qwen/q", "voice": "Cherry"}, "k").identity()   # caches kept
+
+
+def test_speech_body_speaks_the_locales_language_to_the_model():
+    en = OR.speech_body("One line.", {"model": "qwen/qwen-audio-3.0-tts-plus", "voice": "v", "locale": "en"}, 1.10,
+                        emotion="surprised")
+    assert en["instructions"] == "Read this line slower, every word clear, the stress steady; The mood of this " \
+                                 "line: surprised"
+    zh = OR.speech_body("一句话", {"model": "qwen/qwen-audio-3.0-tts-plus", "voice": "v", "locale": "zh-CN"}, 1.10)
+    assert "放慢" in zh["instructions"]
