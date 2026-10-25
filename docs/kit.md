@@ -52,7 +52,7 @@ pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the
 | `fps` | frames per second (the profile's; 30 unless it says otherwise) |
 | `theme` | the theme's colours: `paper`, `ink`, `night`, `snow`, `accent`, `gold`, `good`, `bad`, `muted` (CSS hex) |
 | `width`, `height` | the canvas (1920 × 1080 on the default `landscape` profile, 1080 × 1920 on the vertical ones) |
-| `safe` | the platform's UI-safe area `{x, y, w, h}` in canvas px |
+| `safe` | the safe area `{x, y, w, h}` in canvas px (the platform's UI-safe area, or a title-safe margin) |
 | `progress` | 0..1: the clip's `progress` keyframes if it has them, else how far through the clip it is |
 
 Theme tokens: `paper` light ground, `ink` text on paper, `night` dark ground, `snow` text on night, `accent` the one
