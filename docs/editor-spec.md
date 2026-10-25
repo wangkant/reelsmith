@@ -847,10 +847,15 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
 
 ## 13. render.mjs (node, renderer/scripts)
 
-`node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame...]`, one bundle per call:
+`node scripts/render.mjs film|stills|inspect <resolved.json> <project dir> <out> [frame...] [--option...]`, one
+bundle per call:
 
-- `film`: `<out>` is the mp4 to write (h264 crf 18, yuv420p, BT.709); `stills`: a folder of `still_<frame>.png`;
-  `inspect`: stills plus `inspect.json`.
+- `film`: `<out>` is the mp4 to write (h264 crf 18, yuv420p, BT.709); `--draft` encodes fast (x264 `veryfast`, crf
+  28, JPEG 80 frames), `--scale=S` (0.1-1) renders at that fraction of the canvas (sides rounded to even) and
+  `--range=A-B` renders frames A to B only. `stills`: a folder of `still_<frame>.png`; `inspect`: stills plus
+  `inspect.json`. A call takes at most 600 frames; the stills render on several pages of one browser at once, each
+  with its own local server (`REELSMITH_STILL_WORKERS`, default up to 4 by the CPU count), and the result's
+  `workers` says how many.
 - The public dir is the project dir. Webpack aliases `@reelsmith/kit` → `renderer/src/kit` and `@library` → the
   folder in `REELSMITH_LIBRARY` (reelsmith sets it to the workspace's `library/components`; an empty folder when
   unset). The import guard enforces section 6.
@@ -974,6 +979,7 @@ profile by `check`).
 | `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace) |
 | `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
+| `REELSMITH_STILL_WORKERS` | how many stills render.mjs renders at once (1-8; default: up to 4 by the CPU count) |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
 | `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
