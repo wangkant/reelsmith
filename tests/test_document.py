@@ -237,12 +237,12 @@ def test_clips_past_the_end_warn(demo):
 
 def test_component_checks(demo):
     data = raw(demo)
-    clip(data, "verdict")["props"] = {"text": "太长了不能盖章啊", "at": "line:99", "colour": "red"}
+    clip(data, "verdict")["props"] = {"text": "WAY TOO LONG A VERDICT", "at": "line:99", "colour": "red"}
     clip(data, "count")["name"] = "Counter"
     clip(data, "bill")["props"]["rows"][0]["at"] = "line:7"           # after the clip ends
     issues = issues_of(demo, data)
     assert find(issues, "error", "clip verdict", "props: unknown prop(s) colour")
-    assert find(issues, "error", "clip verdict", "props.text: 8 characters; at most 6")
+    assert find(issues, "error", "clip verdict", "props.text: 22 characters; at most 12")
     assert find(issues, "error", "clip verdict.props.at", "line:99 is past the voice")
     assert find(issues, "error", "clip count.name", "no component 'Counter'; there are: Arrow, BarCompare")
     assert find(issues, "warning", "clip bill.props.rows[0].at", "after the clip ends")
@@ -479,10 +479,10 @@ def test_library_shadows_presets_and_reports_broken_metas(tmp_path):
 def test_validate_props_messages():
     comps = L.components(FIXTURE)
     receipt = comps["Receipt"]
-    rows = L.validate_props(receipt, {"rows": [{"label": "x" * 20, "value": 1, "foo": 2}], "bar": 1})
+    rows = L.validate_props(receipt, {"rows": [{"label": "x" * 40, "value": 1, "foo": 2}], "bar": 1})
     assert rows[0] == "props: unknown prop(s) bar; allowed: header, rows, title, total"
     assert "props.rows[0]: unknown prop(s) foo; allowed: at, label, sub, tone, value" in rows
-    assert "props.rows[0].label: 20 characters; at most 14" in rows
+    assert "props.rows[0].label: 40 characters; at most 28" in rows
     assert L.validate_props(receipt, []) == ["props must be an object"]
     assert L.validate_props(comps["Arrow"], {"label_pos": "middle"}) == [
         "props.label_pos: 'middle' is not one of 'start', 'end'"]
