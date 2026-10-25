@@ -125,6 +125,7 @@ class Asset(_M):
     site: str = ""
     url: str = ""
     note: str = ""
+    transcript: Optional[str] = None        # assets/<id>.transcript.json (transcribe)
 
 
 class Filter(_M):
@@ -600,6 +601,44 @@ def _voice_audio(root: Path, voice_json: Path, name) -> tuple[Path | None, str |
     return None, None
 
 
+# ------------------------------------------------------------------ transcripts
+_TRANSCRIPTS: dict[tuple, dict | None] = {}
+
+
+def load_transcript(project, asset: Asset) -> dict | None:
+    """The asset's transcript ({"words": [{"word", "start", "end"}], "language", ...}, source seconds); None when the
+    asset has none or the file is missing or unreadable."""
+    if not asset.transcript:
+        return None
+    root = project_root(project)
+    path = (root / asset.transcript).resolve()
+    if root.resolve() not in path.parents:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _TRANSCRIPTS:
+        _TRANSCRIPTS[key] = _read_transcript(path)
+    return _TRANSCRIPTS[key]
+
+
+def _read_transcript(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("words"), list):
+        return None
+    words = []
+    for w in data["words"]:
+        if isinstance(w, dict) and isinstance(w.get("word"), str) and _num(w.get("start")) and _num(w.get("end")) \
+                and w["word"].strip() and 0 <= w["start"] <= w["end"]:
+            words.append({"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"])})
+    return {**data, "words": sorted(words, key=lambda w: w["start"])}
+
+
 # ------------------------------------------------------------------ profile, theme, timing
 def profile_of(project, doc: Document) -> Profile:
     """project profile, else the workspace's, else douyin; ValueError for an unknown name."""
@@ -764,6 +803,17 @@ class _Check:
                 self.add("warning", where, f"unusual file type {ext or '(none)'} for a {a.kind}")
             if a.kind != "evidence" and (a.box or a.site or a.url):
                 self.add("warning", where, "box, site and url only mean something on evidence assets")
+            self.transcript_file(aid, a)
+
+    def transcript_file(self, aid: str, a) -> None:
+        if a.transcript is None:
+            return
+        where = f"assets.{aid}.transcript"
+        if a.kind not in ("video", "audio"):
+            self.add("warning", where, f"a transcript only means something on video and audio assets ({aid} is "
+                                       f"{a.kind})")
+        if load_transcript(self.root, a) is None:
+            self.add("warning", where, f"{a.transcript} is missing or unreadable: transcribe {aid} again")
 
     # times
     def time(self, value, where: str) -> float | None:
