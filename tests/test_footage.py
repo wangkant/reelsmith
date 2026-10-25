@@ -98,6 +98,52 @@ def test_probe_takes_a_project_file_and_refuses_outside_files(ws, tmp_path):
     assert not r.ok and "no asset or file 'nope'" in r and "two" in r
 
 
+def test_asset_entries_cannot_lead_out_of_the_project(ws, tmp_path):
+    victim = tmp_path / "victim"
+    (victim / "frames").mkdir(parents=True)
+    (victim / "frames" / "keep.txt").write_text("mine", encoding="utf-8")
+    (victim / "private.mp4").write_bytes((ws.project / "assets" / "two.mp4").read_bytes())
+    data = raw(ws.project)
+    data["assets"].update({
+        "../../../../victim": {"path": "assets/two.mp4", "kind": "video"},     # the key would name the stills folder
+        str(victim): {"path": "assets/two.mp4", "kind": "video"},
+        "leak": {"path": "../../../victim/private.mp4", "kind": "video"},
+        "far": {"path": str(victim / "private.mp4"), "kind": "video"}})
+    (ws.project / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    for name in ("../../../../victim", str(victim)):
+        for call in (lambda: tools.frames(str(ws.project), name, n=2), lambda: tools.scenes(str(ws.project), name)):
+            r = call()
+            assert not r.ok and "must be 1-64 letters" in r, r
+    for name in ("leak", "far"):
+        for call in (lambda: tools.probe(str(ws.project), name), lambda: tools.frames(str(ws.project), name, n=2),
+                     lambda: tools.silences(str(ws.project), name), lambda: tools.transcribe(str(ws.project), name)):
+            r = call()
+            assert not r.ok and "outside the project folder" in r, r
+    assert (victim / "frames" / "keep.txt").read_text(encoding="utf-8") == "mine"
+    assert sorted(p.name for p in victim.iterdir()) == ["frames", "private.mp4"]
+    rows = tools.assets(str(ws.project))
+    assert "leak  video  ../../../victim/private.mp4  OUTSIDE the project folder" in rows
+    assert "OUTSIDE THE PROJECT FOLDER" in tools.describe(str(ws.project))
+
+
+def test_stills_folder_behind_a_link_is_refused(ws, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "footage" / "two" / "frames").mkdir(parents=True)
+    (elsewhere / "footage" / "two" / "frames" / "keep.txt").write_text("mine", encoding="utf-8")
+    link = ws.project / "build"
+    if sys.platform == "win32":
+        import _winapi
+        _winapi.CreateJunction(str(elsewhere), str(link))
+    else:
+        link.symlink_to(elsewhere, target_is_directory=True)
+    try:
+        r = tools.frames(str(ws.project), "two", n=2)
+        assert not r.ok and "outside the project folder" in r, r
+        assert (elsewhere / "footage" / "two" / "frames" / "keep.txt").is_file()
+    finally:
+        link.unlink() if link.is_symlink() else link.rmdir()
+
+
 # ------------------------------------------------------------------ frames
 def test_frames_at_source_times_with_a_contact_sheet(ws):
     r = tools.frames(str(ws.project), "two", [0.5, "0:02.0"])

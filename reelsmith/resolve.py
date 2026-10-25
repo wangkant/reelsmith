@@ -21,7 +21,7 @@ from . import document as D
 from . import library, locales
 from . import timeexpr as T
 from .issues import Issue
-from .workspace import WorkspaceError, find_workspace, project_paths, project_root
+from .workspace import WorkspaceError, find_workspace, project_file, project_paths, project_root
 
 PHRASE_MIN = 4
 _BREAK = re.compile(r"(?:[，。！？；：、!?;:…\n]|(?<!\d)[.,]|[.,](?!\d))+")
@@ -1351,9 +1351,11 @@ class _Window:
     def asset_rows(self) -> list[str]:
         rows = [f"assets ({len(self.doc.assets)}):"]
         for aid, a in self.doc.assets.items():
-            path = self.root / a.path
+            path = project_file(self.root, a.path)        # nothing outside the project is opened
             facts = []
-            if not path.is_file():
+            if path is None:
+                facts.append("OUTSIDE THE PROJECT FOLDER")
+            elif not path.is_file():
                 facts.append("FILE MISSING")
             elif a.kind in ("image", "evidence"):
                 size = image_size(path)

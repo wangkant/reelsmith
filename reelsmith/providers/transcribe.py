@@ -20,9 +20,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import (Context, EditRefused, ProviderError, _apply_or_write, context, exe, number, read_project, redact,
-                     rel, run_tree, safe_tool, tail, write_json)
-from .footage import facts, silent_ranges
+from .config import (Context, EditRefused, ProviderError, _apply_or_write, check_id, context, exe, number, read_project,
+                     redact, rel, run_tree, safe_tool, tail, write_json)
+from .footage import asset_file, facts, silent_ranges
 
 SAMPLE_RATE = 16000
 MP3_RATE = "32k"                # speech at 16 kHz: about 14 MB an hour
@@ -262,10 +262,8 @@ def _asset(ctx: Context, asset_id) -> tuple[str, dict, Path]:
         raise ProviderError(f"no asset {aid!r} (assets: {known}): import_asset the recording first")
     if entry.get("kind") not in ("video", "audio"):
         raise ProviderError(f"asset {aid!r} is {entry.get('kind')}: only video and audio assets can be transcribed")
-    path = (ctx.project / str(entry.get("path") or "")).resolve()
-    if not path.is_file():
-        raise ProviderError(f"asset {aid!r} points at {entry.get('path')}, which is missing")
-    return aid, entry, path
+    check_id(aid, "asset id")
+    return aid, entry, asset_file(ctx, aid, entry)
 
 
 def _estimate(cfg: dict, seconds: float) -> float:

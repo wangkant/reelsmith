@@ -541,7 +541,9 @@ two budget values for one process.
 ### 9.7 Footage tools: probe, frames, scenes, silences
 
 They look at a source (an asset id, or a file inside the project folder; anything else is refused) and change
-nothing in project.json. Times are **source seconds**; `"src:<clip>@<seconds>"` (section 3.1) puts one on the
+nothing in project.json. An asset id must be a valid id, and an asset whose `path` is absolute or leads out of the
+project folder (`..`, a link) is refused before anything is opened, as is a `build/footage` that leads out (`transcribe`,
+`assets` and `describe` hold asset paths to the same rule). Times are **source seconds**; `"src:<clip>@<seconds>"` (section 3.1) puts one on the
 timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 
 - `probe(project, source)`: container, duration, size and bit rate; the first picture stream's codec, width,

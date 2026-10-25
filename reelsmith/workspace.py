@@ -332,6 +332,18 @@ class ProjectPaths:
         return {k: str(v) for k, v in asdict(self).items()}
 
 
+def project_file(root: str | Path, rel) -> Path | None:
+    """The real path of `rel` (a path from project.json) when it stays inside the project folder `root`, else None.
+    Absolute, drive and UNC paths are refused before anything is opened (a UNC path would reach the network)."""
+    text = str(rel or "")
+    p = Path(text)
+    if not text.strip() or p.is_absolute() or p.drive or p.root or text.startswith(("/", "\\")):
+        return None
+    base = Path(root).resolve()
+    full = (base / p).resolve()
+    return full if base in full.parents else None
+
+
 def project_paths(project: str | Path) -> ProjectPaths:
     root = project_root(project)
     build, out, voice = root / "build", root / "out", root / "voice"
