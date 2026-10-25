@@ -96,7 +96,8 @@ def test_tracks_and_clips_match_types_ts(resolved):
         assert set(item) == ts_fields("CaptionItem")
         assert all(set(r) == ts_fields("Run") for r in item["runs"])
     for a in resolved["audio"]:
-        assert set(a) == ts_fields("AudioItem")                        # loop included
+        optional = {"volumeKeys", "duck"}                               # only when the clip has them
+        assert set(a) - optional == ts_fields("AudioItem") - optional    # loop included
 
 
 def test_text_style_and_nested_shapes_match_types_ts(resolved):

@@ -24,9 +24,11 @@ from .profiles import THEMES, Profile, choose
 from .workspace import BUILTIN_FONTS, PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
 KEYFRAME_PROPS = ("x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "zoom", "pan_x", "pan_y",
-                  "progress")
+                  "progress", "volume")
 EASES = ("linear", "in", "out", "inOut", "spring", "step")
 PRESETS = ("fade", "rise", "drop", "pop", "wipe_left", "wipe_up", "zoom")
+CUTS = ("crossfade", "dip_black", "dip_white", "wipe_left", "wipe_right", "wipe_up", "slide_left", "zoom")
+SOUNDING = ("video", "audio")       # clip types with a sound of their own
 MOTIONS = ("push", "pull", "pan_left", "pan_right", "rise", "still")
 BLENDS = ("normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light",
           "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "plus-lighter")
@@ -83,6 +85,13 @@ def _box_tag(v):
     return "name" if isinstance(v, str) else "box"
 
 
+def _caption_source(v):
+    if v == "voice" or (isinstance(v, str) and v.startswith("clip:") and ID.match(v[5:])):
+        return v
+    raise PydanticCustomError("source_type", 'should be "voice" or "clip:<id>" (a video or audio clip with a '
+                                             'transcript)')
+
+
 Time = Annotated[Union[float, str], PlainValidator(_time)]
 Size = Annotated[Union[float, str], PlainValidator(_size)]
 Shadow = Annotated[Optional[Union[bool, str]], PlainValidator(_shadow)]
@@ -125,6 +134,7 @@ class Asset(_M):
     site: str = ""
     url: str = ""
     note: str = ""
+    transcript: Optional[str] = None        # assets/<id>.transcript.json (transcribe)
 
 
 class Filter(_M):
@@ -140,6 +150,18 @@ class Transition(_M):
     dur: float = Field(0.4, gt=0, le=10)
 
 
+class Cut(_M):
+    """A clip's transition in from the clip before it on the same track (spec 3.2)."""
+    type: Literal["crossfade", "dip_black", "dip_white", "wipe_left", "wipe_right", "wipe_up", "slide_left", "zoom"]
+    dur: float = Field(0.5, gt=0, le=10)
+
+
+class Duck(_M):
+    under: str = Field(min_length=1)    # a track id, or "voice"
+    to: float = Field(0.25, ge=0, le=1)
+    fade: float = Field(0.3, ge=0, le=5)
+
+
 class Keyframe(_M):
     t: Time
     v: float
@@ -147,7 +169,7 @@ class Keyframe(_M):
 
 
 KeyframeProp = Literal["x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "zoom", "pan_x", "pan_y",
-                       "progress"]
+                       "progress", "volume"]
 
 
 class Stroke(_M):
@@ -218,6 +240,7 @@ class _Visual(_Timed):
     shadow: Shadow = None
     enter: Optional[Transition] = None
     exit: Optional[Transition] = None
+    transition: Optional[Cut] = None
     keyframes: dict[KeyframeProp, list[Keyframe]] = Field(default_factory=dict)
 
 
@@ -282,6 +305,9 @@ class AudioClip(_Timed):
     volume: float = Field(1, ge=0)
     fade_in: float = Field(0, ge=0)
     fade_out: float = Field(0, ge=0)
+    transition: Optional[Cut] = None
+    keyframes: dict[Literal["volume"], list[Keyframe]] = Field(default_factory=dict)
+    duck: Optional[Duck] = None
 
 
 class Override(_M):
@@ -313,7 +339,7 @@ class CaptionsTrack(_M):
     id: str
     kind: Literal["captions"]
     hidden: bool = False
-    source: Literal["voice"] = "voice"
+    source: Annotated[str, PlainValidator(_caption_source)] = "voice"
     box: Optional[BoxValue] = None
     style: Optional[TextStyle] = None
     emphasis: list[str] = Field(default_factory=list)
@@ -334,6 +360,7 @@ class Document(_M):
     meta: Meta = Field(default_factory=Meta)
     voice: Optional[str] = None
     duration: Optional[Time] = None
+    markers: dict[str, Time] = Field(default_factory=dict)
     assets: dict[str, Asset] = Field(default_factory=dict)
     tracks: list[Track] = Field(default_factory=list)
 
@@ -342,6 +369,7 @@ CLIP_MODELS = {"image": ImageClip, "video": VideoClip, "text": TextClip, "shape"
                "evidence": EvidenceClip, "component": ComponentClip, "audio": AudioClip}
 TRACK_MODELS = {"visual": VisualTrack, "audio": AudioTrack, "captions": CaptionsTrack}
 KEY_MODELS = {"style": TextStyle, "enter": Transition, "exit": Transition, "filter": Filter, "highlight": Highlight,
+              "transition": Cut, "duck": Duck,
               "reveal": Reveal, "stroke": Stroke, "bg": Bg, "meta": Meta, "box": Box}
 ITEM_MODELS = {"sources": Source, "overrides": Override, "items": CaptionItem, **{p: Keyframe for p in KEYFRAME_PROPS}}
 
@@ -601,6 +629,44 @@ def _voice_audio(root: Path, voice_json: Path, name) -> tuple[Path | None, str |
     return None, None
 
 
+# ------------------------------------------------------------------ transcripts
+_TRANSCRIPTS: dict[tuple, dict | None] = {}
+
+
+def load_transcript(project, asset: Asset) -> dict | None:
+    """The asset's transcript ({"words": [{"word", "start", "end"}], "language", ...}, source seconds); None when the
+    asset has none or the file is missing or unreadable."""
+    if not asset.transcript:
+        return None
+    root = project_root(project)
+    path = (root / asset.transcript).resolve()
+    if root.resolve() not in path.parents:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _TRANSCRIPTS:
+        _TRANSCRIPTS[key] = _read_transcript(path)
+    return _TRANSCRIPTS[key]
+
+
+def _read_transcript(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("words"), list):
+        return None
+    words = []
+    for w in data["words"]:
+        if isinstance(w, dict) and isinstance(w.get("word"), str) and _num(w.get("start")) and _num(w.get("end")) \
+                and w["word"].strip() and 0 <= w["start"] <= w["end"]:
+            words.append({"word": w["word"].strip(), "start": float(w["start"]), "end": float(w["end"])})
+    return {**data, "words": sorted(words, key=lambda w: w["start"])}
+
+
 # ------------------------------------------------------------------ profile, theme, timing
 def profile_of(project, doc: Document) -> Profile:
     """project profile (a name or inline), else the workspace's, else landscape; ValueError for a bad one."""
@@ -646,9 +712,13 @@ def clips_of(doc: Document) -> Iterator[tuple[Any, Clip]]:
 def schedule(doc: Document, voice: Voice | None) -> T.Schedule:
     clips = {}
     for track, c in clips_of(doc):
-        clips.setdefault(c.id, T.ClipTiming(c.start, c.end, c.dur, counts=not track.hidden))
+        clips.setdefault(c.id, T.ClipTiming(c.start, c.end, c.dur, counts=not track.hidden, kind=c.type,
+                                            trim_in=float(getattr(c, "trim_in", 0.0) or 0.0),
+                                            rate=float(getattr(c, "rate", 1.0) or 1.0),
+                                            loop=bool(getattr(c, "loop", False))))
     lines = [(ln.t0, ln.t1) for ln in voice.lines] if voice else []
-    return T.Schedule(lines, clips, duration=doc.duration, voice_end=voice.end if voice else None)
+    return T.Schedule(lines, clips, duration=doc.duration, voice_end=voice.end if voice else None,
+                      markers=doc.markers)
 
 
 def prop_refs(value, path: str = "props") -> Iterator[tuple[str, str, Any]]:
@@ -700,10 +770,12 @@ class _Check:
         self.issues += issues
         self.assets()
         self.sched = schedule(self.doc, self.voice)
+        self.by_id = {c.id: c for _, c in clips_of(self.doc)}
         try:
             self.film_end = self.sched.film_end()
         except T.TimeError as exc:
             self.add("error", "duration", str(exc))
+        self.markers()
         for track in self.doc.tracks:
             if track.kind == "captions":
                 self.captions(track)
@@ -799,14 +871,60 @@ class _Check:
                 self.add("warning", where, f"unusual file type {ext or '(none)'} for a {a.kind}")
             if a.kind != "evidence" and (a.box or a.site or a.url):
                 self.add("warning", where, "box, site and url only mean something on evidence assets")
+            self.transcript_file(aid, a)
+
+    def transcript_file(self, aid: str, a) -> None:
+        if a.transcript is None:
+            return
+        where = f"assets.{aid}.transcript"
+        if a.kind not in ("video", "audio"):
+            self.add("warning", where, f"a transcript only means something on video and audio assets ({aid} is "
+                                       f"{a.kind})")
+        if load_transcript(self.root, a) is None:
+            self.add("warning", where, f"{a.transcript} is missing or unreadable: transcribe {aid} again")
+
+    def markers(self) -> None:
+        for name, value in self.doc.markers.items():
+            where = f"markers.{name}"
+            if not ID.match(name):
+                self.add("error", where, "marker names are 1-64 letters, digits, _ or - (no spaces or dots)")
+                continue
+            if OFFSET_LIKE.search(name):
+                self.add("error", where, f"marker name {name!r} ends like a time offset (\"mark:{name}\" would read as "
+                                         "minus seconds): rename it")
+            self.time(value, where)
 
     # times
     def time(self, value, where: str) -> float | None:
         try:
-            return T.resolve(value, self.sched)
+            t = T.resolve(value, self.sched)
         except T.TimeError as exc:
             self.add("error", where, str(exc))
             return None
+        self.src_bounds(value, where)
+        return t
+
+    def src_bounds(self, value, where: str) -> None:
+        """A src: Time whose source second the clip does not reach: it resolves, but nothing of it is on screen."""
+        if not isinstance(value, str):
+            return
+        try:
+            e = T.parse(value)
+        except T.TimeError:
+            return
+        c = self.by_id.get(e.ref) if e.anchor == "src" else None
+        if c is None or c.type not in SOUNDING or getattr(c, "loop", False):
+            return
+        try:
+            a, b = self.sched.span(c.id)
+        except T.TimeError:
+            return
+        rate = float(getattr(c, "rate", 1.0) or 1.0)
+        out = c.trim_in + (b - a) * rate
+        if e.at > out + 0.5 / self.fps * rate:
+            self.add("warning", where, f"{value}: source second {e.at:g} is after clip {c.id} ends (it shows source "
+                                       f"{c.trim_in:.2f}-{out:.2f} s): that moment is not in the film; a clip split "
+                                       "or cut by an edit continues under another id")
 
     def frame(self, seconds: float) -> int:
         return T.to_frame(seconds, self.fps)
@@ -826,9 +944,40 @@ class _Check:
             self.in_clip(c.highlight.at, span, f"{where}.highlight.at")
         elif c.type == "audio" and span and c.fade_in + c.fade_out > span[1] - span[0] + 1e-6:
             self.add("warning", where, f"fade_in + fade_out ({c.fade_in + c.fade_out:g} s) are longer than the clip")
-        if c.type != "audio":
-            self.keyframes(c, where, span)
+        self.keyframes(c, where, span)
+        self.cut(c, where, span)
+        if c.type == "audio" and c.duck is not None:
+            self.duck(track, c, where)
         return (c, *span) if span else None
+
+    def cut(self, c, where: str, span) -> None:
+        tr = c.transition
+        if tr is None:
+            return
+        if c.type == "audio" and tr.type != "crossfade":
+            self.add("error", f"{where}.transition", f"audio clips crossfade only (type \"crossfade\"), not "
+                                                     f"{tr.type!r}")
+        if span and tr.dur > span[1] - span[0] + 1e-6:
+            self.add("error", f"{where}.transition", f"the transition ({tr.dur:g} s) is longer than the clip "
+                                                     f"({span[1] - span[0]:.2f} s)")
+        if getattr(c, "enter", None) is not None:
+            self.add("warning", where, "enter and transition both animate its start: the transition is enough")
+
+    def duck(self, track, c, where: str) -> None:
+        under = c.duck.under
+        if under == "voice":
+            if not self.doc.voice:
+                self.add("error", f"{where}.duck.under", "\"voice\" ducks under the narration, and the project has "
+                                                         "none")
+            return
+        target = next((t for t in self.doc.tracks if t.id == under), None)
+        if target is None:
+            known = ", ".join(t.id for t in self.doc.tracks if t.kind != "captions")
+            self.add("error", f"{where}.duck.under", f"no track {under!r}; duck under a track ({known}) or \"voice\"")
+        elif target is track:
+            self.add("error", f"{where}.duck.under", "a clip cannot duck under its own track")
+        elif target.kind == "captions":
+            self.add("error", f"{where}.duck.under", f"{under} is a captions track and makes no sound")
 
     def span(self, c, where: str) -> tuple[float, float] | None:
         try:
@@ -836,6 +985,8 @@ class _Check:
         except T.TimeError as exc:
             self.add("error", where, str(exc))
             return None
+        self.src_bounds(c.start, f"{where}.start")
+        self.src_bounds(c.end, f"{where}.end")
         if b <= a + 1e-9:
             self.add("error", where, f"ends at {b:.2f} s, not after its start ({a:.2f} s): end must be later than "
                                      "start")
@@ -895,6 +1046,11 @@ class _Check:
 
     def keyframes(self, c, where: str, span) -> None:
         for prop, frames in c.keyframes.items():
+            if prop == "volume" and c.type not in SOUNDING:
+                self.add("error", f"{where}.keyframes.volume", f"volume keyframes are for video and audio clips (a "
+                                                               f"{c.type} clip makes no sound)")
+            elif prop == "volume" and any(k.v < 0 for k in frames):
+                self.add("error", f"{where}.keyframes.volume", "a volume is 0 (silent) or more")
             for n, k in enumerate(frames):
                 self.in_clip(k.t, span, f"{where}.keyframes.{prop}[{n}]")
         motion = getattr(c, "motion", None)
@@ -936,22 +1092,40 @@ class _Check:
 
     # tracks
     def overlaps(self, track, spans: list[tuple]) -> None:
+        """Clips on a track must not overlap, except a clip with a transition over the clip just before it, by at most
+        the transition's dur."""
         rows = sorted(((self.frame(a), self.frame(b), c, a, b) for c, a, b in spans), key=lambda r: (r[0], r[1]))
-        last = None
-        for row in rows:
-            if last is not None and row[0] < last[1]:
-                _, _, c1, a1, b1 = last
-                _, _, c2, a2, b2 = row
+        for i, row in enumerate(rows):
+            _, fb2, c2, a2, b2 = row
+            tr = c2.transition
+            if i and tr is not None:
+                fa1, fb1, c1, a1, b1 = rows[i - 1]
+                if fb1 >= row[0] and tr.dur > b1 - a1 + 1e-6:
+                    self.add("error", f"clip {c2.id}.transition", f"the transition ({tr.dur:g} s) is longer than clip "
+                                                                  f"{c1.id} it comes from ({b1 - a1:.2f} s)")
+            for j, prev in enumerate(rows[:i]):
+                fa1, fb1, c1, a1, b1 = prev
+                if fb1 <= row[0]:
+                    continue
+                over = min(b1, b2) - a2
+                if j == i - 1 and tr is not None and fb2 > fb1:
+                    if over > tr.dur + 0.5 / self.fps:
+                        self.add("error", f"track {track.id}",
+                                 f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "
+                                 f"{over:.2f} s, more than {c2.id}'s transition ({tr.dur:g} s): a clip may overlap "
+                                 "the clip before it by at most its transition's dur")
+                    continue
                 self.add("error", f"track {track.id}",
                          f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "
-                         f"{min(b1, b2) - a2:.2f} s: clips on one track must not overlap; trim or move one, or put it "
+                         f"{over:.2f} s: clips on one track must not overlap; trim or move one, or put it "
                          "on another track")
-            if last is None or row[1] > last[1]:
-                last = row
 
     def captions(self, track) -> None:
         where = f"track {track.id}"
         self.font(track.style, where)
+        if track.items is None and track.source != "voice":
+            self.transcript_source(track, where)
+            return
         if track.items is not None:
             for n, it in enumerate(track.items):
                 w = f"{where}.items[{n}]"
@@ -975,6 +1149,34 @@ class _Check:
             if o.line in lines_seen:
                 self.add("warning", w, f"line {o.line} is overridden twice; the last one wins")
             lines_seen.add(o.line)
+
+
+    def transcript_source(self, track, where: str) -> None:
+        cid = track.source[5:]
+        c = self.by_id.get(cid)
+        if c is None:
+            self.add("error", f"{where}.source", f"no clip {cid!r}: captions from a transcript name the video or audio "
+                                                 "clip that plays it")
+            return
+        if c.type not in SOUNDING:
+            self.add("error", f"{where}.source", f"clip {cid} is a {c.type} clip; captions follow the transcript of a "
+                                                 "video or audio clip")
+            return
+        if getattr(c, "loop", False):
+            self.add("error", f"{where}.source", f"clip {cid} loops, so its words would repeat: captions from a "
+                                                 "transcript need a clip that plays its source once")
+        a = self.doc.assets.get(c.asset)
+        if a is None:
+            return                              # the clip's own asset error says it
+        if not a.transcript:
+            self.add("error", f"{where}.source", f"asset {c.asset} (played by clip {cid}) has no transcript: "
+                                                 f"transcribe {c.asset} first")
+        elif load_transcript(self.root, a) is None:
+            self.add("error", f"{where}.source", f"the transcript of asset {c.asset} ({a.transcript}) is missing or "
+                                                 f"unreadable: transcribe {c.asset} again")
+        if track.overrides:
+            self.add("warning", f"{where}.overrides", "overrides change voice lines; captions from a transcript take "
+                                                      "none (give items to write them by hand)")
 
 
 def validate(project, doc: Document | dict) -> list[Issue]:

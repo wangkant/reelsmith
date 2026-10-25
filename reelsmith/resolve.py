@@ -624,6 +624,159 @@ def caption_items(track: D.CaptionsTrack, voice: D.Voice | None, sched: T.Schedu
     return items
 
 
+# ------------------------------------------------------------------ captions from a transcript
+PAUSE_S = 0.5                   # a pause this long between words ends a phrase
+HOLD_S = 1.0                    # a phrase stays up until the next one across a gap shorter than this
+TAIL_S = 0.3                    # ... else this long after its last word
+_SENTENCE_END = tuple(".?!…。？！")
+_CLAUSE_END = tuple(",;:，；：、")
+_NO_SPACE_BEFORE = set(",.!?;:%)]}'’”…。，！？；：、）】」』")
+_NO_SPACE_AFTER = set("([{‘“（【「『")
+
+
+def _unspaced(ch: str) -> bool:
+    """Scripts written without spaces between words: CJK, kana, Thai, Lao, Khmer, Myanmar, fullwidth forms."""
+    o = ord(ch)
+    return (0x3000 <= o <= 0x30FF or 0x3400 <= o <= 0x4DBF or 0x4E00 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF
+            or 0xFF00 <= o <= 0xFFEF or 0x0E00 <= o <= 0x0EFF or 0x1780 <= o <= 0x17FF or 0x1000 <= o <= 0x109F)
+
+
+def join_words(words: list[str]) -> str:
+    """Transcript words as text: spaced between words of spaced scripts, not around CJK or punctuation."""
+    out = ""
+    for w in words:
+        if out and not (w[0] in _NO_SPACE_BEFORE or out[-1] in _NO_SPACE_AFTER or _unspaced(out[-1])
+                        or _unspaced(w[0])):
+            out += " "
+        out += w
+    return out
+
+
+def transcript_phrases(words: list[dict], max_chars: int) -> list[list[dict]]:
+    """Words ({"word", "a", "b"} film seconds) grouped into caption phrases by their timing: a pause, the end of a
+    sentence, a clause end past half the length, or max_chars ends one; a short phrase joins the one before it."""
+    phrases: list[list[dict]] = []
+    cur: list[dict] = []
+    for w in words:
+        if cur:
+            prev = cur[-1]
+            long = len(join_words([x["word"] for x in cur + [w]])) > max_chars
+            said = len(join_words([x["word"] for x in cur]))
+            if (w["a"] - prev["b"] >= PAUSE_S or long or prev["word"].endswith(_SENTENCE_END)
+                    or (prev["word"].endswith(_CLAUSE_END) and said >= max_chars // 2)):
+                phrases.append(cur)
+                cur = []
+        cur.append(w)
+    if cur:
+        phrases.append(cur)
+    merged: list[list[dict]] = []
+    for ph in phrases:
+        text = join_words([x["word"] for x in ph])
+        if merged:
+            last = merged[-1]
+            both = join_words([x["word"] for x in last + ph])
+            if (len(text) < PHRASE_MIN and len(both) <= max_chars and ph[0]["a"] - last[-1]["b"] < PAUSE_S
+                    and not last[-1]["word"].endswith(_SENTENCE_END)):
+                last.extend(ph)
+                continue
+        merged.append(ph)
+    return merged
+
+
+def transcript_clips(doc: D.Document, track: D.CaptionsTrack) -> tuple[list, D.Asset | None]:
+    """The clips a "clip:<id>" captions track follows: that clip and every other clip on its track playing the same
+    asset with sound (the pieces an edit cut it into; a muted reuse is not heard), with the asset."""
+    cid = track.source[5:] if track.source.startswith("clip:") else ""
+    for t in doc.tracks:
+        for c in getattr(t, "clips", None) or []:
+            if c.id == cid and c.type in D.SOUNDING:
+                same = [x for x in t.clips if x.type == c.type and x.asset == c.asset and not getattr(x, "loop", False)
+                        and (x is c or sounds(x))]
+                return same, doc.assets.get(c.asset)
+    return [], None
+
+
+def transcript_items(root, doc: D.Document, track: D.CaptionsTrack, sched: T.Schedule, fps: float) -> list[dict]:
+    """Caption items from the transcript of the track's source clip: each word placed through the clip that plays it
+    (start, trim_in, rate; words its trim cuts away are dropped), phrase-split by timing."""
+    clips, asset = transcript_clips(doc, track)
+    transcript = D.load_transcript(root, asset) if asset is not None else None
+    if not clips or transcript is None:
+        return []
+    words = []
+    for c in clips:
+        try:
+            a, b = sched.span(c.id)
+        except T.TimeError:
+            continue
+        rate = float(getattr(c, "rate", 1.0) or 1.0)
+        trim = float(c.trim_in or 0.0)
+        out = trim + (b - a) * rate
+        for w in transcript["words"]:
+            mid = (w["start"] + w["end"]) / 2
+            if trim <= mid <= out:
+                words.append({"word": w["word"], "a": a + (max(w["start"], trim) - trim) / rate,
+                              "b": a + (min(w["end"], out) - trim) / rate, "clip_end": b})
+    words.sort(key=lambda w: w["a"])
+    items = []
+    phrases = transcript_phrases(words, track.max_chars)
+    for n, ph in enumerate(phrases):
+        start, end, stop = ph[0]["a"], ph[-1]["b"], ph[-1]["clip_end"]
+        nxt = phrases[n + 1][0]["a"] if n + 1 < len(phrases) else None
+        if nxt is not None and nxt - end < HOLD_S:
+            end = nxt
+        else:
+            end = min(end + TAIL_S, nxt if nxt is not None else end + TAIL_S)
+        end = min(end, stop)
+        fa, fb = T.to_frame(start, fps), T.to_frame(end, fps)
+        if fb > fa:
+            items.append({"from": fa, "to": fb, "runs": text_runs(join_words([w["word"] for w in ph]),
+                                                                  track.emphasis)})
+    return items
+
+
+# ------------------------------------------------------------------ sound: volume curves, crossfades, ducking
+def sounds(clip) -> bool:
+    """A clip that makes sound: an audio clip, or a video clip with volume or volume keyframes above 0."""
+    if clip.type == "audio":
+        return True
+    if clip.type != "video":
+        return False
+    keys = clip.keyframes.get("volume") or []
+    return clip.volume > 0 or any(k.v > 0 for k in keys)
+
+
+def _merge(ranges: list[tuple[float, float]], gap: float) -> list[tuple[float, float]]:
+    out: list[list[float]] = []
+    for a, b in sorted(ranges):
+        if out and a - out[-1][1] <= gap:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def duck_ranges(doc: D.Document, voice: D.Voice | None, sched: T.Schedule, under: str,
+                fade: float) -> list[tuple[float, float]]:
+    """Film seconds where the duck's target makes sound: the narration's lines, or the extents of a track's sounding
+    clips (an approximation: a clip counts as sound from its start to its end). Gaps up to 2 x fade are bridged so a
+    bed does not pump between phrases."""
+    ranges = []
+    if under == "voice":
+        ranges = [(ln.t0, ln.t1) for ln in voice.lines] if voice else []
+    else:
+        target = next((t for t in doc.tracks if t.id == under), None)
+        if target is None or target.hidden:
+            return []
+        for c in getattr(target, "clips", None) or []:
+            if sounds(c):
+                try:
+                    ranges.append(sched.span(c.id))
+                except T.TimeError:
+                    continue
+    return _merge([r for r in ranges if r[1] > r[0]], 2 * fade)
+
+
 # ------------------------------------------------------------------ resolving
 class _Resolver:
     def __init__(self, project):
@@ -683,13 +836,16 @@ class _Resolver:
         for track in self.doc.tracks:
             if track.kind == "visual":
                 clips = [rc for c in track.clips if (rc := self.clip(track, c)) is not None]
+                self.cuts(track, clips)
                 tracks.append({"id": track.id, "kind": "visual", "hidden": track.hidden, "clips": clips})
             elif track.kind == "captions":
                 tracks.append(self.captions(track))
             else:
                 tracks.append({"id": track.id, "kind": "audio", "hidden": track.hidden})
                 if not track.hidden:
-                    audio += [a for c in track.clips if (a := self.audio_clip(c)) is not None]
+                    items = [a for c in track.clips if (a := self.audio_clip(c)) is not None]
+                    self.cuts(track, items)
+                    audio += items
         return {"version": 2, "fps": self.fps, "width": p.width, "height": p.height,
                 "durationInFrames": self.frames, "safe": {"x": p.safe.x, "y": p.safe.y, "w": p.safe.w, "h": p.safe.h},
                 "theme": D.theme_of(self.root, self.doc), "fonts": project_fonts(self.root), "tracks": tracks,
@@ -717,7 +873,8 @@ class _Resolver:
                  "shadow": c.shadow}
         return {"id": c.id, "type": c.type, "track": track.id, "from": start, "dur": dur, "box": box,
                 "style": D._ints(style), "keyframes": self.keyframes(c, start, dur, box),
-                "enter": self.transition(c.enter), "exit": self.transition(c.exit), "content": D._ints(content)}
+                "enter": self.transition(c.enter), "exit": self.transition(c.exit), "content": D._ints(content),
+                "transition": None, "transitionOut": None}
 
     def transition(self, t) -> dict | None:
         return {"preset": t.preset, "dur": max(1, self.frame(t.dur))} if t else None
@@ -737,14 +894,20 @@ class _Resolver:
                 out[prop] = [{"f": 0 if k["t"] == 0 else max(1, dur - 1), "v": k["v"], "ease": k.get("ease") or "linear"}
                              for k in frames]
         for prop, frames in c.keyframes.items():
-            rows = []
-            for k in frames:
-                f = self.rel_frame(k.t, start)
-                if f is not None:
-                    rows.append({"f": f, "v": k.v, "ease": k.ease or "linear"})
+            if prop == "volume":                # a sound curve, not a picture property: content.volumeKeys
+                continue
+            rows = self.frame_keys(frames, start)
             if rows:
-                out[prop] = sorted(rows, key=lambda r: r["f"])
+                out[prop] = rows
         return D._ints(out)
+
+    def frame_keys(self, frames, start: int) -> list[dict]:
+        rows = []
+        for k in frames:
+            f = self.rel_frame(k.t, start)
+            if f is not None:
+                rows.append({"f": f, "v": k.v, "ease": k.ease or "linear"})
+        return sorted(rows, key=lambda r: r["f"])
 
     def content(self, c, start: int) -> dict | None:
         if c.type in ("image", "video", "evidence"):
@@ -754,8 +917,11 @@ class _Resolver:
         if c.type == "image":
             return {"src": ref["src"], "size": ref.get("size"), "fit": c.fit, "focus": c.focus}
         if c.type == "video":
-            return {"src": ref["src"], "duration": ref.get("duration"), "trimIn": self.frame(c.trim_in),
-                    "rate": c.rate, "loop": c.loop, "fit": c.fit, "focus": c.focus, "volume": c.volume}
+            out = {"src": ref["src"], "duration": ref.get("duration"), "trimIn": self.frame(c.trim_in),
+                   "rate": c.rate, "loop": c.loop, "fit": c.fit, "focus": c.focus, "volume": c.volume}
+            if c.keyframes.get("volume"):
+                out["volumeKeys"] = D._ints(self.frame_keys(c.keyframes["volume"], start))
+            return out
         if c.type == "text":
             reveal = {"mode": c.reveal.mode, "dur": c.reveal.dur} if c.reveal else None
             return {"runs": text_runs(c.text), "style": text_style(c.style, self.profile.scale), "reveal": reveal}
@@ -787,19 +953,63 @@ class _Resolver:
     def captions(self, track: D.CaptionsTrack) -> dict:
         c = self.profile.captions
         box = self.box(track.box) if track.box is not None else {"x": c.x, "y": c.y, "w": c.w, "h": c.h}
+        track = caption_track(track, self.locale)
+        if track.items is None and track.source != "voice":
+            items = transcript_items(self.root, self.doc, track, self.sched, self.fps)
+        else:
+            items = caption_items(track, self.voice, self.sched, self.fps, self.words)
         return {"id": track.id, "kind": "captions", "hidden": track.hidden, "box": box,
-                "style": caption_style(track.style),
-                "items": caption_items(caption_track(track, self.locale), self.voice, self.sched, self.fps,
-                                       self.words)}
+                "style": caption_style(track.style), "items": items}
 
     def audio_clip(self, c: D.AudioClip) -> dict | None:
         span = self.span(c)
         ref = self.asset_ref(c.asset)
         if span is None or ref is None:
             return None
-        return {"id": c.id, "src": ref["src"], "from": span[0], "dur": span[1], "trimIn": self.frame(c.trim_in),
-                "volume": D._ints(c.volume), "fadeIn": self.frame(c.fade_in), "fadeOut": self.frame(c.fade_out),
-                "loop": c.loop}
+        out = {"id": c.id, "src": ref["src"], "from": span[0], "dur": span[1], "trimIn": self.frame(c.trim_in),
+               "volume": D._ints(c.volume), "fadeIn": self.frame(c.fade_in), "fadeOut": self.frame(c.fade_out),
+               "loop": c.loop}
+        if c.keyframes.get("volume"):
+            out["volumeKeys"] = D._ints(self.frame_keys(c.keyframes["volume"], span[0]))
+        if c.duck is not None:
+            out["duck"] = self.duck(c.duck, span)
+        return out
+
+    def duck(self, duck: D.Duck, span: tuple[int, int]) -> list[dict]:
+        """The duck's ranges in frames from the item's start, kept where they reach it (fades included)."""
+        fade = self.frame(duck.fade)
+        out = []
+        for a, b in duck_ranges(self.doc, self.voice, self.sched, duck.under, duck.fade):
+            fa, fb = self.frame(a) - span[0], self.frame(b) - span[0]
+            if fb + fade > 0 and fa - fade < span[1]:
+                out.append({"start": fa, "end": fb, "level": D._ints(duck.to), "fade": fade})
+        return out
+
+    def cuts(self, track, items: list[dict]) -> None:
+        """Transitions between neighbours on one track: the incoming clip (visual) gets `transition`, the clip it
+        comes from `transitionOut` where they overlap; sound crossfades (audio items, and video clips with sound)
+        through fadeIn / fadeOut over the same frames."""
+        models = {c.id: c for c in track.clips}
+        rows = sorted(items, key=lambda r: (r["from"], r["dur"]))
+        for prev, cur in zip([None] + rows[:-1], rows):
+            tr = models[cur["id"]].transition
+            if tr is None:
+                continue
+            dur = max(1, self.frame(tr.dur))
+            over = prev["from"] + prev["dur"] - cur["from"] if prev is not None else 0
+            if track.kind == "visual":
+                cur["transition"] = {"type": tr.type, "dur": dur, "from": prev["id"] if prev is not None else None}
+                if over > 0:
+                    prev["transitionOut"] = {"type": tr.type, "dur": dur, "at": cur["from"] - prev["from"],
+                                             "to": cur["id"]}
+                sound_in = cur["content"] if sounds(models[cur["id"]]) else None
+                sound_out = prev["content"] if prev is not None and over > 0 and sounds(models[prev["id"]]) else None
+            else:
+                sound_in, sound_out = cur, (prev if over > 0 else None)
+            if sound_in is not None:
+                sound_in["fadeIn"] = max(int(sound_in.get("fadeIn") or 0), dur)
+            if sound_out is not None:
+                sound_out["fadeOut"] = max(int(sound_out.get("fadeOut") or 0), min(over, prev["dur"]))
 
 
 def _style_value(v):
@@ -970,6 +1180,14 @@ def _clip_summary(c, doc: D.Document) -> str:
     elif c.type == "audio":
         bits.append(f"vol {c.volume:g}" + (" loop" if c.loop else ""))
         bits += [f"{k} {v:g}s" for k, v in (("fade_in", c.fade_in), ("fade_out", c.fade_out)) if v]
+        if c.trim_in:
+            bits.append(f"trim {c.trim_in:g}s")
+        if c.keyframes.get("volume"):
+            bits.append(f"vol kf({len(c.keyframes['volume'])})")
+        if c.duck is not None:
+            bits.append(f"ducks under {c.duck.under} to {c.duck.to:g} (fade {c.duck.fade:g}s)")
+    if getattr(c, "transition", None) is not None:
+        bits.append(f"transition {c.transition.type} {c.transition.dur:g}s")
     if c.type != "audio":
         if c.opacity != 1:
             bits.append(f"opacity {c.opacity:g}")
@@ -1052,7 +1270,16 @@ class _Window:
         theme = D.theme_of(self.root, self.doc)
         rows.append(f"theme {theme.get('name', 'paper')} (a colour may name a token): "
                     + ", ".join(f"{k} {theme[k]}" for k in D.THEME_TOKENS if k in theme))
+        if self.doc.markers:
+            rows.append("markers (\"mark:NAME\"): " + ", ".join(self.marker(k, v) for k, v in self.doc.markers.items()))
         return rows
+
+    def marker(self, name: str, value) -> str:
+        try:
+            t = f"{T.resolve(value, self.sched):.2f}"
+        except T.TimeError:
+            t = "?"
+        return f"{name} {t}" + ("" if T.is_number(value) else f" ({value})")
 
     def voice_rows(self) -> list[str]:
         if not self.doc.voice:
@@ -1083,6 +1310,12 @@ class _Window:
         bits = []
         if t.items is not None:
             bits.append(f"{len(t.items)} item(s) given")
+        elif t.source != "voice":
+            clips, asset = transcript_clips(self.doc, t)
+            n = len(transcript_items(self.root, self.doc, t, self.sched, self.fps))
+            via = ", ".join(c.id for c in clips) or "no clip"
+            bits.append(f"from the transcript of {clips[0].asset if clips else '?'} through {via}, {n} phrase(s), "
+                        f"max {t.max_chars} chars")
         else:
             n = len(voice_captions(self.voice, t, self.fps, self.words)) if self.voice else 0
             bits.append(f"from the voice, {n} phrase(s), max {t.max_chars} chars")
@@ -1102,7 +1335,9 @@ class _Window:
     def caption_rows(self, t: D.CaptionsTrack) -> list[str]:
         """One line per phrase: [voice line] from-to text, **accent** marked."""
         t = caption_track(t, self.locale)
-        if t.items is None and self.voice:
+        if t.items is None and t.source != "voice":
+            items = transcript_items(self.root, self.doc, t, self.sched, self.fps)
+        elif t.items is None and self.voice:
             items = _voice_items(self.voice, t, self.fps, self.words)
         else:
             items = caption_items(t, self.voice, self.sched, self.fps)
@@ -1130,6 +1365,9 @@ class _Window:
                     facts.append(f"{d:.2f} s")
             if a.kind == "evidence":
                 facts += [f"box {a.box}" if a.box else "no box", a.site]
+            if a.transcript:
+                tr = D.load_transcript(self.root, a)
+                facts.append(f"transcript {len(tr['words'])} words" if tr else "transcript MISSING")
             used = [c.id for _, c in D.clips_of(self.doc) if getattr(c, "asset", None) == aid
                     or (c.type == "component" and any(k == "asset" and v == aid for _, k, v in D.prop_refs(c.props)))]
             facts.append(f"used by {', '.join(used)}" if used else "unused")
@@ -1168,13 +1406,21 @@ class _Window:
         return rows
 
     def caption_at(self, t: D.CaptionsTrack, f: int) -> str:
-        items = caption_items(caption_track(t, self.locale), self.voice, self.sched, self.fps, self.words)
+        t = caption_track(t, self.locale)
+        if t.items is None and t.source != "voice":
+            items = transcript_items(self.root, self.doc, t, self.sched, self.fps)
+        else:
+            items = caption_items(t, self.voice, self.sched, self.fps, self.words)
         it = next((x for x in items if x["from"] <= f < x["to"]), None)
         return "".join(r["text"] for r in it["runs"]) if it else ""
 
     def values_at(self, c, f: int, dur: int) -> str:
         if c.type == "audio":
-            return ""
+            start = T.to_frame(self.sched.start(c.id), self.fps)
+            rows = [{"f": T.clip_frame(k.t, start, self.fps, self.sched), "v": k.v, "ease": k.ease}
+                    for k in c.keyframes.get("volume") or []]
+            v = value_at(rows, f, self.fps) if rows else None
+            return f"  now: volume {v:.3g}" if v is not None else ""
         vals = []
         start = T.to_frame(self.sched.start(c.id), self.fps)
         _, _, w, h = self.box_px(c.box)

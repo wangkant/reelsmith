@@ -5,8 +5,9 @@ import React from "react";
 import { Easing, Freeze, Img, interpolate, Loop, useCurrentFrame } from "remotion";
 import { Video, type VideoObjectFit } from "@remotion/media";
 import { useClip } from "../kit/context";
-import type { MediaRef } from "../types";
-import { clamp01, srcUrl } from "./util";
+import type { Keyframe, MediaRef } from "../types";
+import { audible, curveAt } from "./sound";
+import { clamp01, num, srcUrl } from "./util";
 
 export type Motion = "push" | "pull" | "pan_left" | "pan_right" | "rise" | "still";
 
@@ -24,6 +25,10 @@ export type MediaProps = {
   rate?: number;
   loop?: boolean;
   volume?: number;
+  /** video only: a volume curve (frames from the clip start) replacing `volume`, and fades in frames */
+  volumeKeys?: Keyframe[] | null;
+  fadeIn?: number;
+  fadeOut?: number;
   /** a dark veil 0..1 over the picture, for text on top */
   dim?: number;
   style?: React.CSSProperties;
@@ -52,10 +57,19 @@ const motionTransform = (motion: Motion | null | undefined, t: number): string |
 
 const VideoBody: React.FC<{
   m: MediaRef; style: React.CSSProperties; trimIn: number; rate: number; loop: boolean; volume: number; fps: number;
-}> = ({ m, style, trimIn, rate, loop, volume, fps }) => {
+  keys?: Keyframe[] | null; fadeIn?: number; fadeOut?: number; dur: number;
+}> = ({ m, style, trimIn, rate, loop, volume, fps, keys, fadeIn, fadeOut, dur }) => {
   const f = useCurrentFrame();
   const src = srcUrl(m.src);
   const { objectFit, ...css } = style;
+  const srcFrames = m.duration && m.duration > 0 ? Math.floor(m.duration * fps) : null;
+  // composition frames the source covers; one frame of margin: asking for the very last frame can fail
+  const playable = srcFrames === null ? null : Math.floor((srcFrames - trimIn - 1) / rate);
+  const heard = audible(volume, keys);
+  const curved = (keys?.length ?? 0) > 0 || num(fadeIn, 0) > 0 || num(fadeOut, 0) > 0;
+  // inside a Loop the frame starts over on every pass; the curve counts over the whole clip
+  const pass = loop && playable !== null && playable >= 1 ? Math.floor(f / playable) * playable : 0;
+  const level = !heard ? undefined : curved ? (fr: number) => curveAt(volume, keys, fadeIn, fadeOut, dur, fr + pass, fps) : volume;
   // decoded in the page (WebCodecs): OffthreadVideo's shared frame cache drops frames under memory pressure with
   // parallel tabs ("No frame found at position"); a file the browser cannot decode still falls back to it
   const video = (
@@ -63,16 +77,13 @@ const VideoBody: React.FC<{
       src={src}
       trimBefore={trimIn > 0 ? Math.round(trimIn) : undefined}
       playbackRate={rate}
-      muted={!(volume > 0)}
-      volume={volume > 0 ? volume : undefined}
+      muted={!heard}
+      volume={level}
       objectFit={(objectFit as VideoObjectFit | undefined) ?? "cover"}
       style={css}
     />
   );
-  const srcFrames = m.duration && m.duration > 0 ? Math.floor(m.duration * fps) : null;
-  if (srcFrames === null) return video;
-  // composition frames the source covers; one frame of margin: asking for the very last frame can fail
-  const playable = Math.floor((srcFrames - trimIn - 1) / rate);
+  if (playable === null) return video;
   if (playable < 1) return <Freeze frame={0}>{video}</Freeze>;
   if (loop) return <Loop durationInFrames={playable}>{video}</Loop>;
   return (
@@ -83,7 +94,8 @@ const VideoBody: React.FC<{
 };
 
 export const Media: React.FC<MediaProps> = ({
-  media, fit = "cover", focus, motion, dur, trimIn = 0, rate = 1, loop = false, volume = 0, dim = 0, style,
+  media, fit = "cover", focus, motion, dur, trimIn = 0, rate = 1, loop = false, volume = 0, volumeKeys, fadeIn, fadeOut,
+  dim = 0, style,
 }) => {
   const f = useCurrentFrame();
   const clip = useClip();
@@ -98,7 +110,10 @@ export const Media: React.FC<MediaProps> = ({
     transformOrigin: `${clamp01(fx) * 100}% ${clamp01(fy) * 100}%`, maxWidth: "none", ...style,
   };
   const body = isVideo(m) ? (
-    <VideoBody m={m} style={inner} trimIn={Math.max(0, trimIn)} rate={rate > 0 ? rate : 1} loop={loop} volume={volume} fps={clip.fps} />
+    <VideoBody
+      m={m} style={inner} trimIn={Math.max(0, trimIn)} rate={rate > 0 ? rate : 1} loop={loop} volume={volume} fps={clip.fps}
+      keys={volumeKeys} fadeIn={fadeIn} fadeOut={fadeOut} dur={clip.dur}
+    />
   ) : (
     <Img src={srcUrl(m.src)} style={inner} />
   );

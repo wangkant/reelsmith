@@ -606,5 +606,65 @@ def assets(project: str) -> str:
     return _provider("assets", _project(project))
 
 
+# ------------------------------------------------------------------ footage (looking at sources)
+def _source_arg(value, what: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ToolInputError(f"{what} must be an asset id (see assets) or a file inside the project folder")
+    return value.strip()
+
+
+@tool
+def probe(project: str, source: str) -> str:
+    """What a media file holds: container, duration, size; the picture's codec, resolution, fps and rotation; the
+    sound's codec, channels, sample rate and loudness (LUFS, range, true peak). `source` is an asset id or a file
+    inside the project folder. Text, then the same facts as JSON."""
+    return _provider("probe", _project(project), source=_source_arg(source, "source"))
+
+
+@tool
+def frames(project: str, asset: str, times: list[float | str] = [], every: float = 0,  # noqa: B006 - never mutated
+           n: int = 0) -> str:
+    """Stills of a SOURCE video (an asset id, or a file inside the project) at source seconds, not the film's:
+    `times` (seconds or m:ss, up to 24), or one every `every` seconds, or `n` evenly spaced (default 12). Returns
+    PNG paths (look at them with Read) and a contact sheet with each still's source time burned in. Use it to see
+    what a recording holds before you cut it."""
+    if isinstance(times, str) and times.strip().startswith("["):
+        times = _json_arg(times, "times")
+    if times in (None, "") or times == []:
+        times = None
+    elif not isinstance(times, list):
+        times = [times]
+    return _provider("frames", _project(project), asset=_source_arg(asset, "asset"), times=times,
+                     every=every or None, n=n or None)
+
+
+@tool
+def scenes(project: str, asset: str, threshold: float = 0.3) -> str:
+    """Shot cuts of a source video in source seconds (ffmpeg's scene score; `threshold` 0.01-0.99, lower finds
+    softer cuts), every shot's start, end and length, and a contact sheet of each shot's first frame (look with
+    Read). Returns text and JSON."""
+    return _provider("scenes", _project(project), asset=_source_arg(asset, "asset"), threshold=threshold)
+
+
+@tool
+def silences(project: str, asset: str, min_s: float = 0.5, noise_db: float = -35) -> str:
+    """Silent ranges of a source's sound (quieter than `noise_db` dB for at least `min_s` seconds) and the sound
+    ranges between them, in source seconds: the cut list for jump cuts (ripple_delete with "src:<clip>@<seconds>"
+    Times). Returns text and JSON."""
+    return _provider("silences", _project(project), asset=_source_arg(asset, "asset"), min_s=min_s,
+                     noise_db=noise_db)
+
+
+@tool
+def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -> str:
+    """Word-level transcript of a video or audio asset (what is said and when, in source seconds), saved as
+    assets/<id>.transcript.json and linked from the asset. `language`: an ISO code such as "en" or "zh" (empty:
+    detected); `prompt`: names and words to spell right. Captions can then follow it (captions track "source":
+    "clip:<id>"). Paid with an API provider: estimates first and refuses over budget."""
+    return _provider("transcribe", _project(project), asset=_id_arg(asset, "asset"), language=language or None,
+                     prompt=prompt or None)
+
+
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, check, library, preview, render, review,
-                                 speak, capture, draw, animate, import_asset, assets, notes, note, typecheck)}
+                                 speak, capture, draw, animate, import_asset, assets, probe, frames, scenes, silences,
+                                 transcribe, notes, note, typecheck)}

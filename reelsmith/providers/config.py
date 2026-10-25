@@ -40,6 +40,9 @@ DEFAULT_PROVIDERS: dict = {
               "usd_per_s": None, "timeout_s": 360},
     "capture": {"proxy": None},
     "import": {"max_mb": 200},
+    "transcribe": {"provider": "openai", "base_url": "https://api.openai.com/v1", "model": "whisper-1",
+                   "key_env": "OPENAI_API_KEY", "usd_per_min": 0.006, "max_mb": 24, "timeout_s": 600,
+                   "language": None, "local_model": "small", "device": "auto", "compute_type": "default"},
 }
 DEFAULT_BUDGET: dict = {"per_project_usd": 1.0, "min_balance_usd": 5.0}
 # Process-level overrides of workspace.json (the runner's --budget-usd caps the Claude session, not asset spend).

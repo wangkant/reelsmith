@@ -130,8 +130,10 @@ A **Time** is seconds or a string anchored on the narration, a clip or the film 
 |---|---|
 | `"line:5"` / `"line:5.end"` | start / end of voice line 5 (1-based) |
 | `"clip:c2"` / `"clip:c2.end"` | start / end of clip c2 |
+| `"mark:punch"` | the project marker `punch` (`"markers": {"punch": 12.4}`; a marker is itself a Time) |
+| `"src:a@41.2"` | the moment video or audio clip `a` plays second 41.2 of its source (its `trim_in` and `rate` applied) |
 | `"end"` | end of the film |
-| `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"end-2"` | any of these plus or minus seconds |
+| `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"src:a@41.2-0.1"`, `"end-2"` | any of these plus or minus seconds |
 
 What a **plain number** means depends on where it is:
 
@@ -150,11 +152,13 @@ Common fields: `id` (unique in the project), `type`, `start`, `end` | `dur`, `bo
 `"safe"`, default full), `opacity`, `rotate` (deg), `scale`, `origin` (`"center"`, `"top-left"`, ...), `radius`,
 `blend` (`"multiply"`, `"screen"`, ...), `filter` `{blur, brightness, contrast, saturate, grayscale}`, `shadow`
 (true or a CSS shadow), `enter` / `exit` `{"preset": "fade"|"rise"|"drop"|"pop"|"wipe_left"|"wipe_up"|"zoom",
-"dur": 0.4}`.
+"dur": 0.4}`, `transition` `{"type": "crossfade"|"dip_black"|"dip_white"|"wipe_left"|"wipe_right"|"wipe_up"|
+"slide_left"|"zoom", "dur": 0.5}` (in from the clip before it on the same track: see Editing footage).
 
 `keyframes`: `{"<prop>": [{"t": Time, "v": number, "ease": "linear"|"in"|"out"|"inOut"|"spring"|"step"}]}` for
-`x y w h opacity rotate scale blur brightness zoom pan_x pan_y progress`; the ease shapes the move into that
-keyframe. `progress` (0..1) drives shapes and components.
+`x y w h opacity rotate scale blur brightness zoom pan_x pan_y progress`, and `volume` on video and audio clips;
+the ease shapes the move into that keyframe. `progress` (0..1) drives shapes and components; `volume` replaces the
+clip's `volume` (0 silent, 1 full).
 
 **Ken Burns** (image and video clips; the content moves inside the box, which crops it):
 - `zoom` is a factor around the clip's `focus` point: 1 = the picture as fitted, 1.2 = 20 % closer.
@@ -169,12 +173,12 @@ keyframe. `progress` (0..1) drives shapes and components.
 | type | fields |
 |---|---|
 | `image` | `asset`, `fit` `"cover"`/`"contain"`, `focus` `[fx, fy]`, `motion` |
-| `video` | `asset`, `trim_in` s, `rate`, `loop`, `fit`, `focus`, `motion`, `volume` (default 0: muted) |
+| `video` | `asset`, `trim_in` (source seconds skipped), `rate` (2 = twice as fast), `loop`, `fit`, `focus`, `motion`, `volume` (default 0: muted) |
 | `text` | `text` (`**word**` = accent colour), `style` (TextStyle), `reveal` `{"mode", "dur"}` |
 | `shape` | `shape` `"rect"|"ellipse"|"line"|"arrow"|"path"`, `fill`, `stroke`, `stroke_width`, `d` (SVG path in box pixels), `draw` (the stroke draws on) |
 | `evidence` | `asset` (kind evidence): the capture's box (the proving sentence) scaled to the clip's width (at most 2×), with a little page above and below; the panel hugs that content, the rest of the clip box stays transparent, and cut edges fade out; `highlight` `{"at", "dur", "color"}` sweeps the sentence |
 | `component` | `name`, `props` (checked against the component's schema; see `library`) |
-| `audio` (audio tracks) | `asset`, `trim_in`, `volume`, `fade_in`, `fade_out`, `loop` (repeat the file to fill the clip) |
+| `audio` (audio tracks) | `asset`, `trim_in`, `volume`, `fade_in`, `fade_out`, `loop` (repeat the file to fill the clip), `keyframes` (`volume` only), `transition` (`crossfade` only), `duck` `{"under": "<track id>" or "voice", "to": 0.25, "fade": 0.3}` |
 
 **Text.** TextStyle: `font`, `size` px or `"fit"`, `max_size` 160, `min_size` 28 (defaults scale with the canvas),
 `weight` 400–900, `color`
@@ -220,6 +224,7 @@ accent], "max_chars"?, "overrides": [{"line": 5, "text": "..."}], "items"?: [{"s
 phrase-split between words (never inside a word or a number) and timed from the voice lines unless you give
 `items`. `max_chars` (4–60) defaults to 14 for Chinese, Japanese and Korean and 32 for other languages. Phrases
 drop the punctuation they were cut at. Fix a bad split with an override that adds a comma where the cut should be.
+`"source": "clip:a"` captions what clip `a` says instead, from its asset's transcript (see Editing footage).
 
 ## Edit ops
 
@@ -240,11 +245,49 @@ Each applied batch can be undone with `undo`.
 {"op": "update_asset", "id": "ev_water", "set": {"box": [70, 300, 890, 62]}}
 {"op": "remove_asset", "id": "chart"}
 {"op": "set", "path": "meta.title", "value": "一件T恤要喝多少水"}
+{"op": "ripple_delete", "start": "src:a@12.3", "end": "src:a@13.9"}
+{"op": "insert_gap", "at": "clip:a2", "dur": 1.5, "tracks": ["v1"]}
+{"op": "trim_clip", "id": "a", "in": 4.2, "out": 31, "ripple": true}
 ```
 
 `set` replaces the value at a dotted path (not inside `tracks` or `assets`). `update_*` deep-merge; `null` removes a
 key. `add_asset` with an id that exists replaces that asset. An asset still used by a clip (directly or through
-component props) cannot be removed.
+component props) cannot be removed. The last three are ripple edits for footage (next section).
+
+## Editing footage
+
+A recording of your own, or a clip you downloaded, is a source: look at it, cut it on the timeline, caption it.
+The footage tools speak **source seconds**; `"src:a@41.2"` is the moment clip `a` plays second 41.2 of its source
+(its `trim_in` and `rate` applied), so you cut straight from what you found. Narration is optional: a film of
+footage needs no `speak`, and without a voice it lasts until its last clip ends (or `duration`).
+
+1. `import_asset` the file, then `probe` it: length, resolution, fps, rotation, sound and its loudness.
+2. Look before you cut. `frames(p, "talk", n=12)` (or `times`, or `every`) gives stills at source times and a
+   contact sheet with each time burned in: Read it. `scenes` lists the shot cuts with each shot's first frame,
+   `silences` the quiet ranges and the sound between them, and `transcribe` writes every word with its time
+   (`assets/talk.transcript.json`; it costs money with an API provider, so do it once).
+3. Lay it down: `{"id": "a", "type": "video", "asset": "talk", "start": 0, "end": "src:a@95", "volume": 1}` runs
+   until source second 95. `trim_in` skips the head, `rate` speeds it up; give video `volume` 1 to hear it.
+4. Cut. `ripple_delete` takes a range out and closes the gap: clips crossing its edges are split (the part after
+   the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on), later clips, markers and caption items move
+   up. Jump cuts from `silences`: one `ripple_delete` per silence from `"src:a@<start + 0.1>"` to `"src:a@<end -
+   0.1>"` (a breath of air each side), **from the last silence back** in one batch, so each `src:a@...` still names
+   the piece that plays it. `trim_clip` sets a clip's in/out in source seconds (`ripple: true` pulls the rest of
+   its track along; without it the picture stays put and only the edges move), `insert_gap` opens room, and
+   `split_clip` cuts a clip in two. Anchors that stay true after a ripple edit stay; the rest become numbers.
+5. Join shots: give the later clip `"transition": {"type": "crossfade", "dur": 0.4}` and start it that long before
+   the previous one ends (`"start": "clip:a.end-0.4"`); that is the only overlap a track allows. Without the
+   overlap it transitions in over whatever is beneath it. `dip_black`/`dip_white` go through a colour,
+   `wipe_left`/`wipe_right`/`wipe_up` sweep an edge, `slide_left` pushes the old shot out, `zoom` zooms through. A
+   clip with sound crossfades its sound over the same time.
+6. Sound: `volume` keyframes ride a clip's level (`{"t": 3, "v": 0.2}`); a music bed with `"duck": {"under": "v1"}`
+   (or `"voice"`) drops to 0.25 while that track's clips with sound play, easing 0.3 s either side.
+7. Captions that follow the speech: a captions track with `"source": "clip:a"` once `talk` is transcribed. It
+   follows every piece of that recording on `a`'s track, drops the words you cut, and phrases by pauses and
+   sentence ends within `max_chars`.
+8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
+   goes; markers move with ripple edits.
+9. `describe` to see the cut as text, `preview` the joins and the captions, `render`.
 
 ## Tools
 
@@ -266,6 +309,11 @@ component props) cannot be removed.
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a short clip from a picture | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL into assets (`kind` image, video, audio, evidence) | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
+| `probe(project, source)` | a source's streams, codecs, rotation and loudness | `probe(p, "talk")` |
+| `frames(project, asset, times?, every?, n?)` | stills of a source at source seconds + a timed contact sheet | `frames(p, "talk", ["0:12", 41.2])` |
+| `scenes(project, asset, threshold?)` | shot cuts (source seconds) + each shot's first frame | `scenes(p, "trip")` |
+| `silences(project, asset, min_s?, noise_db?)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
+| `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Kant, reelsmith")` |
 | `preview(project, times?, sweep?)` | stills at chosen moments + contact sheet + layout problems; `sweep` measures the whole film | `preview(p, [0, "line:3", "clip:n1+1", "end-1"])`, `preview(p, sweep=true)` |
 | `render(project)` | the film to `out/film.mp4`, mastered and checked | `render(p)` |
 | `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
@@ -277,8 +325,8 @@ component props) cannot be removed.
   `providers.tts.voice`; without one only a Chinese locale has a default (a Mandarin voice), and `speak` says so.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
-- `speak`, `draw` and `animate` may cost money: they estimate first and refuse when the project budget or the
-  account floor would be crossed.
+- `speak`, `draw`, `animate` and `transcribe` may cost money: they estimate first and refuse when the project
+  budget or the account floor would be crossed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with

@@ -1,6 +1,7 @@
 // Renderer self-test: stills + inspect on test/basic.resolved.json, word-aware text layout and evidence crops
-// (layout.resolved.json), a film with looping video and audio (video.resolved.json), the import guard, context
-// narrowing, component crashes, transient failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, a film with
+// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, transient
+// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
@@ -339,6 +340,69 @@ console.log("text layout, default colour, fonts and evidence crops (layout.resol
   // a line with only a fill is drawn in that colour (gold #D9A441) from top-left to bottom-right
   const mid = mean(pixels(png, 798, 1648, 4, 4));
   check(mid[0] > 180 && mid[2] < 120, `a line with only "fill" draws in that colour (${mid.map(Math.round)})`);
+}
+
+console.log("transitions between clips on a track (cuts.resolved.json)");
+{
+  const fx = path.join(HERE, "cuts.resolved.json");
+  const r = run(["stills", fx, HERE, path.join(OUT, "cuts"), "44", "45", "52", "57", "60"]);
+  console.log(`  (${r.s} s)`);
+  check(r.code === 0 && r.result?.ok === true, `stills ok (${r.result?.error ?? ""})`);
+  const at = (f, x, y) => mean(pixels(path.join(OUT, "cuts", `still_${String(f).padStart(5, "0")}.png`), x, y, 8, 8));
+  const rgb = (v) => v.map(Math.round).join(",");
+  const [red, mix, blue] = [at(44, 270, 120), at(52, 270, 120), at(60, 270, 120)];
+  check(red[0] > 240 && red[2] < 15 && blue[2] > 240 && blue[0] < 15, `before and after a crossfade: one clip each (${rgb(red)} / ${rgb(blue)})`);
+  check(mix[0] > 120 && mix[0] < 150 && mix[2] > 105 && mix[2] < 135,
+    `crossfade at 7/15: the incoming clip at 47 % over the outgoing, painted on top though listed first (${rgb(mix)})`);
+  const [left, right] = [at(52, 100, 360), at(52, 500, 360)];
+  check(left[1] > 240 && left[0] < 15 && right.every((v) => v > 240), `wipe_left: the new clip on the right, the old on the left (${rgb(left)} / ${rgb(right)})`);
+  const [dark, rising] = [at(52, 270, 600), at(57, 270, 600)];
+  check(Math.max(...dark) < 40, `dip_black is black mid-way (${rgb(dark)})`);
+  check(rising[0] < 30 && rising[1] > 130 && rising[1] < 175, `dip_black: the new clip comes up out of black (${rgb(rising)})`);
+  const [still, pushed, coming] = [at(45, 500, 840), at(52, 100, 840), at(52, 500, 840)];
+  check(still[0] > 240 && still[2] > 240, `slide_left starts with the old clip in place (${rgb(still)})`);
+  check(pushed[0] > 240 && pushed[2] > 240 && coming[0] > 240 && coming[1] > 110 && coming[1] < 150 && coming[2] < 15,
+    `slide_left pushes the old clip out left as the new one comes in from the right (${rgb(pushed)} / ${rgb(coming)})`);
+}
+
+console.log("sound curves: video volume keyframes and a ducked bed (film)");
+{
+  const dir = path.join(OUT, "sound");
+  fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
+  const gen = (args, name) => spawnSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args, path.join(dir, "assets", name)]);
+  gen(["-f", "lavfi", "-i", "testsrc2=s=270x480:r=30:d=4", "-f", "lavfi", "-i", "sine=f=1000:d=4", "-c:v", "libx264",
+    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"], "talk.mp4");
+  gen(["-f", "lavfi", "-i", "sine=f=250:d=4"], "bed.wav");
+  const film = {
+    version: 2, fps: 30, width: 270, height: 480, durationInFrames: 120, safe: { x: 10, y: 50, w: 250, h: 380 }, theme: basic.theme,
+    tracks: [{ id: "v", kind: "visual", clips: [{
+      id: "talk", type: "video", track: "v", from: 0, dur: 120, box: { x: 0, y: 0, w: 270, h: 480 }, style: {}, keyframes: {},
+      enter: null, exit: null, transition: null, transitionOut: null,
+      content: { src: "assets/talk.mp4", duration: 4, trimIn: 0, rate: 1, loop: false, fit: "cover", focus: null, volume: 1,
+        volumeKeys: [{ f: 0, v: 1 }, { f: 29, v: 1 }, { f: 30, v: 0.02 }, { f: 59, v: 0.02 }, { f: 60, v: 1 }] },
+    }] }],
+    audio: [{ id: "bed", src: "assets/bed.wav", from: 0, dur: 120, trimIn: 0, volume: 1, fadeIn: 0, fadeOut: 0, loop: false,
+      duck: [{ start: 63, end: 89, level: 0.03, fade: 3 }] }],
+    inspect: false,
+  };
+  const file = path.join(dir, "resolved.json");
+  fs.writeFileSync(file, JSON.stringify(film));
+  const mp4 = path.join(dir, "sound.mp4");
+  const r = run(["film", file, dir, mp4]);
+  console.log(`  (${r.s} s)`);
+  check(r.result?.ok === true && fs.existsSync(mp4), `film with a sounding video and a bed renders (${r.result?.error ?? ""})`);
+  const level = (from, len, freq) => {
+    const band = `bandpass=f=${freq}:width_type=h:w=150`;
+    const v = spawnSync("ffmpeg", ["-hide_banner", "-ss", String(from), "-t", String(len), "-i", mp4, "-vn", "-af",
+      `${band},${band},volumedetect`, "-f", "null", "-"], { encoding: "utf8" });
+    const m = /mean_volume: (-?[\d.]+) dB/.exec(v.stderr || "");
+    return m ? Number(m[1]) : NaN;
+  };
+  const talk = [level(0.2, 0.6, 1000), level(1.2, 0.6, 1000), level(2.2, 0.6, 1000)];
+  const bed = [level(0.2, 0.6, 250), level(2.3, 0.5, 250), level(3.2, 0.6, 250)];
+  const db = (xs) => xs.map((x) => x.toFixed(1)).join(", ");
+  check(talk[0] - talk[1] > 20 && Math.abs(talk[0] - talk[2]) < 4, `video volume keyframes: quiet 1-2 s, loud again after (${db(talk)} dB)`);
+  check(bed[0] - bed[1] > 20 && Math.abs(bed[0] - bed[2]) < 4, `the bed ducks 2.1-3 s and comes back (${db(bed)} dB)`);
 }
 
 console.log("transient failures");

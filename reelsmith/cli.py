@@ -81,6 +81,23 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("source")
     p.add_argument("kind", nargs="?", default="", help="image, video, audio or evidence (default: detect)")
     proj(cmd("assets", tools.assets))
+    proj(cmd("probe", tools.probe)).add_argument("source", help="an asset id or a file inside the project")
+    p = proj(cmd("frames", tools.frames))
+    p.add_argument("asset")
+    p.add_argument("times", nargs="*", help="source seconds or m:ss")
+    p.add_argument("--every", type=float, default=0)
+    p.add_argument("-n", type=int, default=0)
+    p = proj(cmd("scenes", tools.scenes))
+    p.add_argument("asset")
+    p.add_argument("--threshold", type=float, default=0.3)
+    p = proj(cmd("silences", tools.silences))
+    p.add_argument("asset")
+    p.add_argument("--min-s", type=float, default=0.5, dest="min_s")
+    p.add_argument("--noise-db", type=float, default=-35, dest="noise_db")
+    p = proj(cmd("transcribe", tools.transcribe))
+    p.add_argument("asset")
+    p.add_argument("--language", default="")
+    p.add_argument("--prompt", default="")
     proj(cmd("notes", tools.notes))
     proj(cmd("note", tools.note)).add_argument("text", help="the note, @file, or - for stdin")
     proj(cmd("typecheck", tools.typecheck))
@@ -122,6 +139,16 @@ def _call(args) -> tools.ToolResult:
         return tools.import_asset(args.project, args.id, args.source, args.kind)
     if c == "note":
         return tools.note(args.project, _text_arg(args.text))
+    if c == "probe":
+        return tools.probe(args.project, args.source)
+    if c == "frames":
+        return tools.frames(args.project, args.asset, args.times, args.every, args.n)
+    if c == "scenes":
+        return tools.scenes(args.project, args.asset, args.threshold)
+    if c == "silences":
+        return tools.silences(args.project, args.asset, args.min_s, args.noise_db)
+    if c == "transcribe":
+        return tools.transcribe(args.project, args.asset, args.language, args.prompt)
     return tools.TOOLS[c](args.project)            # check, render, assets, notes, typecheck
 
 
