@@ -24,7 +24,7 @@ def dirs(tmp_path, monkeypatch):
     cwd.mkdir()
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    for name in ("CODEX_HOME", "DSH_HOME"):
+    for name in ("CODEX_HOME", "DSH_HOME", "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(cwd)
     return cwd, home
@@ -95,6 +95,63 @@ def test_claude_code_user_runs_the_cli(dirs, monkeypatch):
     assert any(ln.startswith("FAILED (1)") and "boom" in ln for ln in failed)
 
 
+def test_claude_code_user_follows_claude_config_dir(dirs, tmp_path, monkeypatch):
+    cwd, home = dirs
+    monkeypatch.setattr(agentconf, "_claude_exe", lambda: "claude")
+    config_dir = tmp_path / "claudeconf"
+    lines = setup("claude-code", cwd, home, env={"CLAUDE_CONFIG_DIR": str(config_dir)}, user=True)
+    assert (config_dir / "skills" / "reelsmith" / "SKILL.md").is_file() and not (home / ".claude").exists()
+    assert any("$CLAUDE_CONFIG_DIR/.claude.json" in ln for ln in lines)
+    setup("claude-code", cwd, home, env={"CLAUDE_CONFIG_DIR": str(config_dir)}, user=True, uninstall=True)
+    assert not (config_dir / "skills" / "reelsmith" / "SKILL.md").exists()
+
+
+def link_dir(link: Path, target: Path) -> None:
+    """A directory symlink, or a junction where symlinks need a privilege (Windows)."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            raise
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+
+def test_setup_writes_through_a_fresh_temp_file(dirs, tmp_path):
+    cwd, home = dirs
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious\n", encoding="utf-8")
+    (cwd / ".codex").mkdir()
+    for name in ("config.toml.reelsmith-tmp", ".config.toml.reelsmith-tmp"):   # a link planted at a guessable name
+        os.link(victim, cwd / ".codex" / name)
+    setup("codex", cwd, home)
+    assert victim.read_text(encoding="utf-8") == "precious\n"
+    assert "[mcp_servers.reelsmith]" in (cwd / ".codex" / "config.toml").read_text(encoding="utf-8")
+    left = {p.name for p in (cwd / ".codex").iterdir()}
+    assert left == {"config.toml", "config.toml.reelsmith-tmp", ".config.toml.reelsmith-tmp"}   # no temp file of ours
+
+
+def test_project_setup_refuses_a_linked_config_folder(dirs, tmp_path):
+    cwd, home = dirs
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "config.toml").write_text('model = "mine"\n', encoding="utf-8")
+    link_dir(cwd / ".codex", outside)
+    with pytest.raises(agentconf.SetupError, match="leads through a link"):
+        agentconf.plan("codex", cwd=cwd, home=home, env={})
+    with pytest.raises(agentconf.SetupError, match="leads through a link"):
+        agentconf.plan("codex", cwd=cwd, home=home, env={}, uninstall=True)
+    assert (outside / "config.toml").read_text(encoding="utf-8") == 'model = "mine"\n'
+    (cwd / ".claude").mkdir()
+    link_dir(cwd / ".claude" / "skills", outside)                  # the skill folder too
+    with pytest.raises(agentconf.SetupError, match="leads through a link"):
+        agentconf.plan("claude-code", cwd=cwd, home=home, env={})
+    assert sorted(p.name for p in outside.iterdir()) == ["config.toml"]
+    link_dir(home / ".cursor", outside)                            # the user's own home may link its dotfiles
+    setup("cursor", cwd, home, user=True)
+    assert (outside / "mcp.json").is_file()
+
+
 CODEX_BEFORE = """# my settings
 model = "gpt-5.5-codex"
 
@@ -126,6 +183,7 @@ def test_codex_project_merges_toml(dirs):
     server = doc["mcp_servers"]["reelsmith"]
     assert server["command"] == os.path.abspath(sys.executable) and "OLD" not in server["env"]
     assert server["tool_timeout_sec"] == 3600 and "OPENROUTER_API_KEY" in server["env_vars"]
+    assert "OPENAI_API_KEY" in server["env_vars"]                  # transcribe's default key
     assert (cwd / ".agents" / "skills" / "reelsmith" / "SKILL.md").is_file()
     assert any("trusted project" in ln for ln in lines)
     assert setup("codex", cwd, home)[0] == "nothing to change: already set up"
@@ -207,7 +265,9 @@ def test_dsh_project_writes_a_patch_and_skills_at_the_git_root(dirs):
     patch = sub / ".dsh" / "reelsmith.cordis.yml"
     assert "serverName: reelsmith" in patch.read_text(encoding="utf-8")
     assert (cwd / ".dsh" / "skills" / "reelsmith" / "SKILL.md").is_file()
-    assert any(f"dsh --patch {patch}" in ln and "integrations/dsh" in ln for ln in lines)
+    # `dsh <profile>` must come first: `dsh --patch <file> web` stops with "--profile <name> is required"
+    assert any(f"`dsh web --patch {patch}`" in ln and "integrations/dsh" in ln for ln in lines)
+    assert patch.read_text(encoding="utf-8").startswith("# Mounts the reelsmith MCP server: dsh <profile> --patch")
     setup("dsh", sub, home, uninstall=True)
     assert not patch.exists() and not (cwd / ".dsh").exists()
 
@@ -227,6 +287,7 @@ def test_cli_print_writes_nothing(dirs, capsys):
     assert cli.main(["setup", "codex", "--print", "--root", "studio"]) == 0
     out = capsys.readouterr().out
     assert "would write" in out and "[mcp_servers.reelsmith]" in out and "SKILL.md" in out
+    assert '"OPENAI_API_KEY"' in out                                # forwarded to the server for transcribe
     assert list(cwd.iterdir()) == [] and list(home.iterdir()) == []
     assert cli.main(["setup", "cursor"]) == 0
     assert (cwd / ".cursor" / "mcp.json").is_file()
