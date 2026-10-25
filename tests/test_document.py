@@ -415,6 +415,31 @@ def test_every_shipped_example_validates_against_its_schema():
         assert comp.path.name == f"{name}.tsx" and comp.path.is_file()
 
 
+def test_presets_take_latin_text_and_lead_with_english_examples():
+    # the same strings renderer/test/presets-preview renders at these lengths
+    comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
+    latin = {
+        "Stamp": {"text": "NOT WORTH IT"},
+        "CountUp": {"value": 45, "prefix": "~", "suffix": "minutes a day",
+                    "label": "spent on the phone before getting out of bed"},
+        "Receipt": {"header": "RECEIPT · WHAT A PRIZE REALLY COSTS", "title": "What the grand prize is worth",
+                    "rows": [{"label": "Laptop at the list price", "value": "$1,200",
+                              "sub": "the store sets the price the tax is based on"}],
+                    "total": {"label": "What you keep", "value": "$960"}},
+        "BarCompare": {"unit": " USD", "items": [{"label": "Median household income", "value": 80610}]},
+        "TimelineRule": {"points": [{"when": "January 2024", "text": "Rent goes up for the first time, by $200 a month"}]},
+        "DotGrid": {"total": 50, "lit": 12, "label_lit": "were refused at the first review",
+                    "label_rest": "made it through to the interview"},
+        "Arrow": {"label": "the part the buyer never sees"},
+        "EvidenceCard": {"asset": "ev", "source": "Source: Example Mall member centre, rules of the 100-day challenge"},
+        "PriceTag": {"price": "$4.50", "old": "$3.80", "label": "Large latte, oat milk"},
+    }
+    for name, props in latin.items():
+        assert L.validate_props(comps[name], props) == [], name
+    for name, comp in comps.items():
+        assert not any("　" <= ch <= "鿿" for ch in json.dumps(comp.example, ensure_ascii=False)), name
+
+
 def make_lib(tmp_path) -> Path:
     ws = tmp_path / "ws"
     comps = ws / "library" / "components"

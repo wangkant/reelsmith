@@ -1,7 +1,7 @@
 // Renderer self-test: stills + inspect on test/basic.resolved.json, word-aware text layout and evidence crops
 // (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, a film with
-// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, transient
-// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, the
+// locale, transient failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
@@ -250,6 +250,27 @@ console.log("narrowing, missing and crashing components");
       !/JSHandle|bundle\.js/.test(err + JSON.stringify(r.result?.browserErrors ?? [])),
     `${mode}: a crashing component is reported as itself with file:line (${r.s} s): ${err.split("\n")[0]}`);
   }
+}
+
+console.log("the film's locale reaches components (EvidenceCard's source line)");
+{
+  const ev = { src: "assets/evidence.png", kind: "evidence", size: [1290, 960], box: [358, 446, 330, 66], site: "www.example.org" };
+  const card = { ...comp("card", "EvidenceCard"), dur: 30, content: { name: "EvidenceCard", props: { asset: ev } } };
+  const sourceLine = (locale) => {
+    const dir = path.join(OUT, `locale-${locale ?? "unset"}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "resolved.json");
+    fs.writeFileSync(file, JSON.stringify({ ...mini([card]), durationInFrames: 30, ...(locale ? { locale } : {}) }));
+    const r = run(["inspect", file, HERE, dir, "20"]);
+    const out = path.join(dir, "inspect.json");
+    const data = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : { frames: [] };
+    const items = (data.frames[0]?.items ?? []).filter((i) => i.clip === "card" && i.kind === "text" && i.opacity > 0.5);
+    return { text: items.map((i) => i.text).join(""), s: r.s, error: r.result?.error ?? "" };
+  };
+  const zh = sourceLine("zh-CN");
+  check(zh.text === "来源：example.org", `zh-CN: the source line reads 来源：example.org (${zh.s} s): ${zh.text}${zh.error}`);
+  const unset = sourceLine(null);
+  check(unset.text === "Source: example.org", `no locale (en): the source line reads Source: example.org (${unset.s} s): ${unset.text}${unset.error}`);
 }
 
 console.log("word-aware line breaking (unit)");

@@ -43,7 +43,7 @@ pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the
 
 ## useClip()
 
-`const { w, h, dur, fps, theme, width, height, safe, progress } = useClip();`
+`const { w, h, dur, fps, theme, width, height, safe, locale, progress } = useClip();`
 
 | field | |
 |---|---|
@@ -53,6 +53,7 @@ pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the
 | `theme` | the theme's colours: `paper`, `ink`, `night`, `snow`, `accent`, `gold`, `good`, `bad`, `muted` (CSS hex) |
 | `width`, `height` | the canvas (1920 × 1080 on the default `landscape` profile, 1080 × 1920 on the vertical ones) |
 | `safe` | the safe area `{x, y, w, h}` in canvas px (the platform's UI-safe area, or a title-safe margin) |
+| `locale` | the film's language, the project's BCP-47 `locale` (`"en"` by default, `"zh-CN"`, `"ja"`...): pick the words a component adds itself by it, as `EvidenceCard` does for its source line (`Source: ` / `来源：`) |
 | `progress` | 0..1: the clip's `progress` keyframes if it has them, else how far through the clip it is |
 
 Theme tokens: `paper` light ground, `ink` text on paper, `night` dark ground, `snow` text on night, `accent` the one
@@ -90,9 +91,9 @@ colour usually accept a token name or CSS: resolve them with `themeColor`.
 | `fit(text, width, max, family = "sans", weight = 400)` | the largest font size ≤ `max` at which `text` fits `width` on one line | `fit(label, w * 0.9, 64, FONTS.sans, 800)` |
 | `fitLines(text, width, max, min = 0, family = "sans", weight = 400)` | `{size, lines}`: one line, or two (`twoLines`) when one line would be under `min` and two fit larger; render `lines.join("\n")` with `whiteSpace: "pre"` | `const { size, lines } = fitLines(label, w * 0.6, 56, 28, FONTS.sans, 800)` |
 | `textWidth(text, size, family = "sans", weight = 400, tabular = false)` | width in px of one line; `tabular` measures digits as `fontVariantNumeric: "tabular-nums"` | `textWidth(fmt(value), size, FONTS.sans, 900, true)` |
-| `twoLines(text, maxOne = 9)` | at most two balanced lines, split where the text clip may break (Intl.Segmenter "zh" words: never inside a word, a number, a number and its unit, or before closing punctuation), after punctuation when one is near the middle; texts of `maxOne` characters or fewer stay whole | `twoLines("报名百日挑战", 4)` → `["报名", "百日挑战"]` |
+| `twoLines(text, maxOne = 9)` | at most two balanced lines, split where the text clip may break (Intl.Segmenter words: never inside a word, a number, a number and its unit, or before closing punctuation; in CJK text after punctuation when one is near the middle); texts of `maxOne` characters or fewer stay whole | `twoLines("Signed up for the challenge", 4)` → `["Signed up for", "the challenge"]`; `twoLines("报名百日挑战", 4)` → `["报名", "百日挑战"]` |
 | `breakLines(text, width, measure, balance = false)` | `text` in as many lines as it needs at `width`, by the text clip's own rules; `measure(s)` gives a string's width; `balance` evens the lines out | `breakLines(note, w, (s) => textWidth(s, 40, FONTS.sans, 700), true)` |
-| `words(text)` | word segments (Intl.Segmenter "zh"), spaces included; joined they give the text | `words("今天的天气很好")` → `["今天", "的", "天气", "很好"]` |
+| `words(text)` | word segments (Intl.Segmenter, with Chinese word boundaries), spaces included; joined they give the text | `words("It's 2,700 litres.")` → `["It's", " ", "2,700", " ", "litres", "."]`; `words("今天的天气很好")` → `["今天", "的", "天气", "很好"]` |
 | `fmt(value, decimals = 0, grouping = true)` | `"12,345.6"` style number text | `fmt(2700.5, 1)` → `"2,700.5"` |
 | `decimalsOf(value)` | decimal places a number is written with (at most 4) | `decimalsOf(8.55)` → `2` |
 
@@ -184,7 +185,7 @@ export default function RingStat({ props }: { props: any }) {
                           "at": {"type": ["number", "string"], "description": "Time it starts filling: \"line:4\" or seconds from the clip start"},
                           "color": {"type": "string", "default": "accent", "description": "theme token or CSS"},
                           "ground": {"type": "string", "enum": ["light", "dark"], "default": "light"}}},
- "example": {"pct": 62, "label": "城镇居民占比", "at": "line:4"}}
+ "example": {"pct": 62, "label": "live in cities", "at": "line:4"}}
 ```
 
 In meta.json, give every Time key the type `["number", "string"]` and every asset key the type `"string"`, and refuse

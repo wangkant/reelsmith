@@ -848,8 +848,8 @@ class _Resolver:
                     audio += items
         return {"version": 2, "fps": self.fps, "width": p.width, "height": p.height,
                 "durationInFrames": self.frames, "safe": {"x": p.safe.x, "y": p.safe.y, "w": p.safe.w, "h": p.safe.h},
-                "theme": D.theme_of(self.root, self.doc), "fonts": project_fonts(self.root), "tracks": tracks,
-                "audio": audio, "inspect": False}
+                "locale": self.locale, "theme": D.theme_of(self.root, self.doc), "fonts": project_fonts(self.root),
+                "tracks": tracks, "audio": audio, "inspect": False}
 
     def span(self, c) -> tuple[int, int] | None:
         try:

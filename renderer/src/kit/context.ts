@@ -16,6 +16,8 @@ export type ClipCtx = {
   height: number;
   /** the platform's UI-safe area, canvas pixels */
   safe: Box;
+  /** the film's language, a BCP-47 tag such as "en" or "zh-CN" (the project's locale) */
+  locale: string;
   /** 0..1: the clip's "progress" keyframes, else its elapsed fraction */
   progress: number;
 };
@@ -31,9 +33,9 @@ const FALLBACK_THEME: Theme = {
 export const useClip = (): ClipCtx => {
   const ctx = useContext(ClipContext);
   const { width, height, fps, durationInFrames } = useVideoConfig();
-  if (ctx) return ctx;
+  if (ctx) return ctx.locale ? ctx : { ...ctx, locale: "en" };
   return {
     w: width, h: height, dur: durationInFrames, fps, theme: FALLBACK_THEME, width, height,
-    safe: { x: 0, y: 0, w: width, h: height }, progress: 0,
+    safe: { x: 0, y: 0, w: width, h: height }, locale: "en", progress: 0,
   };
 };

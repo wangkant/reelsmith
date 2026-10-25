@@ -78,7 +78,7 @@ looked up in the process environment.
 | key | meaning |
 |---|---|
 | `profile` | output profile (section 15): a name or an inline profile (section 15.1); a project's own `profile` wins; default `landscape` |
-| `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11) and whether the TTS has a default voice (9.1) |
+| `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11), the TTS's default voice (9.1) and the words components add (section 7) |
 | `profiles` | custom profiles by name, each `{"base": name, field: value, ...}` (section 15.1); a name may not be a built-in one |
 | `fonts` | font families for TextStyle `font` and components: `{family: path | {"src", "weight"?, "style"?} | [...]}`, paths inside the workspace (`weight` like `"400"`, or `"100 900"` for a variable font; `style` `normal`, `italic` or `oblique`). Every `library/fonts/*.woff2`, `.woff`, `.ttf` and `.otf` is a family named after its file stem without being listed (a stem other than letters, digits, spaces, `_` and `-`, or one of the built-in names, is skipped); the map adds families and wins over a stem of the same name |
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
@@ -386,7 +386,7 @@ export default function Receipt({ props }: { props: any }) {
 ```
 {
   "version": 2, "fps": 30, "width": 1920, "height": 1080, "durationInFrames": N,
-  "safe": {x,y,w,h}, "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
+  "safe": {x,y,w,h}, "locale": "en", "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
   "fonts": [{"family", "src" (project-relative, build/fonts/...), "weight"?, "style"?}],
   "tracks": [
     {"id", "kind": "visual", "hidden", "clips": [RClip...]},
@@ -414,8 +414,10 @@ content by type:
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
 `zoom`/`pan_x`/`pan_y` keyframes, captions are already phrase-split and timed, and a captions track without a box
-gets the profile's captions band. `fonts` lists the workspace's fonts: the renderer serves only the project folder,
-so resolve links (or copies) each file into `build/fonts/` and the renderer loads them before the first frame.
+gets the profile's captions band. `locale` is the project's (section 2.1); components read it from `useClip()` to
+pick the words they add themselves (EvidenceCard's `Source: ` or `来源：`). `fonts` lists the workspace's fonts: the
+renderer serves only the project folder, so resolve links (or copies) each file into `build/fonts/` and the renderer
+loads them before the first frame.
 `renderer/src/types.ts` is the TypeScript side of this format.
 
 Footage additions: an audio entry may carry `"volumeKeys": [{"f", "v", "ease"}]` (frames from its start; replaces

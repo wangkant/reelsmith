@@ -187,6 +187,8 @@ export type Resolved = {
   height: number;
   durationInFrames: number;
   safe: Box;
+  /** the film's language, a BCP-47 tag ("en", "zh-CN"); components read it from useClip() */
+  locale?: string;
   theme: Theme;
   fonts?: WorkspaceFont[];
   tracks: Track[];

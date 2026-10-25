@@ -76,8 +76,11 @@ for (const id of ids.filter((i) => i.includes("EvidenceCard") && !i.includes("mi
   check(ts.length > 0, `${id}: a source line shows`);
   for (const t of ts) check(t.s >= 28, `${id}: source ${fmtT(t)} is under 28 px`);
 }
-check(shown(probeOf("x-EvidenceCard-hostname")).map((t) => t.t).join("") === "来源：example.org",
-  `hostname source reads 来源：example.org (${shown(probeOf("x-EvidenceCard-hostname")).map((t) => t.t).join("")})`);
+// the default lead-in follows the locale
+for (const [id, want] of [["x-EvidenceCard-hostname", "Source: example.org"], ["x-EvidenceCard-hostname-zh", "来源：example.org"]]) {
+  const got = shown(probeOf(id)).map((t) => t.t).join("");
+  check(got === want, `${id}: the source reads ${want} (${got})`);
+}
 
 console.log("Arrow: the label is never under 28 px");
 for (const id of ids.filter((i) => i.includes("Arrow") && !i.includes("empty"))) {
@@ -91,11 +94,15 @@ const LABELS = {
   "x-BarCompare-horizontal": ["上海门店", "北京门店", "深圳门店", "成都门店", "杭州门店"],
   "x-BarCompare-six-dark": [1, 2, 3, 4, 5, 6].map((i) => `第${i}季度营收`),
   "x-BarCompare-long-labels": ["城镇居民中位数", "农村居民中位数", "全国中位数"],
+  "x-BarCompare-zh": ["奖品价值", "个税", "到手"],
+  "x-BarCompare-latin-long": ["Median household income", "Median rural income", "Median urban income"],
 };
+const squash = (s) => s.replace(/\s+/g, "");
 for (const id of ids.filter((i) => i.includes("BarCompare") && !i.includes("empty"))) {
-  const names = LABELS[id] ?? ["奖品价值", "个税", "到手"];
+  const names = LABELS[id] ?? ["Coffee", "Jeans", "T-shirt"];
   const ts = shown(probeOf(id));
-  const isLabel = (t) => names.includes(linesOf(t).join(""));
+  // a label may wrap to two lines: compare without the spaces
+  const isLabel = (t) => names.map(squash).includes(squash(linesOf(t).join("")));
   const labels = ts.filter(isLabel);
   const values = ts.filter((t) => !isLabel(t));
   check(labels.length === names.length && values.length === names.length, `${id}: ${names.length} labels and values (${ts.map(fmtT).join(", ")})`);
@@ -129,7 +136,7 @@ console.log("CountUp: nothing before `at`, then the number never re-centres whil
         `${id} @${mid}: fewer digits early in the count (${digits(a)?.t} -> ${digits(b)?.t})`);
     }
     // the suffix and the digits' right edge stay put (the prefix rides the digits)
-    const [sa, sb] = [pin(a, id === "CountUp-base" ? "人" : "元"), pin(b, id === "CountUp-base" ? "人" : "元")];
+    const [sa, sb] = [pin(a, id === "CountUp-base" ? "people" : "元"), pin(b, id === "CountUp-base" ? "people" : "元")];
     check(sa && sb && Math.abs(sa.r[0] - sb.r[0]) <= 1, `${id}: the suffix at x ${sa?.r[0]} @${mid} and ${sb?.r[0]} landed`);
     const right = (t) => (t ? t.r[0] + t.r[2] : NaN);
     check(Math.abs(right(digits(a)) - right(digits(b))) <= 1, `${id}: digits end at x ${right(digits(a))} @${mid} and ${right(digits(b))} landed`);
@@ -146,7 +153,7 @@ console.log("DotGrid: no counter or legend before the lighting starts; full rows
   check(shown(before).length === 0, `x-DotGrid-late @15 (before at): ${shown(before).map(fmtT).join(", ")}`);
   check((before?.shapes ?? []).filter((s) => s.o > 0.1).length >= 50, "x-DotGrid-late @15: the dots are already there");
   const after = shown(probeOf("x-DotGrid-late", 40)).map((t) => t.t).join("|");
-  check(after.includes("交给个税") && after.includes("落进口袋"), `x-DotGrid-late @40: counter and legend once lighting starts (${after})`);
+  check(after.includes("go to tax") && after.includes("stay in your pocket"), `x-DotGrid-late @40: counter and legend once lighting starts (${after})`);
   // lit dots are drawn a little larger: count column centres
   const cols = (id) => new Set((probeOf(id)?.shapes ?? []).filter((s) => s.r[2] > 4 && Math.abs(s.r[2] - s.r[3]) < 1).map((s) => Math.round(s.r[0] + s.r[2] / 2))).size;
   check(cols("DotGrid-tall") === 10, `DotGrid-tall: 100 dots in 10 columns (got ${cols("DotGrid-tall")})`);
@@ -160,6 +167,20 @@ for (const id of ids) {
       check(!linesOf(t).includes(bad), `${id}: a line reads "${bad}" (${fmtT(t)})`);
     }
   }
+}
+
+console.log("Latin text: a one-word stamp stays whole, words split only between words, a word suffix keeps a word space");
+{
+  const lines = (id) => shown(probeOf(id)).map((t) => t.t.trim());
+  check(lines("Stamp-base").join("|") === "APPROVED", `Stamp-base: one line APPROVED (${lines("Stamp-base").join("|")})`);
+  check(lines("x-Stamp-one-long-word").join("|") === "UNBELIEVABLE", `x-Stamp-one-long-word: one line (${lines("x-Stamp-one-long-word").join("|")})`);
+  const two = lines("x-Stamp-two-words");
+  check(two.length === 2 && two.join(" ") === "NOT WORTH IT", `x-Stamp-two-words: two lines of whole words (${two.join("|")})`);
+  const cu = shown(probeOf("CountUp-base"));
+  const suf = cu.find((t) => t.t === "people");
+  const dig = cu.find((t) => /^[\d,.]+$/.test(t.t));
+  const gap = suf && dig ? suf.r[0] - (dig.r[0] + dig.r[2]) : NaN;
+  check(gap >= 0.08 * (dig?.s ?? 0), `CountUp-base: a word space between the digits and "people" (${gap} px)`);
 }
 
 console.log("docs/kit.md: every kit export documented, the complete component is RingStat.tsx and renders");
@@ -181,7 +202,7 @@ console.log("docs/kit.md: every kit export documented, the complete component is
   }
   check(ok, "the RingStat meta.json block in docs/kit.md is JSON");
   const ring = shown(probeOf("x-RingStat-doc")).map((t) => t.t);
-  check(ring.includes("62%") && ring.includes("城镇居民占比"), `RingStat renders its number and label (${ring.join(", ")})`);
+  check(ring.includes("62%") && ring.includes("live in cities"), `RingStat renders its number and label (${ring.join(", ")})`);
 }
 
 // a temporary folder goes when everything passed; a folder you named stays

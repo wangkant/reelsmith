@@ -7,7 +7,7 @@
     "required": ["asset"],
     "properties": {
       "asset": {"type": "string", "minLength": 1, "description": "id of an evidence asset (from capture); its box marks the proving sentence"},
-      "source": {"type": "string", "maxLength": 40, "description": "line under the card (at least 28 px, two lines if long); default: 来源：<the asset's site, without www.>; \"\" hides it"},
+      "source": {"type": "string", "maxLength": 80, "description": "line under the card (at least 28 px, two lines if long); default: the asset's site (without www.) after a lead-in in the project's language (\"Source: \" in English, \"来源：\" in Chinese); \"\" hides it"},
       "context": {"type": "number", "minimum": 0, "maximum": 2000, "default": 120, "description": "capture pixels of page shown above and below the sentence (captures are 3x, so 120 is about one line)"},
       "highlight": {"type": "boolean", "default": true, "description": "sweep a highlighter across the sentence"},
       "highlight_at": {"type": ["number", "string"], "description": "Time the sweep starts: \"line:5+0.5\" or seconds from the clip start. Default: 0.3 s into the clip"},

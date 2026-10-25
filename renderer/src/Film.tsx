@@ -18,6 +18,7 @@ const Stage: React.FC<{ r: Resolved; mode: RenderMode }> = ({ r, mode }) => {
   useInspect(!!r.inspect, root, r.width, r.height);
   const theme = { ...FALLBACK_THEME, ...(r.theme ?? {}) };
   const safe: Box = r.safe ?? { x: 0, y: 0, w: r.width, h: r.height };
+  const locale = r.locale || "en";
   return (
     <div ref={root} style={{ position: "absolute", left: 0, top: 0, width: r.width, height: r.height, overflow: "hidden" }}>
       {r.tracks.map((track) => {
@@ -29,7 +30,7 @@ const Stage: React.FC<{ r: Resolved; mode: RenderMode }> = ({ r, mode }) => {
               {[...((track as VisualTrack).clips ?? [])].sort((a, b) => (a?.from ?? 0) - (b?.from ?? 0)).map((clip) =>
                 clip && clip.dur > 0 ? (
                   <Sequence key={clip.id} from={Math.round(clip.from)} durationInFrames={Math.round(clip.dur)} layout="none" name={clip.id}>
-                    <Element clip={{ ...clip, track: clip.track ?? track.id }} theme={theme} safe={safe} mode={mode} />
+                    <Element clip={{ ...clip, track: clip.track ?? track.id }} theme={theme} safe={safe} locale={locale} mode={mode} />
                   </Sequence>
                 ) : null,
               )}

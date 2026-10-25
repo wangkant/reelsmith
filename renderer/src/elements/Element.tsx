@@ -16,7 +16,7 @@ import { clamp01, filterCss, num, origin, shadowFor } from "./util";
 // content that fills the box and is cropped by it
 const CROPPED = new Set(["image", "video", "evidence"]);
 
-type Props = { clip: RClip; theme: Theme; safe: Box; mode: RenderMode };
+type Props = { clip: RClip; theme: Theme; safe: Box; locale: string; mode: RenderMode };
 
 const Content: React.FC<{ clip: RClip; w: number; h: number; progress: number | null; theme: Theme; mode: RenderMode; radius: number }> = ({
   clip, w, h, progress, theme, mode, radius,
@@ -68,7 +68,7 @@ const panFloor = (k: NonNullable<RClip["keyframes"]> | Record<string, never>, w:
   return Math.max(need(k.pan_x, w, fx), need(k.pan_y, h, fy));
 };
 
-export const Element: React.FC<Props> = ({ clip, theme, safe, mode }) => {
+export const Element: React.FC<Props> = ({ clip, theme, safe, locale, mode }) => {
   const f = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const k = clip.keyframes ?? {};
@@ -100,7 +100,7 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, mode }) => {
   const cropped = CROPPED.has(clip.type);
 
   const ctx: ClipCtx = {
-    w, h, dur: clip.dur, fps, theme, width, height, safe,
+    w, h, dur: clip.dur, fps, theme, width, height, safe, locale,
     progress: kfProgress ?? (clip.dur > 1 ? clamp01(f / (clip.dur - 1)) : 1),
   };
   const moved = zoom !== 1 || panX !== 0 || panY !== 0;

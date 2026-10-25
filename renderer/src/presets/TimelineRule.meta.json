@@ -16,8 +16,8 @@
           "additionalProperties": false,
           "required": ["when", "text"],
           "properties": {
-            "when": {"type": "string", "maxLength": 12, "description": "the date or step, e.g. 第100天, 2024年"},
-            "text": {"type": "string", "maxLength": 24, "description": "what happened; long ones wrap to two lines"},
+            "when": {"type": "string", "maxLength": 24, "description": "the date or step, e.g. Day 100, 2024, Q3"},
+            "text": {"type": "string", "maxLength": 48, "description": "what happened; long ones wrap to two lines"},
             "tone": {"type": "string", "description": "this node's colour: theme token or CSS"},
             "at": {"type": ["number", "string"], "description": "Time this point lights: \"line:3\" or seconds from the clip start. Default: points spread over the first 60% of the clip"}
           }
@@ -32,9 +32,9 @@
   },
   "example": {
     "points": [
-      {"when": "第1天", "text": "报名百日挑战"},
-      {"when": "第100天", "text": "全勤打卡，进抽奖池"},
-      {"when": "第108天", "text": "抽中一台笔记本"}
+      {"when": "Day 1", "text": "Signs up for the challenge"},
+      {"when": "Day 100", "text": "Shows up all 100 days"},
+      {"when": "Day 108", "text": "Wins a laptop in the draw"}
     ],
     "highlight": 2
   }
