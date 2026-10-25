@@ -414,7 +414,7 @@ WORDS = [("cut", 1.0, 1.4), ("Hello", 2.5, 2.9), ("there,", 3.0, 3.4), ("my", 3.
 
 def caption_track(p, **extra):
     data = raw(p)
-    track(data, "cap").pop("items")
+    track(data, "cap").pop("items", None)
     track(data, "cap").update({"source": "clip:c1", "max_chars": 14, **extra})
     write(p, data)
 
@@ -471,6 +471,84 @@ def test_transcript_phrases_break_at_pauses_sentences_and_length():
     out = R.transcript_phrases([w("one", 0, 0.2), w("two", 0.3, 0.5), w("three", 1.5, 1.8), w("four.", 1.9, 2.1),
                                 w("five", 2.2, 2.4), w("sixsix", 2.5, 2.7)], 12)
     assert [R.join_words([x["word"] for x in ph]) for ph in out] == ["one two", "three four.", "five sixsix"]
+
+
+# ------------------------------------------------------------------ split and ripple edge cases
+def test_split_at_a_source_second_or_a_marker_on_the_clip_itself(cut):
+    ok(cut, {"op": "split_clip", "id": "c1", "at": "src:c1@3.5", "new_id": "c1b"})
+    d = raw(cut)
+    assert clip(d, "c1")["end"] == 1.5 and clip(d, "c1b")["start"] == 1.5 and clip(d, "c1b")["trim_in"] == 3.5
+    ok(cut, {"op": "set", "path": "markers.cut", "value": "src:c1b@5.4"},
+       {"op": "split_clip", "id": "c1b", "at": "mark:cut", "new_id": "c1c"})
+    d = raw(cut)
+    assert d["markers"]["cut"] == "src:c1c@5.4" and clip(d, "c1c")["start"] == 3.4
+    assert spans(cut)["c1b"] == (1.5, 3.4) and spans(cut)["c1c"] == (3.4, 6)
+    ok(cut, {"op": "split_clip", "id": "c1c", "at": "mark:hit", "new_id": "c1d"})       # not on the clip: kept
+    assert clip(raw(cut), "c1c")["end"] == "mark:hit" and clip(raw(cut), "c1d")["start"] == "mark:hit"
+    assert errors(cut) == []
+
+
+def test_a_head_cut_keeps_the_clip_id_and_the_captions_that_follow_it(cut):
+    transcript(cut, WORDS)
+    caption_track(cut)
+    data = raw(cut)
+    data["markers"]["punch"] = "src:c1@5.15"
+    write(cut, data)
+    s = ok(cut, {"op": "ripple_delete", "start": 0, "end": "src:c1@3"})
+    d = raw(cut)
+    assert "removed" not in s and spans(cut)["c1"] == (0, 5) and clip(d, "c1")["trim_in"] == 3
+    assert spans(cut)["m1"] == (0, 8) and d["markers"]["punch"] == "src:c1@5.15"
+    assert track(d, "cap")["source"] == "clip:c1" and errors(cut) == []
+    # a cut that swallows the piece the captions name: they follow the piece of the recording left after it
+    ok(cut, {"op": "split_clip", "id": "c1", "at": 2, "new_id": "c1b"})
+    s = ok(cut, {"op": "ripple_delete", "start": 0, "end": "src:c1b@6"})
+    assert "captions cap now follow c1b" in s and track(raw(cut), "cap")["source"] == "clip:c1b"
+    assert caption_texts(cut)[1][-2:] == ["This is", "footage"] and errors(cut) == []
+    ok(cut, {"op": "split_clip", "id": "c1b", "at": 1, "new_id": "c1c"})
+    assert "now follow c1c" in ok(cut, {"op": "remove_clip", "id": "c1b"})
+    # c2 plays the same recording muted: captions do not follow it
+    assert "no clip 'c1c'" in refused(cut, {"op": "remove_clip", "id": "c1c"})
+
+
+def crossfade(p):
+    ok(p, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.5"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "crossfade", "dur": 0.5}}})
+    return spans(p)
+
+
+def test_a_ripple_cut_ending_inside_a_crossfade_keeps_what_is_left_of_it(cut):
+    assert crossfade(cut)["c2"] == (5.5, 8.5)                  # overlaps c1 (0-6) by 0.5 s
+    s = ok(cut, {"op": "ripple_delete", "start": "src:c1@6.6", "end": "src:c1@7.9", "tracks": ["v1"]})
+    d = raw(cut)
+    assert spans(cut)["c1_3"] == (4.6, 4.7) and spans(cut)["c2"] == (4.6, 7.2)
+    assert clip(d, "c2")["transition"] == {"type": "crossfade", "dur": 0.1} and "c2 keeps its crossfade" in s
+    assert errors(cut) == []
+
+
+def test_a_ripple_cut_starting_inside_a_crossfade_shortens_it(cut):
+    crossfade(cut)
+    s = ok(cut, {"op": "ripple_delete", "start": 5.7, "end": 6.5, "tracks": ["v1"]})
+    d = raw(cut)
+    assert spans(cut)["c1"] == (0, 5.7) and spans(cut)["c2"] == (5.5, 5.7) and spans(cut)["c2_3"] == (5.7, 7.7)
+    assert clip(d, "c2")["transition"]["dur"] == 0.2 and "shortened to 0.2 s" in s
+    assert errors(cut) == []                                  # c2 may end where c1 does
+
+
+def test_a_gap_inside_a_crossfade_keeps_it_on_both_sides(cut):
+    crossfade(cut)
+    ok(cut, {"op": "insert_gap", "at": 5.8, "dur": 1, "tracks": ["v1"]})
+    d = raw(cut)
+    sp = spans(cut)
+    assert sp["c1"] == (0, 5.8) and sp["c2"] == (5.5, 5.8) and sp["c1_2"] == (6.8, 7) and sp["c2_2"] == (6.8, 9.5)
+    assert clip(d, "c2")["transition"]["dur"] == 0.3 and clip(d, "c2_2")["transition"]["dur"] == 0.2
+    assert errors(cut) == []
+
+
+def test_insert_gap_off_the_millisecond_grid_still_opens_a_gap(cut):
+    ok(cut, {"op": "insert_gap", "at": 1.05, "dur": 1, "tracks": ["v1"]})       # frame 32 = 1.0667 s
+    sp = spans(cut)
+    assert sp["c1"] == (0, 1.067) and sp["c1_2"] == (2.067, 7)
+    assert clip(raw(cut), "c1_2")["trim_in"] == 3.067
 
 
 # ------------------------------------------------------------------ describe

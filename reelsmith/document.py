@@ -1021,7 +1021,7 @@ class _Check:
         if t is None or not span:
             return
         a, b = span
-        if t > b + 1e-6:
+        if t > b + 0.5 / self.fps:               # within half a frame it lands on the clip's last frame
             self.add("warning", where, f"{t:.2f} s is after the clip ends ({b:.2f} s): it never happens on screen")
         elif t < a - 1e-6:
             self.add("advice", where, f"{t:.2f} s is before the clip starts ({a:.2f} s): it shows as already done")
@@ -1039,7 +1039,7 @@ class _Check:
             return
         if e.anchor != "abs":
             self.inside(self.time(e, where), span, where)
-        elif span and e.offset > span[1] - span[0] + 1e-6:
+        elif span and e.offset > span[1] - span[0] + 0.5 / self.fps:
             self.add("warning", where, f"{e.offset:g} s from the clip's start is after it ends (it lasts "
                                        f"{span[1] - span[0]:.2f} s): numbers here count from the clip's start, so "
                                        "it never happens on screen; a Time string like \"line:5+0.3\" is absolute")
@@ -1108,7 +1108,7 @@ class _Check:
                 if fb1 <= row[0]:
                     continue
                 over = min(b1, b2) - a2
-                if j == i - 1 and tr is not None and fb2 > fb1:
+                if j == i - 1 and tr is not None and fb2 >= fb1:     # ending together: a ripple cut inside it
                     if over > tr.dur + 0.5 / self.fps:
                         self.add("error", f"track {track.id}",
                                  f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "

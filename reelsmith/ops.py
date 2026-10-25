@@ -335,7 +335,9 @@ def _update_clip(root, data, op) -> tuple[str, list]:
 def _remove_clip(root, data, op) -> tuple[str, list]:
     track, n, clip = _find_clip(data, op["id"])
     track["clips"].pop(n)
-    return f"removed {clip.get('type', '?')} clip {op['id']} from {track.get('id')}", []
+    notes = _follow_captions(root, data, {op["id"]: (track.get("id"), clip.get("type"), clip.get("asset"))})
+    return (f"removed {clip.get('type', '?')} clip {op['id']} from {track.get('id')}"
+            + (f" ({'; '.join(notes)})" if notes else "")), []
 
 
 def _move_clip(root, data, op) -> tuple[str, list]:
@@ -564,7 +566,10 @@ def _split_clip(root, data, op) -> tuple[str, list]:
     start_f, cut_f, end_f = now.frame(a), now.frame(cut), now.frame(b)
     if not start_f < cut_f < end_f:
         raise OpError(f"at {at!r} is {cut:.2f} s, not inside clip {cid} ({a:.2f}-{b:.2f} s)")
-    at_expr = round(cut, 3) if _refers_to(at, cid) else copy.deepcopy(at)
+    # on the cut's frame, so both halves, the second's trim_in and the split keyframes agree on where it is
+    snapped = _num(round(cut_f / now.fps, 3))
+    numeric = T.counts_from_clip(at) or _refers_to(at, cid) or _moves_with(root, data, cid, at, cut)
+    at_expr = snapped if numeric else copy.deepcopy(at)
     rel = cut_f - start_f
     had_end = "end" in clip
     notes = []
@@ -596,7 +601,7 @@ def _split_clip(root, data, op) -> tuple[str, list]:
     second["start"] = copy.deepcopy(at_expr)
     if not had_end:
         second.pop("end", None)
-        second["dur"] = round(b - cut, 3)
+        second["dur"] = round(b - cut_f / now.fps, 3)
     for key in ("enter", "transition", "fade_in"):
         second.pop(key, None)
     if second.get("type") in ("video", "audio"):
@@ -637,6 +642,17 @@ def _split_clip(root, data, op) -> tuple[str, list]:
             notes.append(f"{moved} src:{cid}@... reference(s) past the cut now name {new}")
     text = f"split clip {cid} at {cut:.2f} s into {cid} and {new}" + (f" ({'; '.join(notes)})" if notes else "")
     return text, [cid, new]
+
+
+def _moves_with(root: Path, data: dict, cid: str, at, cut: float) -> bool:
+    """Whether the Time `at` moves when clip cid does ("src:<cid>@S", a marker on one, a clip timed from cid): as the
+    cut point it would make the second half start from itself, so it is written as a number."""
+    trial = copy.deepcopy(data)
+    _find_clip(trial, cid)[2]["start"] = round(cut + 1, 3)
+    try:
+        return abs(_Now(root, trial, "split_clip").time(at, "at") - cut) > 1e-6
+    except OpError:
+        return True
 
 
 def _bake_motion(now: _Now, clip: dict, seconds: float) -> bool:
@@ -846,14 +862,103 @@ def _fresh_id(data: dict, base: str) -> str:
     return f"{stem}_{n}"
 
 
-def _cut_at(root: Path, data: dict, cid: str, seconds: float, notes: list) -> str:
-    """Split clip cid at `seconds` (a frame inside it); the id of the part after the cut."""
+def _cut_at(root: Path, data: dict, cid: str, seconds: float, notes: list, kept: dict | None = None) -> str:
+    """Split clip cid at `seconds` (a frame inside it); the id of the part after the cut. `kept` maps every piece of
+    a clip with a transition to that transition (_heal_transitions)."""
     new = _fresh_id(data, cid)
+    if kept is not None:
+        tr = _find_clip(data, cid)[2].get("transition")
+        if isinstance(tr, dict) or cid in kept:
+            kept[new] = kept.setdefault(cid, copy.deepcopy(tr))
     text, _ = _split_clip(root, data, {"op": "split_clip", "id": cid, "at": round(seconds, 3), "new_id": new})
     m = re.search(r" \((.*)\)$", text)
     if m:
         notes.extend(n for n in m.group(1).split("; ") if n not in notes and "reference" not in n)
     return new
+
+
+def _heal_transitions(root: Path, data: dict, tracks: list[dict], kept: dict) -> list[str]:
+    """After a ripple edit through a transition: a piece that still overlaps the clip before it keeps the
+    transition, shortened to the overlap left; one that kept it but got shorter than it is shortened to fit."""
+    if not kept:
+        return []
+    now = _Now(root, data, "a ripple edit")
+    notes = []
+    for t in tracks:
+        rows = []
+        for c in t.get("clips") or []:
+            try:
+                a, b = now.span(c["id"])
+            except (OpError, KeyError, TypeError):
+                continue                        # validation names a clip that cannot be timed
+            rows.append((now.frame(a), now.frame(b), a, b, c))
+        rows.sort(key=lambda r: (r[0], r[1]))
+        for prev, (fa, fb, a, b, c) in zip([None] + rows[:-1], rows):
+            tr = kept.get(c["id"])
+            if not isinstance(tr, dict):
+                continue
+            touching = prev is not None and prev[1] >= fa
+            limit = min(b - a, prev[3] - prev[2]) if touching else b - a
+            fresh = not isinstance(c.get("transition"), dict)
+            if fresh:
+                if prev is None or prev[1] <= fa:
+                    continue
+                c["transition"] = copy.deepcopy(tr)
+                limit = min(limit, min(prev[3], b) - a)
+            cap = c["transition"]
+            if float(cap.get("dur", 0.5)) > limit + 1e-6:
+                cap["dur"] = _num(math.floor((limit + 1e-6) * 1000) / 1000)
+            elif not fresh:
+                continue
+            what = f"{cap.get('type')} ({cap.get('dur', 0.5):g} s)"
+            notes.append(f"{c['id']} keeps its {what} from {prev[4]['id']}: the edit fell inside it" if fresh else
+                         f"{c['id']}'s {cap.get('type')} is shortened to {cap.get('dur', 0.5):g} s to fit what is "
+                         "left of it")
+    return notes
+
+
+def _heard(c: dict) -> bool:
+    """resolve.sounds on a raw clip: audio, or video with volume (or volume keyframes) above 0."""
+    if c.get("type") == "audio":
+        return True
+    keys = (c.get("keyframes") or {}).get("volume") if isinstance(c.get("keyframes"), dict) else None
+    loud = any(isinstance(k, dict) and T.is_number(k.get("v")) and k["v"] > 0 for k in keys or [])
+    return (T.is_number(c.get("volume")) and c["volume"] > 0) or loud
+
+
+def _follow_captions(root: Path, data: dict, gone: dict) -> list[str]:
+    """Captions that followed a clip that is gone ("source": "clip:<id>") follow the first piece left of the same
+    recording on its track."""
+    notes = []
+    following = [t for t in _tracks(data) if isinstance(t, dict) and t.get("kind") == "captions"
+                 and isinstance(t.get("source"), str) and t["source"].startswith("clip:") and t["source"][5:] in gone]
+    if not following:
+        return notes
+    try:
+        now = _Now(root, data, "following captions")
+    except OpError:
+        now = None
+    for t in following:
+        src = t["source"]
+        tid, kind, asset = gone[src[5:]]
+        try:
+            clips = _find_track(data, tid)[1].get("clips") or []
+        except OpError:
+            continue
+        same = [c for c in clips if isinstance(c, dict) and c.get("type") == kind and c.get("asset") == asset
+                and not c.get("loop") and _heard(c)]
+        if not same:
+            continue                            # nothing left plays it: validation says so
+
+        def start(c):
+            try:
+                return now.span(c["id"])[0] if now else 0.0
+            except OpError:
+                return 0.0
+        new = min(same, key=start)["id"]
+        t["source"] = f"clip:{new}"
+        notes.append(f"captions {t.get('id')} now follow {new} ({src[5:]} is gone)")
+    return notes
 
 
 def _seconds_arg(value, what: str, low: float = 0.0) -> float:
@@ -906,20 +1011,24 @@ def _ripple_delete(root, data, op) -> tuple[str, list]:
     tracks = _ripple_tracks(data, op.get("tracks"))
     notes: list[str] = []
     split = []
+    heads = {}                                  # the piece left after a cut head -> the clip's own id
+    kept: dict = {}
     for t in tracks:
         for c in [c for c in t.get("clips") or [] if isinstance(c, dict)]:
             a, b = now.span(c.get("id"))
             af, bf = now.frame(a), now.frame(b)
             piece = c["id"]
             if af < sf < bf:
-                piece = _cut_at(root, data, piece, cut_s, notes)
+                piece = _cut_at(root, data, piece, cut_s, notes, kept)
             if af < ef < bf:
-                _cut_at(root, data, piece, cut_e, notes)
+                rest = _cut_at(root, data, piece, cut_e, notes, kept)
+                if piece == c["id"]:
+                    heads[rest] = piece
             if af < sf < bf or af < ef < bf:
                 split.append(c["id"])
     now = _Now(root, data, "ripple_delete")
     before = _measure(now, data)
-    removed = []
+    removed, lost = [], {}
     for t in tracks:
         if isinstance(t.get("clips"), list):
             keep = []
@@ -927,12 +1036,14 @@ def _ripple_delete(root, data, op) -> tuple[str, list]:
                 a, b = before["clips"].get(c.get("id"), (None, None))
                 if a is not None and now.frame(a) >= sf and now.frame(b) <= ef:
                     removed.append(c["id"])
+                    lost[c["id"]] = (t.get("id"), c.get("type"), c.get("asset"))
                 else:
                     keep.append(c)
             t["clips"] = keep
 
-    def mv(x: float) -> float:
-        return x if x <= cut_s + 1e-9 else cut_s if x < cut_e - 1e-9 else x - gone
+    def mv(x: float) -> float:                  # in frames: a boundary written to 3 decimals may sit a hair off
+        f = now.frame(x)
+        return x if f <= sf else cut_s if f < ef else x - gone
     on = {id(t) for t in tracks}
     index = _clip_index(data)
     want: dict = {"clips": {}, "markers": {k: mv(v) for k, v in before["markers"].items()}}
@@ -943,12 +1054,23 @@ def _ripple_delete(root, data, op) -> tuple[str, list]:
         want["duration"] = mv(before["duration"])
     want["items"] = _moved_items(data, tracks, before, mv, mv, now.fps)
     _write_times(root, data, before, want, "ripple_delete")
+    names = {}
+    for rest, own in heads.items():             # a clip whose head was cut keeps its id on what is left of it
+        if own in lost and rest in index:
+            index[rest][1]["id"] = own
+            retarget(data, rest, own)
+            removed.remove(own)
+            lost.pop(own)
+            names[rest] = own
+    kept = {names.get(k, k): v for k, v in kept.items()}
+    notes += _heal_transitions(root, data, tracks, kept) + _follow_captions(root, data, lost)
     notes += _voice_note(now, cut_s, -gone)
     text = (f"ripple-deleted {cut_s:.2f}-{cut_e:.2f} s ({gone:.2f} s) on {', '.join(str(t.get('id')) for t in tracks)}"
             + (f"; removed {', '.join(removed)}" if removed else "")
             + (f"; split {', '.join(split)}" if split else "")
             + f"; what followed moved {gone:.2f} s earlier")
-    near = [cid for cid, (a, b) in want["clips"].items() if abs(a - cut_s) < 1e-6 or abs(b - cut_s) < 1e-6]
+    near = [names.get(cid, cid) for cid, (a, b) in want["clips"].items()
+            if abs(a - cut_s) < 1e-6 or abs(b - cut_s) < 1e-6]
     return text + (f" ({'; '.join(notes)})" if notes else ""), near[:8]
 
 
@@ -962,20 +1084,22 @@ def _insert_gap(root, data, op) -> tuple[str, list]:
     tracks = _ripple_tracks(data, op.get("tracks"))
     notes: list[str] = []
     split = []
+    kept: dict = {}
     for t in tracks:
         for c in [c for c in t.get("clips") or [] if isinstance(c, dict)]:
             a, b = now.span(c.get("id"))
             if now.frame(a) < at_f < now.frame(b):
-                _cut_at(root, data, c["id"], at, notes)
+                _cut_at(root, data, c["id"], at, notes, kept)
                 split.append(c["id"])
     now = _Now(root, data, "insert_gap")
     before = _measure(now, data)
 
-    def first(x: float) -> float:              # a start at the point moves; an end there stays
-        return x + gap if x >= at - 1e-9 else x
+    # in frames: a start on the point's frame moves, an end on it stays
+    def first(x: float) -> float:
+        return x + gap if now.frame(x) >= at_f else x
 
     def last(x: float) -> float:
-        return x + gap if x > at + 1e-9 else x
+        return x + gap if now.frame(x) > at_f else x
     on = {id(t) for t in tracks}
     index = _clip_index(data)
     want: dict = {"clips": {}, "markers": {k: first(v) for k, v in before["markers"].items()}}
@@ -985,7 +1109,7 @@ def _insert_gap(root, data, op) -> tuple[str, list]:
         want["duration"] = first(before["duration"])
     want["items"] = _moved_items(data, tracks, before, first, last, now.fps)
     _write_times(root, data, before, want, "insert_gap")
-    notes += _voice_note(now, at, gap)
+    notes += _heal_transitions(root, data, tracks, kept) + _voice_note(now, at, gap)
     text = (f"inserted {gap:.2f} s at {at:.2f} s on {', '.join(str(t.get('id')) for t in tracks)}"
             + (f"; split {', '.join(split)}" if split else "") + f"; what followed moved {gap:.2f} s later")
     near = [cid for cid, (a, b) in want["clips"].items() if abs(a - at - gap) < 1e-6 or abs(b - at) < 1e-6]
