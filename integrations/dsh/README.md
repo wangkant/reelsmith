@@ -81,7 +81,9 @@ reelsmith server, so the agent's file tools and reelsmith agree on what `demo/pr
 
 YAML only: `env` (extra environment for the server, merged over DSH's scrubbed environment: credential-shaped
 variables are dropped, so give reelsmith its keys through its workspace `.env` or here), `idleMinutes` (close an
-idle working directory's server, default 30), `skillDir` (where `reelsmith/SKILL.md` lives).
+idle working directory's server, default 30; a server with a call running stays), `skillDir` (where
+`reelsmith/SKILL.md` lives). The server starts with `PYTHONSAFEPATH=1`, so a `json.py` or `queue.py` in the session
+folder cannot shadow reelsmith's imports.
 
 ```yaml
 - id: reelsmith

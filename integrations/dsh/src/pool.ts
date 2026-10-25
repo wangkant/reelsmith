@@ -34,16 +34,26 @@ export type TransportFactory = (spec: ServerSpec, place: ServerPlace, stderr: (c
 
 const STDERR_TAIL = 4000
 
-/** The real transport: the server as a child process with the subprocess seam's scrubbed environment. */
-export const stdioTransport: TransportFactory = (spec, place, stderr) => {
+/**
+ * A server's environment: the subprocess seam's scrubbed one, with the session folder kept off Python's import path
+ * (`-m` would put it first, so a json.py or queue.py the agent wrote there would shadow reelsmith's imports).
+ */
+export function serverEnv(spec: ServerSpec, place: ServerPlace): Record<string, string> {
   const env: Record<string, string> = {
     ...scrubbedParentEnv(),
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
+    PYTHONSAFEPATH: '1',
     ...spec.env,
   }
   if (place.root !== undefined) env.REELSMITH_ROOT = place.root
   else delete env.REELSMITH_ROOT
+  return env
+}
+
+/** The real transport: the server as a child process. */
+export const stdioTransport: TransportFactory = (spec, place, stderr) => {
+  const env = serverEnv(spec, place)
   const transport = new StdioClientTransport({ command: spec.command, args: spec.args, env, cwd: place.cwd, stderr: 'pipe' })
   transport.stderr?.on('data', (chunk: Buffer | string) => { stderr(String(chunk)) })
   return transport
@@ -55,6 +65,7 @@ export class Server {
   private connecting: Promise<Client> | undefined
   private stderrTail = ''
   private closed = false
+  private inflight = 0
   lastUsed = Date.now()
 
   constructor(
@@ -80,12 +91,19 @@ export class Server {
     }))
   }
 
+  /** Whether a call is running: the idle reaper leaves such a server alone (a render may outlast idleMinutes). */
+  get busy(): boolean {
+    return this.inflight > 0
+  }
+
   async call(name: string, args: Record<string, unknown>, signal: AbortSignal, timeout: number): Promise<unknown> {
     this.lastUsed = Date.now()
-    const client = await this.connect()
+    this.inflight += 1
     try {
+      const client = await this.connect()
       return await client.callTool({ name, arguments: args }, { signal, timeout, resetTimeoutOnProgress: true })
     } finally {
+      this.inflight -= 1
       this.lastUsed = Date.now()
     }
   }
@@ -157,10 +175,10 @@ export class ServerPool {
     return server
   }
 
-  /** Close servers idle for longer than `ms`, except `keep`. */
+  /** Close servers idle for longer than `ms`, except `keep` and servers with a call running. */
   async reap(ms: number, keep?: Server): Promise<void> {
     const now = Date.now()
-    const idle = [...this.servers].filter(([, server]) => server !== keep && now - server.lastUsed > ms)
+    const idle = [...this.servers].filter(([, server]) => server !== keep && !server.busy && now - server.lastUsed > ms)
     for (const [key] of idle) this.servers.delete(key)
     await Promise.all(idle.map(([, server]) => server.close()))
   }
