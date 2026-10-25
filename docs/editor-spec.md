@@ -459,6 +459,7 @@ two budget values for one process.
 Each takes `project` (the path of the folder holding project.json, or of project.json itself) first where it
 applies and returns text; structured results are JSON inside the text. A result is flagged as an error (MCP
 `is_error`, CLI exit status 1) when the call failed or found blocking problems. No tool raises to the client.
+DeepSeek Harness gets them, with contact sheets as images, a Video editor mode and a panel: integrations/dsh.
 
 ### 10.1 Transports
 
