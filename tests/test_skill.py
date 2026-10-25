@@ -55,6 +55,9 @@ def test_plugin_and_marketplace_manifests():
     assert entry["source"].startswith("./") and entry["name"] == plugin["name"] == market["name"] == "reelsmith"
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert plugin["version"] == pyproject["project"]["version"]
+    # PyPI's summary says what the plugin says: an editing harness, no canvas or genre
+    summary = pyproject["project"]["description"]
+    assert summary.startswith("A video editing harness for AI coding agents") and "vertical" not in summary
     command = plugin["mcpServers"]["reelsmith"]["command"]
     assert command in pyproject["project"]["scripts"]
     assert (plugin_dir / "skills" / "reelsmith" / "SKILL.md").is_file()

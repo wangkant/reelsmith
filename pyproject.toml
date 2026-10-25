@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "reelsmith"
 version = "0.1.0"
-description = "A video editor built for AI agents: script, voice, assets and an NLE timeline in, a checked vertical film out"
+description = "A video editing harness for AI coding agents: an NLE timeline the agent edits, renders and checks, for any canvas and language"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
