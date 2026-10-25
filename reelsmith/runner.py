@@ -1,10 +1,12 @@
 """reelsmith run: a self-hosted agent session that makes one film in one project with the reelsmith tools.
 
-Two engines. "api" (the default) is reelsmith's own agent loop (agent/) over any OpenAI-compatible Chat Completions
+Four engines. "api" (the default) is reelsmith's own agent loop (agent/) over any OpenAI-compatible Chat Completions
 API: OpenRouter, DeepSeek, OpenAI or a custom/local server (agent/providers.py). "agent-sdk" is a Claude Agent SDK
 session served by Anthropic or DeepSeek (backends.py). Either way the session gets the reelsmith tools, file tools
-fenced by guard.py and web search; no shell. Its state lives in <project>/build/run_state.json, so an interrupted run
-resumes its own session; out/run_report.json says how it ended.
+fenced by guard.py and web search; no shell. "codex" and "dsh" hand the session to an installed coding agent's
+headless mode (cli_engines.py), fenced by that agent's own sandbox, with the reelsmith MCP server held to guard.py's
+rules. Its state lives in <project>/build/run_state.json, so an interrupted run resumes its own session;
+out/run_report.json says how it ended.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import backends, guard
+from . import backends, cli_engines, guard
 from .agent import providers
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
@@ -30,7 +32,7 @@ RENDERER_SRC = ROOT / "renderer" / "src"
 STATE_FILE = Path("build") / "run_state.json"
 REPORT_FILE = Path("out") / "run_report.json"
 MESSAGES_FILE = Path("build") / "agent_messages.json"
-ENGINES = ("api", "agent-sdk")
+ENGINES = ("api", "agent-sdk", *cli_engines.ENGINES)
 # the model defaults to the provider's (api) or the backend's (agent-sdk) own
 DEFAULTS = {"engine": "api", "provider": providers.DEFAULT, "backend": "anthropic", "effort": "medium",
             "reasoning": None, "budget_usd": 5.0, "max_minutes": 120, "stall_minutes": 60, "max_turns": None,
@@ -53,10 +55,14 @@ def read_json(path: Path, default=None):
 
 
 def write_json(path: Path, data) -> None:
+    write_text(path, json.dumps(data, ensure_ascii=False, indent=1, default=str))
+
+
+def write_text(path: Path, text: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -85,6 +91,7 @@ class Settings:
     context_tokens: int = 200_000
     max_image_edge: int = 1280
     images: bool | None = None                  # None: the provider's table says whether the model takes images
+    prices: dict | None = None                  # codex and dsh engines: runner.prices
 
 
 def _engine(name) -> str:
@@ -102,7 +109,7 @@ def _own_engine(own: dict) -> str:
 
 
 def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=None, backend=None, engine=None,
-                 provider=None) -> Settings:
+                 provider=None, effort=None) -> Settings:
     """CLI flags over workspace.json "runner" over the defaults. --backend implies the agent-sdk engine and
     --provider the api engine. The workspace's model goes with the workspace's engine and provider (or backend): a
     flag that switches away from them starts from the new one's default model."""
@@ -125,14 +132,38 @@ def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=No
         raise WorkspaceError("--backend is for --engine agent-sdk; the api engine takes --provider")
     if chosen_engine == "agent-sdk" and provider:
         raise WorkspaceError("--provider is for --engine api; the agent-sdk engine takes --backend")
+    if chosen_engine in cli_engines.ENGINES and (backend or provider):
+        raise WorkspaceError(f"--backend and --provider are not for the {chosen_engine} engine: it runs on its own "
+                             "login (codex) or DeepSeek key (dsh)")
+    if effort and chosen_engine == "api":
+        raise WorkspaceError("--effort is for the agent-sdk, codex and dsh engines; the api engine takes "
+                             "workspace.json runner.reasoning")
     own_model = own.get("model") if chosen_engine == own_engine else None
-    api = None
-    if chosen_engine == "agent-sdk":
+    api, prices = None, None
+    if chosen_engine in cli_engines.ENGINES:
+        if not model:
+            model = own_model or (cli_engines.codex_user_model() if chosen_engine == "codex"
+                                  else cli_engines.DSH_DEFAULT_MODEL)
+        own_effort = own.get("effort") if chosen_engine == own_engine else None
+        if chosen_engine == "codex":
+            cfg["effort"] = effort or own_effort or DEFAULTS["effort"]
+            allowed = cli_engines.CODEX_EFFORTS
+        else:
+            cfg["effort"] = effort or own_effort or None        # DSH's own default (high) unless asked
+            allowed = cli_engines.DSH_EFFORTS
+        if cfg["effort"] and str(cfg["effort"]).lower() not in allowed:
+            raise WorkspaceError(f'the {chosen_engine} engine takes an effort of {", ".join(allowed)}, not '
+                                 f'"{cfg["effort"]}"')
+        prices = providers._prices(own.get("prices"))
+        backend_name, provider_name = DEFAULTS["backend"], None
+    elif chosen_engine == "agent-sdk":
         own_backend = backends.get(own.get("backend") or DEFAULTS["backend"])
         chosen = backends.get(backend) if backend else own_backend
         if not model:
             model = own_model if chosen is own_backend and own_model else chosen.model
         backend_name, provider_name = chosen.name, None
+        if effort:
+            cfg["effort"] = effort
     else:
         own_provider = str(own.get("provider") or DEFAULTS["provider"]).strip().lower()
         api = providers.get(provider or own_provider, own)
@@ -159,7 +190,7 @@ def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=No
                      engine=chosen_engine, provider=provider_name, api=api,
                      reasoning=str(reasoning).lower() if reasoning else None, web=web,
                      context_tokens=int(cfg["context_tokens"]), max_image_edge=int(cfg["max_image_edge"]),
-                     images=images)
+                     images=images, prices=prices)
     except (TypeError, ValueError) as exc:
         raise WorkspaceError(f"workspace.json runner has a value of the wrong type: {exc}") from None
     if s.budget_usd <= 0 or s.max_minutes <= 0 or s.stall_minutes <= 0:
@@ -198,6 +229,16 @@ def api_system(project: Path, ws) -> str:
         "Work only through your tools; there is no shell. A reply without a tool call ends the session, so keep "
         "calling tools until out/film.mp4 is rendered and passes, then answer with a short summary.",
         f"Today is {datetime.now():%Y-%m-%d}.",
+    ])
+
+
+def cli_role(project: Path, ws) -> str:
+    """The codex and dsh engines' role: their own system prompt stays, so it opens the first message."""
+    return "\n".join([
+        system_append(project, ws),
+        "Nobody will answer questions, and your final answer ends the session: keep working until out/film.mp4 is "
+        "rendered and passes, then answer with a short summary. Make media with the reelsmith tools (import_asset "
+        "downloads and copies files, capture screenshots pages); build/, out/ and .history/ are theirs.",
     ])
 
 
@@ -614,6 +655,7 @@ class Run:
         # api engine seams: settings -> a ChatClient; (project, ws, scope, web) -> tools
         self.client_factory, self.tools_factory = client_factory, tools_factory
         self.api = settings.engine == "api"
+        self.cli = settings.engine in cli_engines.ENGINES
         self.state_path = self.project / STATE_FILE
         self.state = {} if fresh else (read_json(self.state_path, {}) or {})
         self.backend = backends.get(settings.backend)
@@ -632,8 +674,8 @@ class Run:
         return round(float(self.state.get("cost_usd") or 0), 4)
 
     def scope(self) -> guard.Scope:
-        spill = None if self.api else Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") \
-            / "projects" / sanitized(self.project)
+        spill = None if self.settings.engine != "agent-sdk" else \
+            Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects" / sanitized(self.project)
         return guard.scope_for(self.project, self.ws, extra_read=[MANUAL.parent, RENDERER_SRC], spill=spill)
 
     def wall_left(self) -> float:
@@ -718,9 +760,73 @@ class Run:
         self.save(inflight=None)
         self.record(row)
 
+    async def cli_session(self, prompt: str, kind: str, resume: str | None = None) -> dict:
+        """One codex or dsh session: the agent's headless mode as a child process, its events folded into a row."""
+        s, engine = self.settings, self.settings.engine
+        budget_left = s.budget_usd - self.spent()
+        scope = self.scope()
+        srv = cli_engines.server(scope)
+        stall_s = s.stall_minutes * 60
+        if not resume:
+            prompt = cli_role(self.project, self.ws) + "\n\n" + prompt
+        if engine == "codex":
+            exe = cli_engines.find_codex()
+            if not exe:
+                raise WorkspaceError("the Codex CLI is not installed here: install it (npm i -g @openai/codex) and "
+                                     "sign in, or set CODEX_EXE")
+            price = cli_engines.price_for(s.model, s.prices)
+            cmd = cli_engines.codex_command(exe, self.project, scope, srv, s.model, s.effort, stall_s, resume)
+            env = cli_engines.codex_env(s.proxy)
+            stream_cls, extra = cli_engines.CodexStream, {}
+        else:
+            key = key_for(self.ws, "DEEPSEEK_API_KEY")
+            if not key:
+                raise WorkspaceError("DEEPSEEK_API_KEY is missing: put it in the workspace .env or the environment")
+            exe = cli_engines.find_dsh()
+            if not exe:
+                raise WorkspaceError("DeepSeek Harness is not installed here: install Node.js (for npx "
+                                     f"{cli_engines.DSH_PACKAGE}) or set DSH_EXE to the dsh command")
+            price = cli_engines.price_for(s.model, s.prices, backends.BACKENDS["deepseek"].prices)
+            patch = self.project / "build" / "dsh-patch.yml"
+            write_text(patch, cli_engines.dsh_patch(srv, s.model, s.effort, stall_s))
+            cmd = cli_engines.dsh_command(exe, patch, scope, resume)
+            env = cli_engines.dsh_env(key, scope.home / ".cache" / "dsh", s.proxy)
+            stream_cls, extra = cli_engines.DshStream, {"max_turns": s.max_turns}
+        model = s.model or "its default model"
+        self.log.event("run", session=kind, resume=resume, prompt=prompt, engine=engine, model=s.model, command=cmd)
+        self.log.line(f"{kind} session{' ' + resume if resume else ''} on {engine} {model} (budget left "
+                      f"${budget_left:.2f}{'' if price else ', not counted: no price'})")
+        if price is None:
+            self.log.line(f"warning: no price for {model}: tokens are reported but the spend is not counted; set "
+                          "workspace.json runner.prices")
+        elif engine == "codex":
+            self.log.line("note: Codex reports its usage when a session ends, so the budget is checked between "
+                          "sessions")
+        self.save(status="running", last_stop="the process was interrupted")
+
+        def progress(outcome: dict) -> None:
+            # a killed process loses no spend: plan() settles `inflight` on the next start
+            if outcome.get("session_id"):
+                self.save(session_id=outcome["session_id"], inflight={
+                    "session_id": outcome["session_id"], "cost_usd": outcome.get("cost_usd") or 0.0,
+                    "turns": outcome.get("turns") or 0, "cost_estimated": True})
+        stream = stream_cls(self.log, price, progress, **extra)
+        outcome = await in_thread(cli_engines.drive, cmd, self.project, env, prompt, stream, stall_s,
+                                  max(60.0, self.wall_left()), max(0.0, budget_left),
+                                  self.project / "build" / "runner-cli.log")
+        row = cli_engines.summary(outcome)
+        row.update(kind=kind, ended_at=now_iso())
+        spend = f"~${row['cost_usd']:.2f}" if row["cost_known"] else "not counted"
+        self.log.line(f"session spend {spend} in {row['turns']} turns, {row['tool_calls']} tool calls")
+        self.save(inflight=None)
+        self.record(row)
+        return row
+
     async def session(self, prompt: str, kind: str, resume: str | None = None) -> dict:
         if self.api:
             return await self.api_session(prompt, kind, resume)
+        if self.cli:
+            return await self.cli_session(prompt, kind, resume)
         budget_left = self.settings.budget_usd - self.spent()
         options = build_options(self.project, self.ws, self.settings, self.scope(), self.log, resume=resume,
                                 budget_left=budget_left)
@@ -760,6 +866,12 @@ class Run:
                     raise WorkspaceError(f"the unfinished run's session is on {on[0]} {on[1]}: resume it with "
                                          f"--provider {on[0]} --model {on[1]}, or start over with --fresh")
                 self.settle_inflight()
+            elif self.cli:
+                on = self.state.get("model") or ""
+                if on != (self.settings.model or ""):
+                    raise WorkspaceError(f"the unfinished run's session is on {made} {on or '(its default model)'}: "
+                                         f"resume it with --model {on or '<that model>'}, or start over with --fresh")
+                self.settle_inflight()
             else:
                 made_on = self.state.get("backend") or "anthropic"
                 if made_on != self.backend.name:
@@ -770,7 +882,8 @@ class Run:
             raise WorkspaceError("a brief is needed for a new run (--brief \"...\")")
         self.save(status="new", brief=self.brief, started_at=self.started_at, session_id=None, cost_usd=0.0,
                   turns=0, runs=[], engine=self.settings.engine, provider=self.settings.provider,
-                  backend=None if self.api else self.backend.name, model=self.settings.model, inflight=None)
+                  backend=None if self.api or self.cli else self.backend.name, model=self.settings.model,
+                  inflight=None)
         return "new", first_prompt(self.project, self.brief), None
 
     async def go(self) -> dict:
@@ -818,11 +931,13 @@ class Run:
         if self.api:
             estimated = (any(r.get("cost_estimated") for r in sessions) if sessions
                          else not self.settings.api.reports_cost)
+        elif self.cli:
+            estimated = True
         else:
             estimated = not self.backend.cli_cost
         out = {
             "project": str(self.project), "brief": self.state.get("brief"), "engine": self.settings.engine,
-            "provider": self.settings.provider, "backend": None if self.api else self.backend.name,
+            "provider": self.settings.provider, "backend": None if self.api or self.cli else self.backend.name,
             "model": self.settings.model, "delivered": delivered, "problems": problems, "check": check,
             "film": str(self.project / "out" / "film.mp4") if (self.project / "out" / "film.mp4").is_file() else None,
             "cost_usd": self.spent(), "cost_estimated": estimated,
@@ -831,6 +946,13 @@ class Run:
             "finished_at": now_iso(), "stop": stop_reason(last) if last else None,
             "sessions": self.state.get("runs") or [], "denied": self.log.denials[-50:],
         }
+        if self.cli:
+            usage: dict = {}
+            for r in sessions:
+                for k, v in (r.get("usage") or {}).items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        usage[k] = usage.get(k, 0) + v
+            out.update(cost_known=all(r.get("cost_known", True) for r in sessions), usage=usage)
         write_json(self.project / REPORT_FILE, out)
         self.log.line(f"{'DELIVERED' if delivered else 'NOT DELIVERED'} cost=${out['cost_usd']:.2f} "
                       f"turns={out['turns']} wall={out['wall_s'] / 60:.1f} min"
@@ -842,12 +964,12 @@ class Run:
 def run(project, brief: str | None = None, model: str | None = None, budget_usd: float | None = None,
         max_minutes: float | None = None, query_fn=None, fresh: bool = False, max_turns: int | None = None,
         out=None, backend: str | None = None, engine: str | None = None, provider: str | None = None,
-        client_factory=None, tools_factory=None) -> dict:
+        client_factory=None, tools_factory=None, effort: str | None = None) -> dict:
     root = project_root(project)
     if not (root / PROJECT_FILE).is_file():
         raise WorkspaceError(f"no project at {root} ({PROJECT_FILE} missing): create it with `reelsmith new`")
     ws = find_workspace(root)
-    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend, engine, provider)
+    settings = settings_for(ws, model, budget_usd, max_minutes, max_turns, backend, engine, provider, effort)
     return asyncio.run(Run(root, brief, settings, ws, query_fn=query_fn, fresh=fresh, out=out,
                            client_factory=client_factory, tools_factory=tools_factory).go())
 
@@ -858,7 +980,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--brief", help="what the film is about; needed unless an unfinished run resumes")
     ap.add_argument("--engine", choices=ENGINES,
                     help="api: reelsmith's own loop over an OpenAI-compatible API (default); agent-sdk: a Claude "
-                         "Agent SDK session; or workspace.json runner.engine")
+                         "Agent SDK session; codex: the Codex CLI's `codex exec`; dsh: DeepSeek Harness headless; or "
+                         "workspace.json runner.engine")
     ap.add_argument("--provider", choices=list(providers.PROVIDERS),
                     help=f"api engine: who serves the model; default {DEFAULTS['provider']} or workspace.json "
                          "runner.provider")
@@ -866,7 +989,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="agent-sdk engine: who serves the model; default anthropic or workspace.json runner.backend")
     ap.add_argument("--model", help="default " + ", ".join(
         [f"{p.default_model} ({p.name})" for p in providers.PROVIDERS.values() if p.default_model]
-        + [f"{b.model} (agent-sdk {b.name})" for b in backends.BACKENDS.values()]) + ", or workspace.json runner.model")
+        + [f"{b.model} (agent-sdk {b.name})" for b in backends.BACKENDS.values()]
+        + ["Codex's own (codex)", f"{cli_engines.DSH_DEFAULT_MODEL} (dsh)"]) + ", or workspace.json runner.model")
+    ap.add_argument("--effort", help="agent-sdk, codex and dsh engines: the model's effort (or workspace.json "
+                                     "runner.effort)")
     ap.add_argument("--budget-usd", type=float, help="cap on this run's model spend")
     ap.add_argument("--max-minutes", type=float, help="wall-clock cap for this process")
     ap.add_argument("--max-turns", type=int, help="turn cap per session")
@@ -874,7 +1000,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         report = run(args.project, args.brief, args.model, args.budget_usd, args.max_minutes, fresh=args.fresh,
-                     max_turns=args.max_turns, backend=args.backend, engine=args.engine, provider=args.provider)
+                     max_turns=args.max_turns, backend=args.backend, engine=args.engine, provider=args.provider,
+                     effort=args.effort)
     except WorkspaceError as exc:
         print(f"reelsmith run: {exc}", file=sys.stderr)
         return 2

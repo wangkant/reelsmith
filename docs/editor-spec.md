@@ -26,7 +26,8 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
   rules.json                      the owner's rules {"hard": {...}, "advice": {...}} (optional)
   .env                            keys (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, ...); never printed or shown to the agent
   ledger.jsonl                    paid calls (section 9.6)
-  .cache/                         narration line cache (tts/), draw.log, animate work files, the type-check config
+  .cache/                         narration line cache (tts/), draw.log, animate work files, the type-check config,
+                                  the runner's DSH home (dsh/)
   library/
     NOTES.md                      the agent's notes (tools notes / note)
     components/<Name>.tsx         the agent's own components (section 6)
@@ -40,7 +41,8 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
     assets/                       images, clips, evidence captures, audio
     build/                        regenerable: resolved*.json, stills/, inspect/, review/, fonts/ (the workspace's
                                   fonts, linked for the renderer), segments.json, report.json (latest render
-                                  attempt), run_state.json, agent_messages.json and logs of the runner
+                                  attempt), run_state.json, agent_messages.json, dsh-patch.yml and logs of the
+                                  runner
     out/film.mp4                  the delivered film; out/meta.json (meta + duration, profile, render time);
                                   out/report.json (the delivered film's report); out/run_report.json (runner)
     .history/NNNN.json            a snapshot of project.json before each applied edit batch (undo); log.jsonl,
@@ -458,20 +460,80 @@ Each takes `project` (the path of the folder holding project.json, or of project
 applies and returns text; structured results are JSON inside the text. A result is flagged as an error (MCP
 `is_error`, CLI exit status 1) when the call failed or found blocking problems. No tool raises to the client.
 
+### 10.1 Transports
+
+```
+reelsmith mcp [--http [--host 127.0.0.1] [--port 8765] [--allow-remote] [--token-env REELSMITH_MCP_TOKEN]]
+```
+
+`reelsmith-mcp` and `python -m reelsmith.mcp_server` take the same flags. Without `--http` the server speaks stdio.
+`--http` serves streamable HTTP at `http://HOST:PORT/mcp` (the `mcp` package's app under uvicorn). The host must be a
+loopback address (`127.0.0.0/8`, `::1`, `localhost`), where the SDK's DNS-rebinding protection checks the Host and
+Origin headers; any other host needs `--allow-remote` and a bearer token of at least 16 characters in the token
+variable, or the command exits with status 2 before binding. While the token variable is set, every request needs
+`Authorization: Bearer <token>` and is answered 401 without it, loopback included.
+
+With `REELSMITH_GUARD_PROJECT` set to a project folder, the server checks every call with the runner guard's MCP
+rules (section 11) before it runs: one project, paths the session may read, public http(s) URLs. A refused call
+returns an error result that starts with `Refused by the run's guard`. The codex and dsh engines set it.
+
+### 10.2 Setup: attaching a coding agent
+
+```
+reelsmith setup claude-code|codex|dsh|cursor|generic [--user] [--print] [--uninstall] [--root DIR]
+```
+
+Adds the server to the agent's own config and copies the skill (`skills/reelsmith/SKILL.md`, the Agent Skills
+format) to `<skills dir>/reelsmith/SKILL.md`. Project-level config in the current folder by default; `--user` takes
+the agent's user-level config. `--print` shows every file and command it would write or run, and writes nothing.
+`--uninstall` removes what setup adds, and the folders it leaves empty. `--root` sets `REELSMITH_ROOT`.
+
+| target | server (folder) | server (`--user`) | skills dir (folder / `--user`) |
+|---|---|---|---|
+| `claude-code` | `.mcp.json` | `claude mcp add-json --scope user reelsmith <json>` | `.claude/skills` / `~/.claude/skills` |
+| `codex` | `.codex/config.toml` | `$CODEX_HOME/config.toml` | `.agents/skills` / `~/.agents/skills` |
+| `dsh` | `.dsh/reelsmith.cordis.yml` (a `--patch` overlay) | `$DSH_HOME/cordis.patch.yml` | `<git root>/.dsh/skills` / `$DSH_HOME/skills` |
+| `cursor` | `.cursor/mcp.json` | `~/.cursor/mcp.json` | `.cursor/skills` / `~/.cursor/skills` |
+| `generic` | printed | printed | printed (writes nothing) |
+
+- **The server**: `{"command": <the absolute path of the Python running setup>, "args": ["-m",
+  "reelsmith.mcp_server"], "env": {"PYTHONSAFEPATH": "1", "REELSMITH_ROOT": <--root>}}`. JSON targets add
+  `"type": "stdio"` under `mcpServers.reelsmith`. Codex's `[mcp_servers.reelsmith]` adds `env_vars` (the variables
+  the tools read: `OPENROUTER_API_KEY`, the proxies, `CODEX_EXE`, `CODEX_HOME`, the budget overrides,
+  `REELSMITH_RENDERER`), `startup_timeout_sec = 60` and `tool_timeout_sec = 3600`. DSH gets one patch row,
+  `- insert: [{id: mcp-reelsmith, name: '@deepseek-ai/dsh-mcp-client', config: {serverName: reelsmith, transport:
+  stdio, command, args, env, toolCallTimeoutMs: 3600000}}]`.
+- **Merging.** JSON: `mcpServers.reelsmith` is set and every other key kept; uninstalling from a file that held
+  nothing else removes it. TOML: the `[mcp_servers.reelsmith]` table and its sub-tables are replaced in the text, so
+  comments and other tables stay; a definition as dotted keys or an inline table is refused; the result is read back
+  before it is written. DSH's home patch: a block between `# >>> reelsmith` and `# <<< reelsmith` is appended to the
+  row list. A file that does not parse is refused (exit status 2) and nothing is written; a second run changes
+  nothing.
+- `claude-code --user` runs `claude mcp remove --scope user reelsmith`, then `add-json`; a command that fails is
+  printed for the user to run (exit status 1). `generic` prints an instructions block for the agent's instructions
+  file, the `mcpServers` JSON and the skill's path.
+- **The plugin.** `integrations/claude-code/` is a Claude Code plugin (`.claude-plugin/plugin.json`, the server as
+  `reelsmith-mcp` from `PATH`, the skill), listed by the marketplace `.claude-plugin/marketplace.json` at the
+  repository root (`/plugin marketplace add wangkant/reelsmith`, `/plugin install reelsmith@reelsmith`). Its copy of
+  the skill is written by `integrations/sync_skills.py`; a test fails when it drifts.
+
 ## 11. Runner (self-hosted)
 
 ```
-reelsmith run <project> --brief "..." [--engine api|agent-sdk] [--provider openrouter|deepseek|openai|custom]
-              [--backend anthropic|deepseek] [--model M] [--budget-usd N] [--max-minutes N] [--max-turns N] [--fresh]
+reelsmith run <project> --brief "..." [--engine api|agent-sdk|codex|dsh] [--provider openrouter|deepseek|openai|custom]
+              [--backend anthropic|deepseek] [--model M] [--effort E] [--budget-usd N] [--max-minutes N] [--max-turns N]
+              [--fresh]
 ```
 
-Makes one film in one project with an agent and no client attached. Two engines:
+Makes one film in one project with an agent and no client attached. Four engines:
 
 - **`api`** (the default): reelsmith's own agent loop (`reelsmith/agent/`) over the OpenAI-compatible Chat
   Completions API with tool calling, so OpenRouter, DeepSeek, OpenAI, Qwen or GLM gateways and local servers can
   drive it. It needs no extra package (the `web` extra adds keyless web search).
 - **`agent-sdk`**: a Claude Agent SDK session (the `runner` extra), served by Anthropic or by DeepSeek's
   Anthropic-compatible API.
+- **`codex`**: the Codex CLI's `codex exec`, on the owner's Codex sign-in.
+- **`dsh`**: DeepSeek Harness's one-shot headless mode (`dsh --profile headless`), on `DEEPSEEK_API_KEY`.
 
 Settings come from the flags, then `workspace.json` `runner`, then the defaults:
 
@@ -480,10 +542,10 @@ Settings come from the flags, then `workspace.json` `runner`, then the defaults:
 | `engine` | `api` | `--backend` implies `agent-sdk` and `--provider` implies `api`; a workspace whose `runner` names a `backend` and no `engine` (one from before the api engine) runs on `agent-sdk` |
 | `provider` | `openrouter` | api engine: who serves the model (table below) |
 | `backend` | `anthropic` | agent-sdk engine: `anthropic` or `deepseek` |
-| `model` | the provider's or the backend's | `runner.model` goes with the workspace's engine and provider (or backend): a flag that switches away from them starts from the new one's default model |
+| `model` | the provider's or the backend's | `runner.model` goes with the workspace's engine and provider (or backend): a flag that switches away from them starts from the new one's default model. codex: the `model` of `$CODEX_HOME/config.toml`, else Codex's own; dsh: `deepseek-flash` |
 | `budget_usd` | 5.0 | the run's model spend; asset spend has its own budget (section 9.6) |
 | `max_minutes` | 120 | wall clock for the process |
-| `max_turns` | none | model calls per session |
+| `max_turns` | none | model calls per session (dsh: model steps; codex: not applied) |
 | `fixups` | 2 | sessions after the first that fix delivery problems |
 | `proxy` | `REELSMITH_PROXY` | an upstream proxy for the model API (and the api engine's web tools) |
 | `reasoning` | null | api engine: `low`, `medium` or `high`; OpenRouter gets `reasoning.effort`, the others `reasoning_effort`; null keeps the model's default |
@@ -491,11 +553,11 @@ Settings come from the flags, then `workspace.json` `runner`, then the defaults:
 | `max_image_edge` | 1280 | api engine: images are downscaled to this edge and sent as JPEG |
 | `images` | null | api engine: `false` sends no images (a text-only model); null follows the provider's table |
 | `web` | `{}` | api engine: `fetch` (`false` leaves web_fetch out), `search` (`auto`, `ddgs`, `tavily` or `none`; `auto` takes ddgs when installed, else Tavily with `TAVILY_API_KEY`), `region`, `proxy`, `timeout_s`, `locale` (web_fetch's `Accept-Language`: the tag, its language, then English; default the project's locale) |
-| `prices` | none | api engine: `{"model": [input, output, cached_input]}` in $ per million tokens, for calls whose provider reports no cost |
+| `prices` | none | api, codex and dsh engines: `{"model": [input, output, cached_input]}` in $ per million tokens, for calls whose provider reports no cost |
 | `extra_body` | none | api engine: fields merged into every request (an OpenRouter `provider` routing preference, a sampling setting) |
 | `base_url`, `key_env` | | the `custom` provider's endpoint and the name of its key |
-| `effort` | `medium` | agent-sdk engine: the Claude Code effort |
-| `stall_minutes` | 60 | agent-sdk engine: no message for that long aborts the session |
+| `effort` | `medium` | agent-sdk: the Claude Code effort; codex: `model_reasoning_effort` (`minimal`, `low`, `medium`, `high`, `xhigh`); dsh: `off`, `low`, `high` or `max`, default DSH's own (`high`). `--effort` overrides it; the api engine takes `reasoning` |
+| `stall_minutes` | 60 | agent-sdk, codex and dsh engines: no message for that long aborts the session; codex and dsh also take it as the reelsmith tool timeout |
 
 **Providers of the api engine.** The key comes from the workspace `.env`, else the environment, and goes to its
 provider only.
@@ -549,7 +611,34 @@ Each backend's key goes to that backend only: on `anthropic` an inherited `ANTHR
   input, $0.006 cached input, $1.20 output; `deepseek-v4-pro` $1.32, $0.044, $3.96; cache writes at the input price;
   web search $0.75 per 1000. An unlisted DeepSeek model is priced as the dearest.
 
-**Common to both engines.**
+**The codex session.** `codex exec --json --skip-git-repo-check --ignore-user-config --ignore-rules -C <project>
+-c ... [-m model] -` with the prompt on stdin; a fix-up or resume runs `codex exec resume ... <thread id> -`. The
+binary is `CODEX_EXE`, else the Windows desktop app's bundled CLI, else `codex` on `PATH`. Codex keeps its own system
+prompt and sign-in (`CODEX_HOME`); the role opens the first message. The `-c` overrides set `sandbox_mode =
+"workspace-write"` (rooted at the project, with the workspace library in `sandbox_workspace_write.writable_roots`),
+`sandbox_workspace_write.network_access = false`, `approval_policy = "never"`, `shell_environment_policy.inherit =
+"core"` (commands inherit no keys), `web_search = "live"`, `project_doc_max_bytes = 0` (no AGENTS.md of the host's),
+the host's apps, plugins, browsers, subagents and hooks off, and the reelsmith server as `mcp_servers.reelsmith.*`
+(as setup writes it, plus `REELSMITH_GUARD_PROJECT`, with `tool_timeout_sec` = `stall_minutes`). Events
+(`thread.started`, `item.*`, `turn.completed`, `turn.failed`, `error`) are logged; the thread id is the session id.
+Codex reports its tokens (`input_tokens` with `cached_input_tokens` inside, `output_tokens`) when the turn ends: they
+are priced with `prices`, so the budget is checked between sessions, and a model without a price is reported as
+`cost_known: false` with its tokens.
+
+**The dsh session.** `dsh --patch <project>/build/dsh-patch.yml --profile headless --json --permission-mode
+workspace-write --approval-policy never [--add-dir <library>] [--session-id <id>] -` with the prompt on stdin, in the
+project folder. The binary is `DSH_EXE`, else `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`. The process gets
+`DEEPSEEK_API_KEY` (workspace `.env`, else the environment), its own `DSH_HOME` (`<workspace>/.cache/dsh`, so the
+host's DSH profiles, patches, saved keys and servers stay out) and `DSH_TELEMETRY_MODE=DISABLED`. The overlay mounts
+the reelsmith server (setup's row, plus `REELSMITH_GUARD_PROJECT`, `toolCallTimeoutMs` = `stall_minutes`), sets
+`agent-default-model` to `deepseek-official` with the model (and `reasoningEffort` when an effort is set) and turns
+the `session-log-deepseek` upload off. On Windows the library is not added (DSH's Windows sandbox refuses every shell
+call once extra roots are granted), so the session cannot write library components there. Each `status` step end
+carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, disjoint), priced with
+`prices`, else DeepSeek's table: the session stops at the budget and at `max_turns`. The `final` event's
+`reason.kind` is `completed` for a finished turn.
+
+**Common to all engines.**
 
 - **Role.** Read the manual, then the notes; every choice is yours; look at what you make.
 - **Guard** (`guard.py`; anything it does not know is refused): a PreToolUse hook on the agent-sdk engine, checked
@@ -559,7 +648,9 @@ Each backend's key goes to that backend only: on `anthropic` an inherited `ANTHR
   manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and `.cache/` are
   unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
   redirects included, as `capture` does); reelsmith tool arguments that name files or URLs are held to the same
-  rules.
+  rules. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
+  project and the library; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP
+  server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
   it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`
@@ -570,13 +661,16 @@ Each backend's key goes to that backend only: on `anthropic` an inherited `ANTHR
   refused with the flags to pass, and `--fresh` starts a new one. On the api engine the conversation is saved to
   `build/agent_messages.json` after every turn (without image data: the agent looks again) and the session's spend
   so far to the state's `inflight`, so a killed process loses neither: the next start counts that spend and goes on
-  from the saved conversation.
-- **Logs and report.** Every message and tool call goes to `build/runner.jsonl`, one line per step to stdout;
-  `out/run_report.json` says how it ended: `delivered`, `problems`, `engine`, `provider`, `backend`, `model`,
-  `cost_usd` and whether it is `cost_estimated`, `turns`, the sessions (each with its kind, turns, cost and stop),
-  and refused tool calls (agent-sdk).
+  from the saved conversation. The codex and dsh engines resume the agent's own session (the Codex thread, the DSH
+  session in the same project folder); dsh keeps its spend so far in `inflight` too.
+- **Logs and report.** Every message, tool call and agent event goes to `build/runner.jsonl`, one line per step to
+  stdout (the codex and dsh processes' stderr to `build/runner-cli.log`); `out/run_report.json` says how it ended:
+  `delivered`, `problems`, `engine`, `provider`, `backend`, `model`, `cost_usd` and whether it is `cost_estimated`,
+  `turns`, the sessions (each with its kind, turns, cost and stop), and refused tool calls (agent-sdk). The codex
+  and dsh engines add `cost_known` (false when a session's model had no price) and `usage` (their token counters,
+  summed), and each session's `tool_calls`.
 - Exit status: 0 delivered, 1 not delivered, 2 a setup problem (no project, no brief, no key, an unknown engine,
-  provider or backend, a provider without a model).
+  provider or backend, a provider without a model, no Codex or DSH executable).
 
 ## 12. Inspect (layout measurement)
 
@@ -716,9 +810,13 @@ profile by `check`).
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
-| `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw`, and Codex's home folder (default `~/.codex`) |
+| `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
+| `REELSMITH_MCP_TOKEN` | the bearer token `reelsmith mcp --http` requires of every request when set, and needs for `--allow-remote` (`--token-env` names another variable) |
+| `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw` and the codex engine, and Codex's home folder (default `~/.codex`; `reelsmith setup codex --user` writes its `config.toml`) |
+| `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`) |
+| `DSH_HOME` | DeepSeek Harness's home, where `reelsmith setup dsh --user` writes (default `~/.dsh`); the dsh engine sets its own, `<workspace>/.cache/dsh` |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
-| `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, or `--backend deepseek` on the agent-sdk engine) |
+| `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, `--backend deepseek` on the agent-sdk engine, or the dsh engine) |
 | `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`) |
 | the name in `runner.key_env` | the runner on a `custom` provider |
 | `TAVILY_API_KEY` | the api engine's `web_search` through Tavily (when ddgs is not installed, or `web.search` is `tavily`) |

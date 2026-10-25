@@ -1,0 +1,15 @@
+{
+  "name": "reelsmith",
+  "owner": {
+    "name": "Qiankang Wang"
+  },
+  "description": "reelsmith, a video editing harness for AI coding agents",
+  "plugins": [
+    {
+      "name": "reelsmith",
+      "source": "./integrations/claude-code",
+      "description": "A video editing harness for AI coding agents: the reelsmith MCP tools and the skill that drives them. Needs reelsmith installed (reelsmith-mcp on PATH).",
+      "category": "media"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "reelsmith",
+  "version": "0.1.0",
+  "description": "A video editing harness for AI coding agents: the reelsmith MCP tools (an NLE timeline the agent edits, renders and checks) and the skill that drives them",
+  "author": {
+    "name": "Qiankang Wang"
+  },
+  "homepage": "https://github.com/wangkant/reelsmith",
+  "repository": "https://github.com/wangkant/reelsmith",
+  "license": "MIT",
+  "keywords": ["video", "video-editing", "mcp", "remotion", "nle"],
+  "mcpServers": {
+    "reelsmith": {
+      "command": "reelsmith-mcp"
+    }
+  }
+}
