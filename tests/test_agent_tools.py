@@ -345,9 +345,11 @@ def test_list_dir(demo):
 class Site(http.server.BaseHTTPRequestHandler):
     routes: dict = {}
     seen: list = []
+    languages: list = []
 
     def do_GET(self):  # noqa: N802
         self.seen.append((self.path, self.headers.get("Host")))
+        self.languages.append(self.headers.get("Accept-Language"))
         status, headers, body = self.routes.get(self.path, (404, {"Content-Type": "text/html"}, b"<p>gone</p>"))
         self.send_response(status)
         for k, v in headers.items():
@@ -373,7 +375,7 @@ class Site(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def site():
-    Site.routes, Site.seen = {}, []
+    Site.routes, Site.seen, Site.languages = {}, [], []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield types.SimpleNamespace(port=server.server_address[1], routes=Site.routes, seen=Site.seen)
@@ -609,3 +611,16 @@ def test_extra_tools_come_last_and_never_raise(demo):
     with pytest.raises(ValueError, match="letters"):
         AT.toolbox(demo.project, demo.ws, demo.scope, web={"search": "none"},
                    extra=[AT.Tool("bad name", "x", {"type": "object"}, lambda a: "")])
+
+
+def test_web_fetch_asks_for_the_projects_language(demo, site):
+    site.routes["/page"] = (200, {"Content-Type": "text/plain"}, b"hello")
+    assert not call(web_box(demo, site), "web_fetch", url="http://news.example/page").error
+    assert Site.languages[-1] == "zh-CN,zh;q=0.9,en;q=0.8"                # the demo project is zh-CN
+    data = json.loads((demo.project / "project.json").read_text(encoding="utf-8"))
+    data["locale"] = "en"
+    (demo.project / "project.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert not call(web_box(demo, site), "web_fetch", url="http://news.example/page").error
+    assert Site.languages[-1] == "en"
+    assert not call(web_box(demo, site, locale="ja"), "web_fetch", url="http://news.example/page").error
+    assert Site.languages[-1] == "ja,en;q=0.8"

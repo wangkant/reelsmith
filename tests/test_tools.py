@@ -718,3 +718,15 @@ def test_cli_run_delegates_to_runner(monkeypatch):
 def test_cli_run_delegates_after_the_real_runner_was_imported(monkeypatch):
     importlib.import_module("reelsmith.runner")             # the import order that the test above must survive
     test_cli_run_delegates_to_runner(monkeypatch)
+
+
+@needs_ffmpeg
+def test_render_delivers_a_silent_still_film_on_a_generic_profile(project, monkeypatch):
+    monkeypatch.setitem(profiles.PROFILES, "tinyg", replace(TINY, name="tinyg", require_audio=False, max_still_s=None,
+                                                            ui=False))
+    (project.path.parent.parent / "workspace.json").write_text(json.dumps({"profile": "tinyg"}), encoding="utf-8")
+    monkeypatch.setattr(R, "run_node", FakeNode(film_audio=False, film_still=True))
+    r = T.render(str(project.path))
+    assert r.ok, r
+    report = json.loads((project.path / "out" / "report.json").read_text(encoding="utf-8"))
+    assert report["master"] == "silent film: not mastered" and "a silent film" in " ".join(report["film_check"]["notes"])

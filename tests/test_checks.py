@@ -13,7 +13,7 @@ import pytest
 from reelsmith import checks as C
 from reelsmith.issues import Issue
 from reelsmith.profiles import DOUYIN, Box
-from reelsmith.workspace import DEFAULT_RULES, default_rules
+from reelsmith.workspace import DEFAULT_RULES, default_rules, merge_rules
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
 TINY = replace(DOUYIN, name="tiny", width=108, height=192, safe=Box(8, 20, 92, 150), min_s=1, max_s=30,
@@ -46,40 +46,47 @@ def resolved(clips, seconds=60.0, captions=None):
 
 GOOD_META = {"title": "油价为什么又涨了", "desc": "一句话 #油价", "topic": "油价",
              "sources": [{"title": "示例日报", "url": "https://www.example.org/x"}]}
+# a news explainer's rules (the example workspace's rules.json): the defaults are empty
+HOUSE = {"hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
+         "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": True}}
+
+
+def house_rules() -> dict:
+    return merge_rules(json.loads(json.dumps(HOUSE)))
 
 
 # ------------------------------------------------------------------ owner rules
 def test_rules_pass_on_a_good_post():
-    assert C.rule_issues(GOOD_META, default_rules()) == []
+    assert C.rule_issues(GOOD_META, house_rules()) == []
 
 
 def test_title_length_and_numbers():
     meta = dict(GOOD_META, title="2026年油价涨了3.5元，第12次" + "啊" * 10)
-    found = C.rule_issues(meta, default_rules())
+    found = C.rule_issues(meta, house_rules())
     msgs = [str(i) for i in found]
     assert any("characters; the owner's limit is 24" in m for m in msgs)
     assert any("3 numbers (2026, 3.5, 12)" in m for m in msgs)
     assert all(i.level == "error" and i.where == "meta.title" for i in found)
     two = dict(GOOD_META, title="油价涨3.5元，一年第12次")
-    assert C.rule_issues(two, default_rules()) == []
+    assert C.rule_issues(two, house_rules()) == []
 
 
 def test_empty_title_is_only_a_warning():
-    found = C.rule_issues(dict(GOOD_META, title=""), default_rules())
+    found = C.rule_issues(dict(GOOD_META, title=""), house_rules())
     assert [i.level for i in found] == ["warning"]
 
 
 def test_sources_need_http_urls():
     meta = dict(GOOD_META, sources=[{"title": "x", "url": "ftp://x"}, {"title": "y"}, "z"])
-    found = C.rule_issues(meta, default_rules())
+    found = C.rule_issues(meta, house_rules())
     assert [(i.level, i.where) for i in found] == [("error", "meta.sources")]
-    rules = default_rules()
+    rules = house_rules()
     rules["hard"]["min_sources"] = 0
     assert C.rule_issues(meta, rules) == []
 
 
 def test_banned_words_case_insensitive_in_title_desc_topic():
-    rules = default_rules()
+    rules = house_rules()
     rules["hard"]["banned"] = ["Tesla", ""]
     found = C.rule_issues(dict(GOOD_META, desc="about tesla #car", topic="TESLA"), rules)
     assert len(found) == 1 and found[0].where == "meta.desc/topic" and "'Tesla'" in found[0].msg
@@ -92,12 +99,12 @@ def text_clip(cid, start=0, dur=60, words="开头一句话"):
 
 def test_advice_quiet_on_a_good_film():
     r = resolved([clip("bg", "image", 0, 7 * 30), text_clip("t1", 0, 45)], seconds=60)
-    assert C.advice_issues(r, default_rules(), DOUYIN) == []
+    assert C.advice_issues(r, house_rules(), DOUYIN) == []
 
 
 def test_advice_hook_without_words():
     r = resolved([clip("bg", "image", 0, 7 * 30), text_clip("t1", 90, 30)], seconds=60)
-    found = C.advice_issues(r, default_rules(), DOUYIN)
+    found = C.advice_issues(r, house_rules(), DOUYIN)
     assert [i.where for i in found] == ["hook"]
     assert all(i.level == "advice" for i in found)
     assert "first 2 s" in found[0].msg
@@ -106,17 +113,17 @@ def test_advice_hook_without_words():
 def test_advice_hook_satisfied_by_captions_or_evidence_or_component_words():
     base = [clip("bg", "image", 0, 7 * 30)]
     with_captions = resolved(base, 60, captions=[{"from": 10, "to": 40, "runs": []}])
-    assert C.advice_issues(with_captions, default_rules(), DOUYIN) == []
-    assert C.advice_issues(resolved(base + [clip("e", "evidence", 30, 30)], 60), default_rules(), DOUYIN) == []
+    assert C.advice_issues(with_captions, house_rules(), DOUYIN) == []
+    assert C.advice_issues(resolved(base + [clip("e", "evidence", 30, 30)], 60), house_rules(), DOUYIN) == []
     comp = clip("k", "component", 0, 30, content={"name": "Stamp", "props": {"label": "涨价", "at": 10}})
-    assert C.advice_issues(resolved(base + [comp], 60), default_rules(), DOUYIN) == []
+    assert C.advice_issues(resolved(base + [comp], 60), house_rules(), DOUYIN) == []
     only_asset = clip("k", "component", 0, 30, content={"name": "X", "props": {"asset": {"src": "assets/a.png"}}})
-    assert [i.where for i in C.advice_issues(resolved(base + [only_asset], 60), default_rules(), DOUYIN)] == ["hook"]
+    assert [i.where for i in C.advice_issues(resolved(base + [only_asset], 60), house_rules(), DOUYIN)] == ["hook"]
 
 
 def test_advice_empty_first_frame():
     r = resolved([text_clip("t1", 15, 30), clip("bg", "image", 15, 30)], seconds=60)
-    found = C.advice_issues(r, default_rules(), DOUYIN)
+    found = C.advice_issues(r, house_rules(), DOUYIN)
     assert any("empty frame" in i.msg for i in found)
 
 
@@ -129,7 +136,7 @@ def test_advice_long_single_visual_only_for_still_pictures():
                   clip("s", "shape", 0, 20 * 30), clip("v", "video", 300, 10 * 30),
                   clip("k", "component", 0, 15 * 30, content={"name": "WaterFill", "props": {}}), moving, slid, held],
                  seconds=60)
-    found = C.advice_issues(r, default_rules(), DOUYIN)
+    found = C.advice_issues(r, house_rules(), DOUYIN)
     assert [i.where for i in found] == ["bg @ 0.0s", "ev2 @ 13.3s"]
     assert "9.0 s" in found[0].msg and "still image" in found[0].msg
 
@@ -211,11 +218,24 @@ def test_evidence_check_skips_what_it_cannot_measure(tmp_path):
 
 def test_advice_duration_target_from_rules_or_profile():
     r = resolved([clip("bg", "image", 0, 7 * 30), text_clip("t1")], seconds=30)
-    found = C.advice_issues(r, default_rules(), DOUYIN)
+    found = C.advice_issues(r, house_rules(), DOUYIN)                # target_s true: the profile's
     assert [i.where for i in found] == ["duration"] and "45-75" in found[0].msg
-    rules = default_rules()
+    rules = house_rules()
     rules["advice"]["target_s"] = [20, 40]
     assert C.advice_issues(r, rules, DOUYIN) == []
+    from reelsmith.profiles import LANDSCAPE
+    rules["advice"]["target_s"] = True
+    assert C.advice_issues(r, rules, LANDSCAPE) == []                  # a profile without a target: no advice
+
+
+def test_default_rules_hold_no_rule_and_no_advice():
+    assert DEFAULT_RULES == {"hard": {}, "advice": {}}
+    bare = dict(GOOD_META, title="", sources=[])
+    assert C.rule_issues(bare, default_rules()) == []                 # not even the empty-title warning
+    r = resolved([text_clip("t1", 90, 30), clip("bg", "image", 15, 40 * 30)], seconds=200)
+    assert C.advice_issues(r, default_rules(), DOUYIN) == []
+    found = C.rule_issues(dict(GOOD_META, title=""), {"hard": {"max_title_numbers": 3}, "advice": {}})
+    assert [(i.level, i.where) for i in found] == [("warning", "meta.title")]   # a title rule asks for a title
 
 
 def test_duration_outside_platform_limits_is_an_error():
@@ -271,7 +291,12 @@ def test_check_project_validation_errors_skip_advice(monkeypatch, project):
     assert [i.level for i in found] == ["error", "warning"]
 
 
-def test_check_project_full(monkeypatch, project):
+def test_check_project_full(monkeypatch, tmp_path):
+    (tmp_path / "workspace.json").write_text(json.dumps({"profile": "douyin"}), encoding="utf-8")
+    (tmp_path / "rules.json").write_text(json.dumps(HOUSE), encoding="utf-8")
+    project = tmp_path / "projects" / "p"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"version": 2, "meta": GOOD_META}), encoding="utf-8")
     fake_doc(monkeypatch, meta=dict(GOOD_META, title="一二三四五六七八九十一二三四五六七八九十一二三四五"))
     fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "image", 30, 300)], seconds=15))
     found = C.check_project(project)
@@ -502,8 +527,8 @@ def test_check_film_missing(tmp_path):
 
 def test_defaults_are_not_shared():
     r = default_rules()
-    r["hard"]["banned"].append("x")
-    assert DEFAULT_RULES["hard"]["banned"] == []
+    r["hard"]["banned"] = ["x"]
+    assert DEFAULT_RULES["hard"] == {}
 
 
 def test_douyin_long_keeps_the_screen_and_allows_longer_films():

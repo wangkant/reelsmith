@@ -2,24 +2,26 @@
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .profiles import Profile, get_profile
+from . import locales
+from .profiles import Profile, ProfileError, build_profiles, choose
 
 WORKSPACE_FILE = "workspace.json"
 RULES_FILE = "rules.json"
 ENV_FILE = ".env"
 PROJECT_FILE = "project.json"
 
-DEFAULT_RULES: dict = {
-    "hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
-    # target_s None: the profile's target
-    "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": None},
-}
+# No rule and no advice unless rules.json sets it; advice target_s true means the profile's target.
+DEFAULT_RULES: dict = {"hard": {}, "advice": {}}
+BUILTIN_FONTS = ("sans", "serif", "display", "zcool")
+FONT_EXTS = (".woff2", ".woff", ".ttf", ".otf")
+FONT_FAMILY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
 
 _KEY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
@@ -125,9 +127,11 @@ def _check_rules(rules: dict) -> None:
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
             raise WorkspaceError(f"rules.json: advice.{key} must be a positive number (got {v!r})")
     target = advice.get("target_s")
-    if target is not None and not (isinstance(target, list) and len(target) == 2
-                                   and all(isinstance(t, (int, float)) for t in target) and target[0] <= target[1]):
-        raise WorkspaceError("rules.json: advice.target_s must be [min, max] seconds")
+    if target not in (None, True, False) and not (
+            isinstance(target, list) and len(target) == 2 and all(isinstance(t, (int, float)) for t in target)
+            and target[0] <= target[1]):
+        raise WorkspaceError("rules.json: advice.target_s must be [min, max] seconds, or true for the profile's "
+                             "target")
 
 
 def default_rules() -> dict:
@@ -151,7 +155,32 @@ class Workspace:
             keys = Keys(parse_dotenv(env.read_text(encoding="utf-8-sig"))) if env.is_file() else Keys()
         except OSError as exc:
             raise WorkspaceError(f"{env}: unreadable ({exc})") from exc
-        return cls(root, config, rules, keys)
+        ws = cls(root, config, rules, keys)
+        _ = ws.profiles, ws.locale, ws.fonts                # a bad entry is the owner's to fix: say so now
+        return ws
+
+    @functools.cached_property
+    def profiles(self) -> dict[str, Profile]:
+        """workspace.json `profiles`, built: {name: Profile}."""
+        try:
+            return build_profiles(self.config.get("profiles"))
+        except ProfileError as exc:
+            raise WorkspaceError(str(exc)) from None
+
+    @functools.cached_property
+    def locale(self) -> str | None:
+        value = self.config.get("locale")
+        if value is None:
+            return None
+        try:
+            return locales.check(value)
+        except ValueError as exc:
+            raise WorkspaceError(f"workspace.json: {exc}") from None
+
+    @functools.cached_property
+    def fonts(self) -> dict[str, list[dict]]:
+        """{family: [{"path", "weight", "style"}]}: library/fonts/* by file stem, then workspace.json `fonts`."""
+        return workspace_fonts(self.root, self.fonts_dir, self.config.get("fonts"))
 
     @property
     def library_dir(self) -> Path:
@@ -160,6 +189,10 @@ class Workspace:
     @property
     def components_dir(self) -> Path:
         return self.library_dir / "components"
+
+    @property
+    def fonts_dir(self) -> Path:
+        return self.library_dir / "fonts"
 
     @property
     def notes_path(self) -> Path:
@@ -203,19 +236,73 @@ def keys_for(project: str | Path) -> Keys:
     return ws.keys if ws else Keys()
 
 
-def profile_for(project: str | Path, ws: Workspace | None = None) -> Profile:
-    """project.json "profile", else workspace.json "profile", else douyin. Unknown names raise ValueError."""
-    p = project_root(project)
-    name = None
+def _project_value(project: Path, key: str):
     try:
-        data = json.loads((p / PROJECT_FILE).read_text(encoding="utf-8-sig"))
-        name = data.get("profile") if isinstance(data, dict) else None
+        data = json.loads((project / PROJECT_FILE).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        pass
-    if not name:
-        ws = ws or find_workspace(p)
-        name = (ws.config.get("profile") if ws else None) or None
-    return get_profile(name)
+        return None
+    return data.get(key) if isinstance(data, dict) else None
+
+
+def profile_for(project: str | Path, ws: Workspace | None = None) -> Profile:
+    """project.json "profile" (a name or an inline object), else workspace.json "profile", else landscape; custom
+    names come from workspace.json "profiles". A bad or unknown profile raises ValueError."""
+    p = project_root(project)
+    ws = ws or find_workspace(p)
+    return choose(_project_value(p, "profile"), ws.config.get("profile") if ws else None,
+                  ws.profiles if ws else None)
+
+
+def locale_for(project: str | Path, ws: Workspace | None = None) -> str:
+    """project.json "locale", else workspace.json "locale", else "en"; ValueError for a malformed tag."""
+    p = project_root(project)
+    value = _project_value(p, "locale")
+    if value is not None:
+        return locales.check(value)
+    ws = ws or find_workspace(p)
+    return (ws.locale if ws else None) or locales.DEFAULT_LOCALE
+
+
+def _font_entry(root: Path, value, where: str) -> dict:
+    if isinstance(value, str):
+        value = {"src": value}
+    if not isinstance(value, dict) or not isinstance(value.get("src"), str) or set(value) - {"src", "weight", "style"}:
+        raise WorkspaceError(f'{where} must be a file path or {{"src", "weight"?, "style"?}}')
+    path = (root / value["src"]).resolve()
+    if root != path and root not in path.parents:
+        raise WorkspaceError(f"{where}: {value['src']} must be inside the workspace (library/fonts/...)")
+    if path.suffix.lower() not in FONT_EXTS or not path.is_file():
+        raise WorkspaceError(f"{where}: {value['src']} is not a {'/'.join(FONT_EXTS)} file in the workspace")
+    weight, style = value.get("weight"), value.get("style")
+    if weight is not None and not re.fullmatch(r"\d{3}(?: \d{3})?", str(weight)):
+        raise WorkspaceError(f'{where}.weight must be like "400", or "100 900" for a variable font')
+    if style is not None and style not in ("normal", "italic", "oblique"):
+        raise WorkspaceError(f"{where}.style must be normal, italic or oblique")
+    return {"path": path, "weight": None if weight is None else str(weight), "style": style}
+
+
+def workspace_fonts(root: Path, folder: Path, mapping=None) -> dict[str, list[dict]]:
+    """Font files of the workspace by family: every library/fonts/*.woff2|woff|ttf|otf under its file stem (a stem
+    that is not a usable family name is skipped), then the `fonts` map {family: path | {src, weight?, style?} |
+    [...]} over them."""
+    out: dict[str, list[dict]] = {}
+    if folder.is_dir():
+        for f in sorted(folder.iterdir()):
+            if f.is_file() and f.suffix.lower() in FONT_EXTS and FONT_FAMILY.match(f.stem) \
+                    and f.stem not in BUILTIN_FONTS:
+                out.setdefault(f.stem, []).append({"path": f.resolve(), "weight": None, "style": None})
+    if mapping is None:
+        return out
+    if not isinstance(mapping, dict):
+        raise WorkspaceError('workspace.json fonts must be an object {family: "library/fonts/file.woff2"}')
+    for family, value in mapping.items():
+        where = f"workspace.json fonts.{family}"
+        if not FONT_FAMILY.match(str(family)) or family in BUILTIN_FONTS:
+            raise WorkspaceError(f"{where}: a family name is 1-64 letters, digits, spaces, _ or - and not one of "
+                                 f"{', '.join(BUILTIN_FONTS)}")
+        items = value if isinstance(value, list) and value else [value]
+        out[family] = [_font_entry(root.resolve(), v, where) for v in items]
+    return out
 
 
 @dataclass(frozen=True)

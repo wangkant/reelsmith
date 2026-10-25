@@ -170,6 +170,10 @@ def loudness(path: Path) -> tuple[float | None, float | None]:
     return (float(i[-1]) if i and i[-1] != "-inf" else None, float(p[-1]) if p and p[-1] != "-inf" else None)
 
 
+class SilentAudio(RuntimeError):
+    """The mix has an audio stream with nothing in it."""
+
+
 def master(src: Path, dst: Path, lufs: float, peak: float = -1.0) -> None:
     """Two-pass loudnorm of the whole mix to `lufs`; the picture is copied."""
     target = f"loudnorm=I={lufs}:TP={peak}:LRA=11"
@@ -180,7 +184,7 @@ def master(src: Path, dst: Path, lufs: float, peak: float = -1.0) -> None:
         raise RuntimeError(f"loudness measure failed: {tail(first.stderr or '', 5, 300)}")
     s = json.loads(m.group(0))
     if s.get("input_i") in ("-inf", None):
-        raise RuntimeError("the audio is silent: nothing to master (is the narration missing?)")
+        raise SilentAudio("the audio is silent: nothing to master (is the narration missing?)")
     measured = (f"measured_I={s['input_i']}:measured_TP={s['input_tp']}:measured_LRA={s['input_lra']}:"
                 f"measured_thresh={s['input_thresh']}:offset={s['target_offset']}:linear=true")
     r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map",
@@ -231,15 +235,16 @@ def _label_tiles(sheet: Path, labels: list[str], cols: int, tile: tuple[int, int
 
 def contact_sheet(pngs: list[Path], out: Path, ui_boxes: list[tuple[int, int, int, int]], frame=(1080, 1920),
                   tile=(270, 480), outline: tuple[int, int, int, int] | None = None,
-                  labels: list[str] | None = None) -> Path | None:
-    """All pictures in one PNG at phone-glance size, `ui_boxes` (frame pixels) darkened on each and `outline`
-    (the safe area) traced, so the boundary shows on dark frames too; `labels` (e.g. times) mark the tiles."""
+                  labels: list[str] | None = None, cols: int = 6) -> Path | None:
+    """All pictures in one PNG at a glance size, `ui_boxes` (frame pixels) darkened on each and `outline` (the safe
+    area) traced, so the boundary shows on dark frames too; `labels` (e.g. times) mark the tiles; up to `cols` a
+    row."""
     pngs = [Path(p) for p in pngs]
     if not pngs:
         return None
     w, h = tile
     fw, fh = frame
-    cols = min(6, len(pngs))
+    cols = max(1, min(cols, len(pngs)))
     ui = "".join(f"drawbox=x={x}*iw/{fw}:y={y}*ih/{fh}:w={bw}*iw/{fw}:h={bh}*ih/{fh}:color=black@0.55:t=fill,"
                  for x, y, bw, bh in ui_boxes)
     if outline:

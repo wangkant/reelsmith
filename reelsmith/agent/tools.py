@@ -21,6 +21,7 @@ from typing import Callable
 
 from .. import guard
 from .. import tools as rtools
+from ..workspace import locale_for
 from . import web as W
 
 log = logging.getLogger(__name__)
@@ -555,7 +556,8 @@ def web_fetch_tool(web: dict) -> Tool:
     def run(args: dict) -> ToolResult:
         max_chars = _int(_arg(args, "max_chars"), "max_chars", W.DEFAULT_CHARS)
         text, failed = W.fetch(str(_arg(args, "url", default="") or ""), max_chars, proxy=web.get("proxy"),
-                               timeout=float(web.get("timeout_s") or W.FETCH_TIMEOUT_S), **hooks)
+                               timeout=float(web.get("timeout_s") or W.FETCH_TIMEOUT_S),
+                               locale=web.get("locale") or "en", **hooks)
         return ToolResult(text, error=failed)
 
     return Tool("web_fetch", (
@@ -604,10 +606,15 @@ def toolbox(project: Path, ws, scope: guard.Scope, web: dict | None = None,
     web (all optional): "fetch" False leaves web_fetch out; "search" picks the backend ("auto" default, "ddgs",
     "tavily", "none" or a callable search(query, n, recent) -> [{"title", "url", "snippet"}]); "proxy" the outbound
     http:// proxy (None: the environment's, "": direct); "region" for ddgs; "tavily_key" over TAVILY_API_KEY;
-    "timeout_s"; "resolve", "trusted", "connect" are netcheck's hooks (tests). A tool left out says why in the
-    result's `notes` and the log."""
+    "timeout_s"; "locale" for web_fetch's Accept-Language (default: the project's); "resolve", "trusted", "connect"
+    are netcheck's hooks (tests). A tool left out says why in the result's `notes` and the log."""
     project = Path(project)
     web = dict(web or {})
+    if not web.get("locale"):
+        try:
+            web["locale"] = locale_for(project)
+        except ValueError:
+            web["locale"] = "en"                # check reports a malformed locale
     notes: list[str] = []
     tools = reelsmith_tools(project, scope) + file_tools(project, scope)
     if web.get("fetch", True):

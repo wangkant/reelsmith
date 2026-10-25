@@ -22,7 +22,7 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
 
 ```
 <workspace>/                      the nearest folder at or above the project that holds workspace.json
-  workspace.json                  profile, theme, providers, budget, runner (all optional)
+  workspace.json                  profile, locale, profiles, fonts, theme, providers, budget, runner (all optional)
   rules.json                      the owner's rules {"hard": {...}, "advice": {...}} (optional)
   .env                            keys (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, ...); never printed or shown to the agent
   ledger.jsonl                    paid calls (section 9.6)
@@ -31,14 +31,16 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
     NOTES.md                      the agent's notes (tools notes / note)
     components/<Name>.tsx         the agent's own components (section 6)
     components/<Name>.meta.json
+    fonts/<Family>.woff2          the workspace's fonts (.woff2, .woff, .ttf or .otf; section 2.1)
   projects/<name>/
     project.json                  the project (section 3)
     script.md                     free-form: research, sources, draft script
     voice/voice.wav               narration audio (from speak, or brought in)
     voice/voice.json              narration timing {file, duration_s, lines: [{i, text, t0, t1}], ...}
     assets/                       images, clips, evidence captures, audio
-    build/                        regenerable: resolved*.json, stills/, inspect/, review/, report.json (latest
-                                  render attempt), run_state.json, agent_messages.json and logs of the runner
+    build/                        regenerable: resolved*.json, stills/, inspect/, review/, fonts/ (the workspace's
+                                  fonts, linked for the renderer), segments.json, report.json (latest render
+                                  attempt), run_state.json, agent_messages.json and logs of the runner
     out/film.mp4                  the delivered film; out/meta.json (meta + duration, profile, render time);
                                   out/report.json (the delivered film's report); out/run_report.json (runner)
     .history/NNNN.json            a snapshot of project.json before each applied edit batch (undo); log.jsonl,
@@ -55,10 +57,13 @@ looked up in the process environment.
 
 ```json
 {
-  "profile": "douyin",
+  "profile": "landscape",
+  "locale": "en",
+  "profiles": {"channel": {"base": "youtube", "fps": 25}},
+  "fonts": {"Brand Sans": "library/fonts/brand-sans.woff2"},
   "theme": {"name": "paper", "accent": "#C8372D"},
   "providers": {
-    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "longanlufeng"},
+    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "<voice id>"},
     "image": {"provider": "codex"},
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"}
   },
@@ -69,11 +74,16 @@ looked up in the process environment.
 
 | key | meaning |
 |---|---|
-| `profile` | output profile (section 15); a project's own `profile` wins; default `douyin` |
+| `profile` | output profile (section 15): a name or an inline profile (section 15.1); a project's own `profile` wins; default `landscape` |
+| `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11) and whether the TTS has a default voice (9.1) |
+| `profiles` | custom profiles by name, each `{"base": name, field: value, ...}` (section 15.1); a name may not be a built-in one |
+| `fonts` | font families for TextStyle `font` and components: `{family: path | {"src", "weight"?, "style"?} | [...]}`, paths inside the workspace (`weight` like `"400"`, or `"100 900"` for a variable font; `style` `normal`, `italic` or `oblique`). Every `library/fonts/*.woff2`, `.woff`, `.ttf` and `.otf` is a family named after its file stem without being listed (a stem other than letters, digits, spaces, `_` and `-`, or one of the built-in names, is skipped); the map adds families and wins over a stem of the same name |
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
 | `providers` | per-tool provider settings (section 9); each section is merged over the defaults |
 | `budget` | `per_project_usd` (default 1.0) and `min_balance_usd` (default 5.0), section 9.6 |
 | `runner` | defaults for `reelsmith run`: `engine` (`api` or `agent-sdk`), `provider` or `backend`, `model`, budget, limits and the api engine's settings (section 11) |
+
+A malformed `locale`, `profiles` or `fonts` entry makes every tool report the workspace problem until it is fixed.
 
 ### 2.2 rules.json
 
@@ -82,18 +92,22 @@ looked up in the process environment.
  "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": [45, 75]}}
 ```
 
-Every key is optional; the values above are the defaults, except `target_s`, which defaults to the profile's
-target. Hard rules are errors (they block `render`): the title's length in characters, how many numbers it may hold,
-how many sources with an http(s) url `meta.sources` needs, and words that may not appear in the title, description
-or topic. Advice never blocks: words on screen within `hook_seconds`, no still image or evidence held longer than
-`max_same_visual_s` without movement, the length against `target_s`.
+Every key is optional and none has a default: without rules.json (or with `{}`) there is no hard rule and no
+advice. The example above is a news explainer's set (the example workspace's). Hard rules are errors (they block
+`render`): the title's length in characters, how many numbers it may hold, how many sources with an http(s) url
+`meta.sources` needs, and words that may not appear in the title, description or topic. Advice never blocks: words
+on screen within `hook_seconds`, no still image or evidence held longer than `max_same_visual_s` without movement,
+the length against `target_s`: `[min, max]` seconds, or `true` for the profile's target (section 15; a profile
+without one gives no advice). An empty title is a warning only where a title rule (`max_title` or
+`max_title_numbers`) is set: a film for a generic canvas needs no post title.
 
 ## 3. project.json
 
 ```
 {
   "version": 2,
-  "profile": "douyin",                 optional: overrides workspace.json
+  "profile": "landscape",              optional: a name or an inline profile (section 15.1); overrides workspace.json
+  "locale": "en",                      optional: the film's language (BCP-47); overrides workspace.json
   "theme": {},                         optional: {"name": "night"} and/or token overrides
   "meta": {"title": "", "desc": "", "topic": "", "shape": "", "sources": [{"title": "", "url": "https://..."}]},
   "voice": "voice/voice.json",         optional narration timing file; its audio plays at volume 1 automatically
@@ -116,9 +130,11 @@ clip an audio or video asset.
 
 - visual / audio: `"clips": [Clip, ...]`. Clips on one track must not overlap in time: layer with more tracks.
 - captions: `{"id": "cap", "kind": "captions", "source": "voice", "box"?, "style"?: TextStyle, "emphasis": [words
-  in the accent colour], "max_chars": 14 (4-40), "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start":
-  Time, "end": Time, "text": "..."}]}`. Without `items`, captions come from the voice lines: phrase-split (never
-  inside a word or a number) and timed by characters. Without `box` they sit in the profile's captions band
+  in the accent colour], "max_chars"?: 4-60, "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start":
+  Time, "end": Time, "text": "..."}]}`. Without `items`, captions come from the voice lines: phrase-split between
+  the words of the locale (`Intl.Segmenter`; never inside a word or a number, and in English not right after an
+  article, preposition or conjunction when another cut fits) and timed by characters. `max_chars` defaults by the
+  locale: 14 for Chinese, Japanese and Korean, 32 otherwise. Without `box` they sit in the profile's captions band
   (section 15). Without a captions track there are no captions.
 
 ### 3.1 Time
@@ -171,8 +187,10 @@ Types and their fields:
 - `component`: `name`, `props` (validated against the component's meta schema)
 
 TextStyle: `font` `"sans"|"serif"|"display"|"zcool"` (Noto Sans SC, Noto Serif SC, Smiley Sans, ZCOOL QingKe
-HuangYou), `size` px or `"fit"` (the largest size that fits the box width and height on as many word-aware lines as
-it takes), `max_size` 160, `min_size` 28, `weight` 100-900, `color` (default `snow` with a soft shadow), `accent`,
+HuangYou) or a family of the workspace's fonts (section 2.1; glyphs it lacks fall back to the sans), `size` px or
+`"fit"` (the largest size that fits the box width and height on as many word-aware lines as it takes), `max_size`
+160, `min_size` 28 (the default `size`, `max_size` and `min_size` are for a canvas whose short side is 1080 px and
+scale with it), `weight` 100-900, `color` (default `snow` with a soft shadow), `accent`,
 `align` `"left"|"center"|"right"`, `valign` `"top"|"middle"|"bottom"`, `line_height` 1.15, `letter_spacing` 0,
 `wrap` true, `balance` false (exactly two even lines), `stroke` `{color, width}`, `shadow` bool or CSS, `bg`
 `{color, radius, pad}`.
@@ -192,15 +210,19 @@ the clip's start**; any key named `asset` or ending in `_asset` takes an asset i
 Problems everywhere are `Issue(level: "error"|"warning"|"advice", where: str, msg: str)` (`issues.py`); `str()`
 gives `"[level] where: msg"`.
 
-- `workspace.py`: `Workspace` (`root`, `config`, `rules`, `keys`, `library_dir`, `components_dir`, `notes_path`,
-  `ledger_path`, `cache_dir`, `projects_dir`); `find_workspace(project) -> Workspace | None`; `project_paths(project)`;
-  `profile_for(project)`.
-- `profiles.py`: `Profile`, `get_profile(name)`, `PROFILES`, themes `PAPER` and `NIGHT`.
+- `workspace.py`: `Workspace` (`root`, `config`, `rules`, `keys`, `profiles`, `locale`, `fonts`, `library_dir`,
+  `components_dir`, `fonts_dir`, `notes_path`, `ledger_path`, `cache_dir`, `projects_dir`); `find_workspace(project)
+  -> Workspace | None`; `project_paths(project)`; `profile_for(project)`; `locale_for(project)`.
+- `profiles.py`: `Profile` (with `scale`, the canvas's short side / 1080, and `orientation`), `get_profile(name,
+  custom)`, `make_profile(spec)`, `build_profiles(specs)`, `choose(value, fallback, custom)`, `parse_canvas(text)`,
+  `PROFILES`, themes `PAPER` and `NIGHT`.
+- `locales.py`: `check(tag)`, `is_cjk`, `is_chinese`, `caption_chars(tag)`, `accept_language(tag)`.
 - `timeexpr.py`: `parse(value)`, `resolve(value, ctx) -> seconds`, `to_frame(seconds, fps)`.
 - `library.py`: `components(project) -> dict[name, Component]` (presets from `renderer/src/presets/*.meta.json`,
   overlaid by `<workspace>/library/components/*.meta.json`); `Component(name, description, schema, source:
   "preset"|"library", path, ...)`; `validate_props(component, props) -> list[str]` (JSON Schema).
-- `document.py`: pydantic models for section 3; `load(project) -> Document`; `save(project, doc)`;
+- `document.py`: pydantic models for section 3; `load(project) -> Document`; `save(project, doc)`; `profile_of`,
+  `locale_of`;
   `validate(project, doc) -> list[Issue]` (unique ids, references to assets, clips, components and voice lines,
   Time resolution, cycles, overlaps per track, files present).
 - `ops.py`: `apply(project, ops) -> (ok, issues, summary)`; `undo(project, steps=1) -> (ok, text)` (section 5).
@@ -276,8 +298,9 @@ export default function Receipt({ props }: { props: any }) {
 (`resolved.film.json`, `resolved.inspect.json`, `resolved.preview.json`).
 ```
 {
-  "version": 2, "fps": 30, "width": 1080, "height": 1920, "durationInFrames": N,
+  "version": 2, "fps": 30, "width": 1920, "height": 1080, "durationInFrames": N,
   "safe": {x,y,w,h}, "theme": {paper, ink, night, snow, accent, gold, good, bad, muted, name},
+  "fonts": [{"family", "src" (project-relative, build/fonts/...), "weight"?, "style"?}],
   "tracks": [
     {"id", "kind": "visual", "hidden", "clips": [RClip...]},
     {"id", "kind": "captions", "box": {..}, "style": {...}, "items": [{"from", "to", "runs": [{"text", "accent": bool}]}]},
@@ -300,12 +323,15 @@ content by type:
   component {"name", "props" (Times → frames, asset ids → refs)}
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
-`zoom`/`pan_x`/`pan_y` keyframes, and captions are already phrase-split and timed. `renderer/src/types.ts` is the
-TypeScript side of this format.
+`zoom`/`pan_x`/`pan_y` keyframes, captions are already phrase-split and timed, and a captions track without a box
+gets the profile's captions band. `fonts` lists the workspace's fonts: the renderer serves only the project folder,
+so resolve links (or copies) each file into `build/fonts/` and the renderer loads them before the first frame.
+`renderer/src/types.ts` is the TypeScript side of this format.
 
 ## 8. describe
 
-`describe(project, at=None)` returns text an agent reads like the editor's window: canvas, safe area, theme,
+`describe(project, at=None)` returns text an agent reads like the editor's window: canvas (profile, size, fps,
+orientation), safe area (and whether the platform's UI or a title-safe margin lies outside it), locale, theme,
 duration, voice lines (`[n] t0-t1 text`), tracks bottom to top with their clips (`id type start-end (as written)
 box summary`) and every caption phrase, assets, and the current validation issues. With `at`, only what is on
 screen then, bottom to top.
@@ -334,27 +360,36 @@ is trimmed of the TTS's padding and brought to the same loudness before the line
 silence (at most 1.5 s). `pace` is `"slower"`, `"normal"`, `"faster"` or a factor 0.5-2; `emotion` (at most 20
 characters) is passed to the voice as an instruction.
 
-`providers.tts`: `provider` `"openrouter"`, `model` (default `qwen/qwen-audio-3.0-tts-plus`), `voice` (default
-`longanlufeng`), `instructions` (a standing style instruction), `speed_scale` 1.0, `usd_per_1k_chars` 0.02 (the
-estimate when the provider reports no cost), `line_lufs` -12.
+`providers.tts`: `provider` `"openrouter"`, `model` (default `qwen/qwen-audio-3.0-tts-plus`), `voice` (default:
+`longanlufeng`, the default model's Mandarin voice, for a Chinese locale only; any other locale must name a voice of
+its model that speaks it, and `speak` says so instead of reading the script in a Chinese voice), `instructions` (a
+standing style instruction), `speed_scale` 1.0, `usd_per_1k_chars` 0.02 (the estimate when the provider reports no
+cost), `line_lufs` -12. The words `speak` adds for pace and emotion are Chinese for a Chinese locale and English
+otherwise (a non-Chinese locale is part of the line cache key, so they do not mix).
 
 Any narration works: a `voice.json` with `lines` (`t0`, `t1` in seconds) next to its audio file is all the
 project needs.
 
 ### 9.2 capture
 
-`capture(project, url, id, match?)` → `assets/<id>.png`, an evidence asset with `box` (the sentence holding `match`,
-in the PNG's pixels), `site` and `url`. The browser is the installed Microsoft Edge, else the installed Google
-Chrome, else the Chromium that `python -m playwright install chromium` downloads. The page is loaded at a phone viewport (430 CSS px wide, 3× device scale,
-so the PNG is 1290 px wide); fixed and sticky overlays are hidden, a text column wider than the phone is reflowed,
-and the match grows to its sentence (at most 4 lines). An empty `match` boxes the title. All browser traffic goes
+`capture(project, url, id, match?, viewport?)` → `assets/<id>.png`, an evidence asset with `box` (the sentence
+holding `match`, in the PNG's pixels), `site` and `url`. The browser is the installed Microsoft Edge, else the
+installed Google Chrome, else the Chromium that `python -m playwright install chromium` downloads. `viewport`
+`phone` loads the page at 430 CSS px wide and 3× device scale with a phone's user agent (the PNG is 1290 px wide);
+`desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone for vertical
+and portrait canvases, desktop for landscape and square ones. The browser speaks the project's locale
+(`navigator.language`, `Accept-Language`; a Chinese locale also takes the Asia/Shanghai time zone). Fixed and
+sticky overlays are hidden, a text column wider than the viewport is reflowed, and the match grows to its sentence
+(at most 4 lines). The reply says how wide the box must be shown for its text to stand 40 px tall on a canvas with
+a 1080 px short side (scaled to the project's canvas). An empty `match` boxes the title. All browser traffic goes
 through a local guard proxy, so the page, its redirects, frames and scripts cannot reach local or private
 addresses. `providers.capture.proxy` (or `REELSMITH_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`) chains an upstream proxy.
 
 ### 9.3 draw
 
 `draw(project, id, prompt, style_ref_asset?, size?)` → `assets/<id>.png`, an image asset. `size` is an aspect
-(`9:16` default at 1080×1920, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, `3:2`, `16:9`) or `"WxH"` with sides 256-4096;
+(`9:16` at 1080×1920, `2:3`, `3:4`, `4:5` at 1080×1350, `1:1` at 1080×1080, `4:3`, `3:2`, `16:9` at 1920×1080;
+the default is the one nearest the project's canvas) or `"WxH"` with sides 256-4096;
 `style_ref_asset` is an image or evidence asset to match in style. The `codex` provider runs `codex exec` with
 image generation only: no user config, no shell, a read-only sandbox without network, no web search, in a
 throwaway folder; Codex's own words go to `<cache>/draw.log`, never to the agent. It uses the model from
@@ -407,7 +442,7 @@ two budget values for one process.
 |---|---|---|
 | `manual()` | the agent manual ([manual.md](manual.md)) | `manual` |
 | `notes(project)` / `note(project, text)` | read / append to the workspace's `library/NOTES.md` | `notes`, `note` |
-| `new_project(project, profile?, title?)` | create a project folder | `new` |
+| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag | `new --profile --canvas --locale` |
 | `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
 | `edit(project, ops)` | apply a batch of ops (section 5) | `edit` (JSON, `@file` or `-`) |
 | `undo(project, steps=1)` | undo applied batches | `undo --steps` |
@@ -417,7 +452,7 @@ two budget values for one process.
 | `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures a still every second as `render` does | `preview [times...] --sweep` |
 | `render(project)` | the film, mastered and checked (section 14) | `render` |
 | `review(project, n=12)` | 2-24 evenly spaced frames of the delivered film and a contact sheet | `review -n` |
-| `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture`, `draw`, `animate`, `import`, `assets` |
+| `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw`, `animate`, `import`, `assets` |
 
 Each takes `project` (the path of the folder holding project.json, or of project.json itself) first where it
 applies and returns text; structured results are JSON inside the text. A result is flagged as an error (MCP
@@ -455,7 +490,7 @@ Settings come from the flags, then `workspace.json` `runner`, then the defaults:
 | `context_tokens` | 200000 | api engine: once a request's prompt passes it, the oldest tool outputs and images are replaced by short stubs (the newest turn stays) |
 | `max_image_edge` | 1280 | api engine: images are downscaled to this edge and sent as JPEG |
 | `images` | null | api engine: `false` sends no images (a text-only model); null follows the provider's table |
-| `web` | `{}` | api engine: `fetch` (`false` leaves web_fetch out), `search` (`auto`, `ddgs`, `tavily` or `none`; `auto` takes ddgs when installed, else Tavily with `TAVILY_API_KEY`), `region`, `proxy`, `timeout_s` |
+| `web` | `{}` | api engine: `fetch` (`false` leaves web_fetch out), `search` (`auto`, `ddgs`, `tavily` or `none`; `auto` takes ddgs when installed, else Tavily with `TAVILY_API_KEY`), `region`, `proxy`, `timeout_s`, `locale` (web_fetch's `Accept-Language`: the tag, its language, then English; default the project's locale) |
 | `prices` | none | api engine: `{"model": [input, output, cached_input]}` in $ per million tokens, for calls whose provider reports no cost |
 | `extra_body` | none | api engine: fields merged into every request (an OpenRouter `provider` routing preference, a sampling setting) |
 | `base_url`, `key_env` | | the `custom` provider's endpoint and the name of its key |
@@ -570,20 +605,25 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
   `component` names a crashed or missing component with its source line; stage `infra` with `"transient": true`
   is a socket, browser or compositor failure that a plain retry may pass (reelsmith retries it once).
 
-`scripts/segment.mjs` gives Python the word boundaries (`Intl.Segmenter("zh")`) used to phrase-split captions.
+`scripts/segment.mjs` gives Python the word boundaries (`Intl.Segmenter` in the project's locale; stdin
+`{"texts", "locale"}`) used to phrase-split captions; resolve caches them per locale in `build/segments.json`.
 
 ## 14. Checks and delivery
 
 `check(project)` reports three levels: **errors** block `render`, **warnings** and **advice** are information.
 
+Pixel thresholds here (40, 28 and 20 px) are written for a canvas whose short side is 1080 px and scale with the
+canvas's short side (a 720×1280 canvas warns under 18.7 px, a 3840×2160 one under 56 px); messages give the scaled
+value.
+
 - Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
-  cyclic Times, props that fail a component's schema); the hard rules (section 2.2); a length outside the profile's
-  limits.
-- Warnings: an empty title; frame 0 (the cover) without whole words on it (mid-reveal, mid-enter, fading in, or no
-  words at all); evidence whose proving sentence will read under 40 px; a component Time that falls outside its
-  clip; motion and keyframes on the same property.
-- Advice (from rules.json `advice`): nothing on screen at 0 s or no words within `hook_seconds`; a still image or
-  evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
+  cyclic Times, props that fail a component's schema, an unknown font, a malformed locale or profile); the hard
+  rules (section 2.2); a length outside the profile's limits (when it has any).
+- Warnings: an empty title where rules.json has a title rule; frame 0 (the cover) without whole words on it
+  (mid-reveal, mid-enter, fading in, or no words at all); evidence whose proving sentence will read under 40 px; a
+  component Time that falls outside its clip; motion and keyframes on the same property.
+- Advice (only what rules.json `advice` sets): nothing on screen at 0 s or no words within `hook_seconds`; a still
+  image or evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
 
 `render(project)` stops at the first stage that fails and keeps the previous `out/film.mp4`:
 
@@ -594,25 +634,41 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
    text of another (captions included), and contrast under 3:1 against the background sampled from the still
    (between 2:1 and 3:1 a clearly different hue passes).
 3. **film**: the renderer encodes the film.
-4. **master**: the film must have sound; loudness is normalised to the profile's target (true peak −1 dBTP).
+4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP). A profile with `require_audio`
+   refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
+   is not mastered).
 5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
-   profile's cap, sound not near silent, at most 10 % black, and no stretch longer than 5 s without any motion. A
-   rejected film is kept as `build/film.rejected.mp4` to look at.
+   profile's cap, sound present and not near silent (`require_audio`), at most `max_black_ratio` black (10 %), and
+   no stretch longer than `max_still_s` (5 s on the social profiles) without any motion; a limit that is null is
+   not checked. A rejected film is kept as `build/film.rejected.mp4` to look at.
 
 Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
 failure that is not the project's (its local server or browser) is retried once and reported as transient.
 
 ## 15. Profiles and themes
 
-| profile | canvas | safe area x, y, w, h | captions band | length | target | max size | loudness |
-|---|---|---|---|---|---|---|---|
-| `douyin` (default) | 1080×1920, 30 fps | 40, 220, 840, 1240 | 40, 1260, 840, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS |
-| `douyin-long` | as `douyin` | as `douyin` | as `douyin` | 60-300 s | 90-180 s | 250 MB | −10 LUFS |
-| `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS |
-| `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS |
+| profile | canvas | safe area x, y, w, h | captions band | length | target | max size | loudness | sound | stills |
+|---|---|---|---|---|---|---|---|---|---|
+| `landscape` (default) | 1920×1080, 30 fps | 96, 54, 1728, 972 | 96, 826, 1728, 200 | any | none | none | −14 LUFS | optional | any |
+| `vertical` | 1080×1920, 30 fps | 54, 96, 972, 1728 | 54, 1624, 972, 200 | any | none | none | −14 LUFS | optional | any |
+| `square` | 1080×1080, 30 fps | 54, 54, 972, 972 | 54, 826, 972, 200 | any | none | none | −14 LUFS | optional | any |
+| `portrait` | 1080×1350, 30 fps | 54, 68, 972, 1214 | 54, 1082, 972, 200 | any | none | none | −14 LUFS | optional | any |
+| `youtube` | as `landscape` | as `landscape` | as `landscape` | any | none | none | −14 LUFS | required | any |
+| `douyin` | 1080×1920, 30 fps | 40, 220, 840, 1240 | 40, 1260, 840, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS | required | ≤ 5 s |
+| `douyin-long` | as `douyin` | as `douyin` | as `douyin` | 60-300 s | 90-180 s | 250 MB | −10 LUFS | required | ≤ 5 s |
+| `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS | required | ≤ 5 s |
+| `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS | required | ≤ 5 s |
+| `reels` | 1080×1920, 30 fps | 66, 250, 884, 1000 | 66, 1050, 884, 200 | 3-180 s | 15-60 s | 4000 MB | −14 LUFS | required | ≤ 5 s |
 
-The safe area is where the platform's own UI (status bar, tabs, the button rail, title and music) does not cover
-the picture: words must stay inside it; backgrounds may bleed to the edges.
+On the generic canvases (`landscape`, `vertical`, `square`, `portrait`) and `youtube` the safe area is a title-safe
+margin, 5 % of the width and of the height in from each edge; on the platform profiles it is where the platform's
+own UI (status bar, tabs, the button rail, title and music) does not cover the picture: on Instagram Reels Meta keeps
+the top 14 % and the bottom 35 % free, and the action rail takes more than its 6 % at the right. Words must stay
+inside the safe area; backgrounds may bleed to the edges. The captions band is the safe area's bottom 200 px at a
+1080 px short side (scaled with the canvas). YouTube normalises playback to about −14 LUFS and its own upload caps
+(12 h, 256 GB) are beyond anything rendered here, so `youtube` sets no length or size limit. Every profile renders
+h264/aac with true peak −1 dBTP and at most 10 % black. Advice `"target_s": true` (section 2.2) checks the length
+against the profile's `target`.
 
 | token | `paper` (default) | `night` | for |
 |---|---|---|---|
@@ -626,6 +682,30 @@ the picture: words must stay inside it; backgrounds may bleed to the edges.
 | `muted` | #7A6F62 | #8A96A3 | secondary text |
 
 The theme is `paper` (or the one `name`d), then workspace.json `theme`, then project.json `theme`.
+
+### 15.1 Custom profiles
+
+workspace.json `profiles` names custom profiles, and a project's (or the workspace's) `profile` may be one inline:
+`{"base": "douyin", "width": 720, "height": 1280, "fps": 25}`. `base` names the profile to start from (built-in,
+or another custom one of the workspace; default `landscape`) and every other field overrides it:
+
+| field | value |
+|---|---|
+| `width`, `height` | even whole numbers 64-4096 (h264 needs even sides) |
+| `fps` | a whole number 1-120 (24, 25, 30, 50 and 60 are the usual ones) |
+| `safe`, `captions` | `{"x", "y", "w", "h"}` or `[x, y, w, h]` in canvas pixels, inside the canvas |
+| `min_s`, `max_s`, `max_mb`, `max_still_s` | numbers > 0, or null for no limit (no check) |
+| `target_s` | `[min, max]` seconds, or null |
+| `lufs`, `peak_db` | the mastering target (−70 to −1) and true peak (−12 to 0) |
+| `max_black_ratio` | 0-1 |
+| `require_audio` | false: a silent film is delivered |
+| `ui` | true: outside the safe area is the platform's UI (only the wording of the layout message changes) |
+
+A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
+new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.
+`new_project(canvas="1920x1080@25")` writes such an inline profile. Unknown fields, sizes, boxes outside the canvas
+and loops of `base` are refused with the field named (workspace.json profiles when the workspace loads, an inline
+profile by `check`).
 
 ## 16. Environment variables
 

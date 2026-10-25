@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .. import locales
 from .config import ProviderError, redact
 
 API = "https://openrouter.ai/api/v1"
@@ -135,27 +136,32 @@ class OpenRouter:
 
 
 # ------------------------------------------------------------------ speech
+ZH_VOICE = "longanlufeng"       # the default model's Mandarin voice: the default for Chinese locales only
 # Qwen TTS rejects a numeric `speed` (HTTP 400): its pace is steered by words instead.
 QWEN_SLOW_BELOW = 1.18
 QWEN_FAST_FROM = 1.30
 
 
-def qwen_pace(speed: float) -> str:
+def qwen_pace(speed: float, zh: bool = True) -> str:
     if speed < QWEN_SLOW_BELOW:
-        return "这一句语速放慢，每个字咬清楚，重音落稳"
+        return "这一句语速放慢，每个字咬清楚，重音落稳" if zh else "Read this line slower, every word clear, the stress steady"
     if speed >= QWEN_FAST_FROM:
-        return "语速更快一点，一口气带过"
-    return "语速快一些，干脆利落"
+        return "语速更快一点，一口气带过" if zh else "Faster, in one breath"
+    return "语速快一些，干脆利落" if zh else "A little quick, crisp"
 
 
 def speech_body(text: str, cfg: dict, speed: float, emotion: str = "") -> dict:
+    """The /audio/speech request; its own instructions (pace, emotion) are in Chinese unless cfg["locale"] is a
+    non-Chinese locale."""
     body = {"model": cfg.get("model") or "qwen/qwen-audio-3.0-tts-plus", "input": text,
-            "voice": cfg.get("voice") or "longanlufeng", "response_format": "mp3"}
+            "voice": cfg.get("voice") or ZH_VOICE, "response_format": "mp3"}
+    zh = locales.is_chinese(cfg.get("locale") or "zh")
+    sep = "；" if zh else "; "
     instructions = str(cfg.get("instructions") or "").strip()
     sp = float(speed or 1.0)
     if body["model"].startswith("qwen/"):
         if abs(sp - 1.0) > 0.01:
-            instructions = (instructions + "；" + qwen_pace(sp)).strip("；")
+            instructions = (instructions + sep + qwen_pace(sp, zh)).strip(sep)
     else:
         # speed_scale maps the Qwen-calibrated pace onto a voice that takes a numeric speed
         scaled = round(min(2.0, sp * float(cfg.get("speed_scale") or 1.0)), 3)
@@ -163,7 +169,8 @@ def speech_body(text: str, cfg: dict, speed: float, emotion: str = "") -> dict:
             body["speed"] = scaled
     if emotion:
         body["emotion"] = emotion           # MiniMax reads it; the others get it as an instruction
-        instructions = (instructions + f"；这一句的情绪：{emotion}").strip("；")
+        mood = f"这一句的情绪：{emotion}" if zh else f"The mood of this line: {emotion}"
+        instructions = (instructions + sep + mood).strip(sep)
     if instructions:
         body["instructions"] = instructions
     return body

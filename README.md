@@ -32,8 +32,8 @@ layout measurement, loudness and the delivery rules.
 - **Atomic, validated, undoable edits**: a batch of ops applies whole or not at all. `project.json` can also be
   edited by hand; every tool reads it fresh.
 - **Asset tools**: narration (text-to-speech, cached per line), original pictures (Codex image generation),
-  evidence screenshots of web pages at phone width with the proving sentence boxed, short clips from a picture
-  (image-to-video), and imports of local or downloaded media.
+  evidence screenshots of web pages at phone or desktop width with the proving sentence boxed, short clips from a
+  picture (image-to-video), and imports of local or downloaded media.
 - **Components**: nine built-in React presets (receipt, count-up, bar comparison, timeline, dot grid, stamp,
   evidence card, highlighter, arrow). The agent can write its own into the workspace library, with a documented
   kit, a type checker and an import guard.
@@ -44,12 +44,16 @@ layout measurement, loudness and the delivery rules.
 - **Spend control**: paid calls go through a ledger with a per-project budget and an account balance floor.
 - **Three ways in**: an MCP server, a CLI, and a self-hosted runner that works with any OpenAI-compatible model
   API (a Claude Agent SDK session is an optional engine).
-- **Output profiles** `douyin` (the default), `douyin-long` (60-300 s explainers), `tiktok` and `shorts`:
-  1080×1920 at 30 fps, each with its own safe area, length limits, size cap and loudness target.
+- **Any canvas**: generic `landscape` (the default, 1920×1080), `vertical`, `square` and `portrait` canvases with a
+  title-safe margin and no delivery limits; platform profiles `youtube`, `douyin`, `douyin-long`, `tiktok`,
+  `shorts` and `reels` with their safe areas, length limits, size caps and loudness; custom profiles (any size, any
+  fps) in `workspace.json`. Text-size and legibility checks scale with the canvas.
+- **Any language**: a project `locale` (BCP-47) sets caption phrasing and length, the browser language of captures
+  and the runner's web requests; the workspace can add its own fonts.
 
-The defaults are tuned for Chinese short video: Simplified Chinese fonts, CJK-aware line breaking, a Mandarin
-narration voice and Chinese browser locale for captures. English works as well; set `profile` and the TTS `voice`
-in `workspace.json` to match your audience.
+The bundled faces are Noto Sans SC and Noto Serif SC (they cover Latin as well), Smiley Sans and ZCOOL QingKe
+HuangYou. Narration needs a TTS voice for the film's language in `workspace.json` (`providers.tts.voice`); only
+Chinese has a default.
 
 ## Requirements
 
@@ -253,16 +257,17 @@ A run resumes on the engine, provider (or backend) and model it started on; `--f
 
 - a project that does not validate: unknown ids, missing files, clips overlapping on a track, Times that do not
   resolve, component props that fail their schema;
-- the workspace's hard rules (`rules.json`): by default a title of at most 24 characters with at most 2 numbers, at
-  least one source with an http(s) url, no banned words;
-- a length outside the profile's limits.
+- the workspace's hard rules (`rules.json`, none unless it sets them): for example a title of at most 24
+  characters with at most 2 numbers, at least one source with an http(s) url, no banned words;
+- a length outside the profile's limits (platform profiles have them; generic canvases do not).
 
 `render` then measures a still every second and refuses words outside the safe area or cut by the canvas edge, text
-under 20 px and crashing components; encodes the film; masters its loudness; and refuses a film without sound,
-with more than 10 % black, with a stretch longer than 5 s where nothing moves, or over the size cap. A refused
-render keeps the previous film and reports what to fix with clip ids and times. Warnings (small, overlapping or
-low-contrast text, an unreadable evidence crop, a cover frame without whole words) and advice (the hook, long
-still shots, the target length) never block.
+under 20 px (at a 1080 px short side) and crashing components; encodes the film; masters its loudness; and refuses
+a film with more than 10 % black or over the size cap, and on the platform profiles one without sound or with a
+stretch longer than 5 s where nothing moves. A refused render keeps the previous film and reports what to fix with
+clip ids and times. Warnings (small, overlapping or low-contrast text, an unreadable evidence crop, a cover frame
+without whole words) and advice (the hook, long still shots, the target length; only what `rules.json` asks for)
+never block.
 
 ## Costs
 

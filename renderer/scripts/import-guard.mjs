@@ -17,16 +17,17 @@ const norm = (p) => {
 };
 const within = (p, dir) => {
   const n = norm(p);
-  return n === dir || n.startsWith(dir + path.sep);
+  return [].concat(dir).some((d) => n === d || n.startsWith(d + path.sep));
 };
-const withinAny = (p, dirs) => dirs.some((d) => within(p, d));
-// webpack reports real paths, so a symlinked or junctioned node_modules (pnpm, worktrees) is matched by both names
-const realOr = (p) => {
+// node_modules may be a symlink or junction (a shared install); webpack reports the files at their real path
+const places = (p) => {
+  let real = p;
   try {
-    return fs.realpathSync.native(p);
+    real = fs.realpathSync.native(p);
   } catch {
-    return p;
+    // not there yet: only the given path
   }
+  return [...new Set([norm(p), norm(real)])];
 };
 
 /**
@@ -37,10 +38,9 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
   const src = norm(path.join(root, "src"));
   const kit = norm(path.join(root, "src", "kit"));
   const presets = norm(path.join(root, "src", "presets"));
-  const moduleRoots = [...new Set([path.join(root, "node_modules"), realOr(path.join(root, "node_modules"))])];
-  const modules = moduleRoots.map(norm);
+  const modules = places(path.join(root, "node_modules"));
   const lib = norm(library);
-  const loaders = moduleRoots.flatMap((m) => LOADER_PACKAGES.map((p) => norm(path.join(m, p))));
+  const loaders = LOADER_PACKAGES.flatMap((p) => modules.map((m) => path.join(m, p)));
   const warned = new Set();
 
   const fail = (msg) => {
@@ -53,7 +53,7 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
     if (!file || /^data:/i.test(file)) return;
     if (/^[a-z][a-z0-9+.-]+:/i.test(file) && !/^[a-z]:[\\/]/i.test(file)) fail(`${what} URI ${file} refused`);
     if (!path.isAbsolute(file)) fail(`${what} ${file} refused: not a file path`);
-    if (!(within(file, src) || withinAny(file, modules) || within(file, lib))) {
+    if (!(within(file, src) || within(file, modules) || within(file, lib))) {
       fail(`${what} ${file} refused: only the renderer's src/, its node_modules and the component library may be bundled`);
     }
   };
@@ -73,7 +73,7 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
     }
     if (request === KIT) return file === null || within(file, kit) ? null : said(issuer, request, "it did not resolve to the renderer kit");
     if (PACKAGE.test(request)) {
-      return file === null || withinAny(file, modules) ? null : said(issuer, request, "it did not resolve to the renderer's installed packages");
+      return file === null || within(file, modules) ? null : said(issuer, request, "it did not resolve to the renderer's installed packages");
     }
     return said(issuer, request, "");
   };

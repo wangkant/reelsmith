@@ -13,30 +13,52 @@ There is no pipeline and no template. Call any tool at any time. A good loop:
 3. `speak` the lines → `voice/voice.json` gives every line's start and end.
 4. Gather assets, then `edit` the project in batches. `describe` shows the editor's window as text.
 5. `check` → `preview` key moments and **look at the stills** (Read the PNGs) → fix → repeat.
-6. `preview` with `sweep` (the layout of the whole film) → `render` → `review` at phone size → `note` what you
-   learned.
+6. `preview` with `sweep` (the layout of the whole film) → `render` → `review` the frames as a viewer would →
+   `note` what you learned.
 
 Every tool takes `project` = the path of the project folder (the one holding `project.json`). Tools never throw:
 a failure comes back as text that says what to do.
 
 ## The canvas
 
-Profile `douyin` (the default): 1080×1920, 30 fps, 20–90 s (aim for 45–75), ≤ 80 MB, mastered to −10 LUFS.
-**Safe area: x 40–880, y 220–1460.** The phone's UI covers the rest (status bar and tabs on top, like/comment
-buttons down the right, title and music at the bottom). Backgrounds may bleed to the edges; **words must stay
-inside the safe area** — render measures every second and refuses text outside it. Other profiles: `tiktok`,
-`shorts` (`"profile"` in project.json or workspace.json). Box values are canvas pixels; `"full"` is the whole
-canvas, `"safe"` the safe area.
+**`describe` prints your canvas first: its profile, size, fps, safe area and locale.** Lay every box out for that
+canvas. Box values are canvas pixels; `"full"` is the whole canvas, `"safe"` the safe area.
 
-**Captions** (when the project has a captions track) sit in a 200 px band at the bottom of the safe area — on
-douyin x 40–880, y 1260–1460, one line of 36–66 px, white on a dark plate. Keep other words above y ≈ 1250 while
-captions show, or give the captions track its own `box`.
+The profile is project.json `"profile"`, else workspace.json's, else `landscape`:
+
+| profile | canvas | safe area | delivery |
+|---|---|---|---|
+| `landscape` (default) | 1920×1080 | x 96–1824, y 54–1026 | any length, sound optional |
+| `vertical` / `square` / `portrait` | 1080×1920 / 1080×1080 / 1080×1350 | 5 % in from each edge | any length, sound optional |
+| `youtube` | 1920×1080 | as landscape | sound required |
+| `douyin` | 1080×1920 | x 40–880, y 220–1460 | 20–90 s, ≤ 80 MB, −10 LUFS |
+| `douyin-long`, `tiktok`, `shorts`, `reels` | 1080×1920 | each its platform's | each its platform's limits |
+
+All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise. On the generic canvases the safe
+area is a title-safe margin; on the platform ones (douyin, tiktok, shorts, reels) it is where the phone's UI does
+not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and music at the
+bottom), and there a film needs sound and nothing may stand still for more than 5 s. Backgrounds may bleed to the
+edges; **words must stay inside the safe area** — render measures every second and refuses text outside it. The
+owner may define other canvases (workspace.json `profiles`, or an inline `"profile": {"base": "douyin", "width":
+720, "height": 1280, "fps": 25}`); `new_project(p, canvas="1920x1080@25")` makes one.
+
+Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose short side is 1080 px; the checks
+scale them with your canvas.
+
+**Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
+(`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language and whether `speak` has a
+default voice (only Chinese has one; otherwise the owner sets `providers.tts.voice`).
+
+**Captions** (when the project has a captions track) sit in the profile's captions band, the bottom 200 px of the
+safe area — on landscape x 96–1824, y 826–1026; on douyin x 40–880, y 1260–1460 — one line of 36–66 px, white on a
+dark plate. Keep other words above the band while captions show, or give the captions track its own `box`.
 
 ## Folders
 
 ```
-<workspace>/workspace.json        profile, theme, providers, budget        rules.json   owner rules
+<workspace>/workspace.json        profile, locale, theme, providers, budget        rules.json   owner rules
 <workspace>/library/components/   your own components (persist across projects)   library/NOTES.md  your notes
+<workspace>/library/fonts/        the owner's fonts: a text `font` may name a family there (the file name)
 <workspace>/projects/<name>/      project.json  script.md  voice/  assets/  build/ (previews)  out/film.mp4
 ```
 
@@ -45,11 +67,14 @@ tool reads it fresh and validates it. `edit` is safer: atomic, validated and und
 
 ## The project
 
-Tracks are listed bottom to top. Clips on one track must not overlap — layer with more tracks. A complete example:
+Tracks are listed bottom to top. Clips on one track must not overlap — layer with more tracks. A complete example,
+a vertical Chinese explainer (its boxes are laid out for the 1080×1920 douyin canvas):
 
 ```json
 {
   "version": 2,
+  "profile": "douyin",
+  "locale": "zh-CN",
   "meta": {"title": "一件T恤要喝多少水", "desc": "一件棉T恤背后的水账 #环保", "topic": "一件棉T恤从种棉到成衣的用水量",
            "shape": "count-up explainer, verdict at the end",
            "sources": [{"title": "棉花用水报告", "url": "https://example.com/report/cotton"}]},
@@ -86,7 +111,7 @@ Tracks are listed bottom to top. Clips on one track must not overlap — layer w
       {"id": "m1", "type": "audio", "asset": "bed", "start": 0, "end": "end", "volume": 0.12, "loop": true,
        "fade_out": 1.5}
     ]},
-    {"id": "cap", "kind": "captions", "source": "voice", "emphasis": ["T恤"], "max_chars": 14}
+    {"id": "cap", "kind": "captions", "source": "voice", "emphasis": ["T恤"]}
   ]
 }
 ```
@@ -151,16 +176,20 @@ keyframe. `progress` (0..1) drives shapes and components.
 | `component` | `name`, `props` (checked against the component's schema; see `library`) |
 | `audio` (audio tracks) | `asset`, `trim_in`, `volume`, `fade_in`, `fade_out`, `loop` (repeat the file to fill the clip) |
 
-**Text.** TextStyle: `font`, `size` px or `"fit"`, `max_size` 160, `min_size` 28, `weight` 400–900, `color`
+**Text.** TextStyle: `font`, `size` px or `"fit"`, `max_size` 160, `min_size` 28 (defaults scale with the canvas),
+`weight` 400–900, `color`
 (default `snow` with a soft shadow, for pictures and dark grounds: **on paper set `ink`**), `accent`, `align`,
 `valign`, `line_height` 1.15, `letter_spacing`, `wrap`, `balance` (exactly two even lines), `stroke` `{color, width}`,
 `shadow`, `bg` `{color, radius, pad}` (a plate behind the text).
 - `"fit"` is the largest size (between `min_size` and `max_size`) at which the text fits the box's width and
   height, on as many lines as that takes. Lines break between words, never inside a number or before closing
   punctuation; your `\n` breaks are kept. Cap headlines with `max_size`.
-- Fonts: `sans` (Noto Sans SC, the default: body, numbers, captions), `serif` (Noto Serif SC: quotes, a calmer
-  editorial voice), `display` (Smiley Sans 得意黑, a bold oblique: headlines and verdicts), `zcool` (ZCOOL QingKe
-  HuangYou, decorative: some characters such as 水 多 算 read oddly, so only short titles you have previewed).
+- Fonts: `sans` (Noto Sans SC, the default: body, numbers, captions; it covers Latin text too), `serif` (Noto Serif
+  SC: quotes, a calmer editorial voice), `display` (Smiley Sans 得意黑, a bold oblique: headlines and verdicts),
+  `zcool` (ZCOOL QingKe HuangYou, decorative: some characters such as 水 多 算 read oddly, so only short titles you
+  have previewed), and any family the workspace adds in `library/fonts/` (named after the file: `Brand
+  Sans.woff2` is `"font": "Brand Sans"`; `check` lists them when a name is unknown). Components can use them too
+  (`fontFamily("Brand Sans")` from the kit).
 - `reveal` modes: `chars` (a character at a time), `words`, `lines` (the lines as laid out on screen, one after
   another), `none`. `dur` is the whole reveal in seconds (default 0.8).
 
@@ -187,9 +216,10 @@ component colour props) takes a theme token or any CSS colour. The default theme
 (in project.json or workspace.json).
 
 **Captions track:** `{"id", "kind": "captions", "source": "voice", "box"?, "style"?, "emphasis": [words in
-accent], "max_chars": 14, "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start", "end", "text"}]}` —
-phrase-split (never inside a word or a number) and timed from the voice lines unless you give `items`. Fix a bad
-split with an override that adds a comma where the cut should be.
+accent], "max_chars"?, "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start", "end", "text"}]}` —
+phrase-split between words (never inside a word or a number) and timed from the voice lines unless you give
+`items`. `max_chars` (4–60) defaults to 14 for Chinese, Japanese and Korean and 32 for other languages. Phrases
+drop the punctuation they were cut at. Fix a bad split with an override that adds a comma where the cut should be.
 
 ## Edit ops
 
@@ -223,7 +253,7 @@ component props) cannot be removed.
 | `manual()` | this manual | `manual()` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md` with your file tools) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?)` | create a project folder | `new_project("/home/me/studio/projects/tshirt")` |
+| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
 | `undo(project, steps=1)` | undo applied batches | `undo(p)` |
@@ -231,8 +261,8 @@ component props) cannot be removed.
 | `library(project, name?)` | components with their prop names; with a name, schema, example and source | `library(p, "Receipt")` |
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
 | `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["一件T恤，", {"text": "要喝多少水？", "pace": 0.95, "emotion": "惊讶"}])` |
-| `capture(project, url, id, match?)` | phone-width screenshot of a page as evidence, boxed around `match` | `capture(p, "https://...", "ev_water", "约需2700升水")` |
-| `draw(project, id, prompt, style_ref_asset?, size?)` | an original picture | `draw(p, "field", "a cotton field at dawn, photo", size="9:16")` |
+| `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on vertical and portrait canvases, desktop on landscape and square) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
+| `draw(project, id, prompt, style_ref_asset?, size?)` | an original picture | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a short clip from a picture | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL into assets (`kind` image, video, audio, evidence) | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
@@ -241,21 +271,23 @@ component props) cannot be removed.
 | `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
 
 - `speak`: `pace` is a speed factor relative to normal (1.0; 0.9 a little slower, 1.1 a little faster; 0.5–2) or
-  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"惊讶"`, `"平静"`) given
-  to the voice as an instruction; how much it changes depends on the voice model, so listen before relying on it.
-  `speak` caches per line — only changed lines are paid for again.
-- `draw`: `size` is an aspect — `9:16` (default, 1080×1920), `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, `3:2`, `16:9` — or
-  pixels `"WxH"` (sides 256–4096).
+  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"惊讶"`)
+  given to the voice as an instruction; how much it changes depends on the voice model, so listen before relying on
+  it. `speak` caches per line — only changed lines are paid for again. The voice is the workspace's
+  `providers.tts.voice`; without one only a Chinese locale has a default (a Mandarin voice), and `speak` says so.
+- `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
+  `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
 - `speak`, `draw` and `animate` may cost money: they estimate first and refuse when the project budget or the
   account floor would be crossed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
-  warns when the sentence will read under 40 px. Re-box an evidence asset with `update_asset`.
+  warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
+  `update_asset`. A capture comes back in the project's language (the browser's locale).
 - Music: there is no music generator. `import_asset` an audio file you are allowed to use, put it on an audio
   track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film.
 - `preview` is cheap (one bundle, a few seconds a still): use it after every meaningful edit and look at the PNGs.
-  In the contact sheet the dark bands are the platform's UI, the yellow line is the safe area and each tile shows
-  its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures a still every second, exactly
+  In the contact sheet (tiles in your canvas's shape) the dark bands are outside the safe area (the platform's UI,
+  or the title-safe margin), the yellow line is the safe area's edge and each tile shows its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures a still every second, exactly
   as `render` does before it encodes, and keeps the stills of the flagged moments: run it before `render`.
 
 ## Components
@@ -310,7 +342,8 @@ export default function Tally({ props }: { props: any }) {
 
 Fuller worked examples: the sample component in the example workspace's `library/components/`, and every preset's
 source (`library(p, name)` gives the path). Lay yourself out in
-`w × h`; keep text at 28 px or more; animate from the frame, never from time or randomness; give SVG ids
+`w × h`; keep text at 28 px or more at a 1080 px short side (on other canvases scale by `Math.min(width, height)
+/ 1080`, both from `useClip()`); animate from the frame, never from time or randomness; give SVG ids
 (`clipPath`, gradients) `React.useId()` so two instances do not collide. Then `typecheck` and `preview` a moment
 where it shows. A component that crashes shows a red box in previews and is reported first, with its source line.
 
@@ -318,24 +351,28 @@ where it shows. A component that crashes shows a red box in previews and is repo
 
 `render` stops — and keeps the previous `out/film.mp4` — at the first stage that fails:
 
-1. **check errors**: the project does not validate (unknown ids, missing files, overlaps on a track, bad Times...);
-   the owner's hard rules from `rules.json` (by default: title ≤ 24 characters with at most 2 numbers, at least 1
-   source with an http(s) url, no banned words in title/desc/topic); the length outside the platform's limits.
+1. **check errors**: the project does not validate (unknown ids, missing files, overlaps on a track, bad Times, an
+   unknown font...); the owner's hard rules from `rules.json`, when there are any (for example a title of at most
+   24 characters with at most 2 numbers, at least 1 source with an http(s) url, no banned words in
+   title/desc/topic); the length outside the profile's limits, when it has any.
 2. **layout** (measured on a still every second — `preview` with `sweep` runs the same pass): visible text outside
    the safe area or cut by the canvas edge, text under 20 px, a component that crashes. Text during its
    enter/exit animation and text fainter than 10 % opacity are not counted.
-3. **the film**: 1080×1920, 30 fps, h264/aac, length within the profile's limits, ≤ 80 MB, sound present (not
-   near silent), black ≤ 10 % of the film, **no stretch longer than 5 s without any motion** (move something:
-   keyframes, `motion`, a reveal, a video).
+3. **the film**: the profile's size and fps, h264/aac, length and size within the profile's limits, black ≤ 10 %
+   of the film. On the platform profiles also sound present (not near silent) and **no stretch longer than 5 s
+   without any motion** (move something: keyframes, `motion`, a reveal, a video); on the generic canvases a silent
+   film or a held frame is delivered as it is.
 
 The report lists what failed with clip ids and times (`hook @ 1.0s`) — fix those, `preview` them, render again. A
 failure of the renderer itself (its local server or browser) is retried once and reported as a transient problem,
 not as your project's: run the same call again. `render` reports each stage's time; `build/report.json` is the
 latest attempt, `out/report.json` the delivered film's.
 
-**Warnings** (information; take them seriously): text under 28 px; text of one clip over text of another
+**Warnings** (information; take them seriously): text under 28 px (at a 1080 px short side); text of one clip
+over text of another
 (captions included); text on a background of about its own brightness (contrast measured on the still); text
 overflowing its clip box; evidence whose proving sentence will read under 40 px; words that are not whole on
 frame 0, which is the cover (mid-reveal, mid-enter, fading in), or no words there at all.
-**Advice**: no words on screen in the first 2 s (the hook), one still picture held longer than 8 s with nothing
-moving it, length outside the 45–75 s target. Viewers decide in the first seconds.
+**Advice**, only what the owner's `rules.json` asks for: for example no words on screen in the first 2 s (the
+hook), one still picture held longer than 8 s with nothing moving it, a length outside the target. An empty title
+is a warning only when the owner has a title rule.

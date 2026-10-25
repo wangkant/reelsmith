@@ -4,9 +4,9 @@ import { Film } from "./Film";
 import "./fonts";
 import type { FilmProps, Resolved } from "./types";
 
-// What the Studio shows without input props: an empty 2 s canvas.
+// What the Studio shows without input props: an empty 2 s canvas of the default profile (landscape, title-safe 5 %).
 const EMPTY: Resolved = {
-  version: 2, fps: 30, width: 1080, height: 1920, durationInFrames: 60, safe: { x: 40, y: 220, w: 840, h: 1240 },
+  version: 2, fps: 30, width: 1920, height: 1080, durationInFrames: 60, safe: { x: 96, y: 54, w: 1728, h: 972 },
   theme: {
     paper: "#F3EBDD", ink: "#1E1A16", night: "#16130F", snow: "#F7F1E6", accent: "#C8372D", gold: "#D9A441",
     good: "#2E8B57", bad: "#C8372D", muted: "#7A6F62",

@@ -32,7 +32,8 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 SHARING_TRIES = 25          # ~6 s of backoff: an editor or another process briefly holding project.json
 
 DEFAULT_PROVIDERS: dict = {
-    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "longanlufeng",
+    # voice None: the model's Chinese default for Chinese locales; other locales must name one (tts.default_voice)
+    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": None,
             "instructions": "", "speed_scale": 1.0, "usd_per_1k_chars": 0.02, "line_lufs": -12.0},
     "image": {"provider": "codex", "max_draws": 30, "timeout_s": 360, "effort": "low"},
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p",
@@ -123,6 +124,26 @@ def _local_find(project_dir: Path):
             # .env only: Context.key falls back to the environment, and secrets() must not list PATH and friends
             return _LocalWorkspace(d, data if isinstance(data, dict) else {}, _parse_env(d / ".env"))
     return None
+
+
+def project_profile(ctx):
+    """The project's profile (workspace.profile_for); None when it cannot be read."""
+    mod = _workspace_module()
+    try:
+        return mod.profile_for(ctx.project) if mod is not None and hasattr(mod, "profile_for") else None
+    except Exception:  # noqa: BLE001 - check and render report a bad profile; a tool falls back to its default
+        return None
+
+
+def project_locale(ctx) -> str:
+    """The project's locale (workspace.locale_for), "en" without one; ProviderError for a malformed tag."""
+    mod = _workspace_module()
+    if mod is None or not hasattr(mod, "locale_for"):
+        return "en"
+    try:
+        return mod.locale_for(ctx.project)
+    except ValueError as exc:
+        raise ProviderError(f"{exc} (project.json or workspace.json locale)") from None
 
 
 def find_workspace(project_dir: Path):

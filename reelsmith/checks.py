@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import media
 from .issues import Issue
-from .profiles import Profile
+from .profiles import REFERENCE_SIDE, Profile
 from .workspace import PROJECT_FILE, WorkspaceError, default_rules, find_workspace, profile_for, project_root
 
 TITLE_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
@@ -16,6 +16,7 @@ HTTP_URL = re.compile(r"^https?://\S+$", re.I)
 LEVEL_ORDER = {"error": 0, "warning": 1, "advice": 2}
 STILL_TYPES = {"image", "evidence"}     # videos and components move by themselves
 VISIBLE_OPACITY = 0.1          # fainter text is decoration, not something to read
+# px thresholds below are for a canvas whose short side is 1080 px; each canvas scales them (Profile.scale)
 SMALL_TEXT_PX = 28             # the renderer's own min_size for fitted text
 TINY_TEXT_PX = 20
 MIN_CONTRAST = 3.0             # WCAG's floor for large text
@@ -23,7 +24,7 @@ LOW_CONTRAST = 2.0             # between the two, a clearly different hue still 
 DISTINCT_DELTA_E = 50.0
 STEADY_OPACITY = 0.75          # text fading in or out is judged where it is whole
 OVERLAP_OPACITY = 0.35         # fainter text under other text is a backdrop, not a collision
-EVIDENCE_MIN_PX = 40           # the house minimum for anything a phone viewer must read
+EVIDENCE_MIN_PX = 40           # the house minimum for anything a viewer must read
 INK_PER_EM = 0.85              # a CJK glyph's ink is about this much of its font size
 SILENT_LUFS = -45.0
 LUFS_TOLERANCE = 3.0
@@ -93,11 +94,12 @@ def _source_ok(s) -> bool:
 
 
 def rule_issues(meta: dict, rules: dict) -> list[Issue]:
-    """The owner's hard rules on the post (title, sources, banned words): errors block delivery."""
+    """The owner's hard rules on the post (title, sources, banned words): errors block delivery. An empty title is
+    a warning only where the owner rules on titles (max_title or max_title_numbers)."""
     hard = rules.get("hard") or {}
     out: list[Issue] = []
     title = str(meta.get("title") or "").strip()
-    if not title:
+    if not title and (hard.get("max_title") is not None or hard.get("max_title_numbers") is not None):
         out.append(Issue("warning", "meta.title", "empty: the post needs a title (edit op set, path meta.title)"))
     max_title = hard.get("max_title")
     if max_title is not None and len(title) > max_title:
@@ -125,6 +127,21 @@ def rule_issues(meta: dict, rules: dict) -> list[Issue]:
 
 def _fps(resolved: dict) -> float:
     return float(resolved.get("fps") or 30)
+
+
+def _scale(resolved: dict) -> float:
+    """The canvas's short side / 1080: what px thresholds are multiplied by."""
+    w, h = resolved.get("width"), resolved.get("height")
+    ok = all(isinstance(v, (int, float)) and v > 0 for v in (w, h))
+    return min(w, h) / REFERENCE_SIDE if ok else 1.0
+
+
+def target_of(rules: dict, profile: Profile):
+    """advice target_s as [min, max]: as set, the profile's for true, None when unset (or the profile has none)."""
+    target = (rules.get("advice") or {}).get("target_s")
+    if target is True:
+        return list(profile.target_s) if profile.target_s else None
+    return target if isinstance(target, list) else None
 
 
 def _visual_clips(resolved: dict) -> list[dict]:
@@ -189,8 +206,8 @@ def advice_issues(resolved: dict, rules: dict, profile: Profile) -> list[Issue]:
                                  f"(advice: <= {max_same:g} s): split it, cut to another visual, cover part of it "
                                  "or move it (motion, keyframes)"))
 
-    target = advice.get("target_s") or list(profile.target_s)
-    if total and not target[0] <= total <= target[1]:
+    target = target_of(rules, profile)
+    if target and total and not target[0] <= total <= target[1]:
         out.append(Issue("advice", "duration", f"{total:.1f} s; the target is {target[0]:g}-{target[1]:g} s"))
     return out
 
@@ -315,8 +332,9 @@ def _evidence_refs(value, key: str = ""):
 
 
 def evidence_issues(resolved: dict, root: Path) -> list[Issue]:
-    """Evidence whose proving sentence will read small on a phone (estimated from the capture and the clip box)."""
+    """Evidence whose proving sentence will read small (estimated from the capture and the clip box)."""
     fps = _fps(resolved)
+    least = EVIDENCE_MIN_PX * _scale(resolved)
     out: list[Issue] = []
     for c in _visual_clips(resolved):
         content = c.get("content") or {}
@@ -334,23 +352,34 @@ def evidence_issues(resolved: dict, root: Path) -> list[Issue]:
             if line is None or (size and line > 0.9 * min(cap[3], size[1]) and cap[3] > 200):
                 continue                    # no text lines found, or a picture rather than lines
             px = line * _evidence_scale(c.get("type"), w, h, float(cap[2]), float(cap[3])) / INK_PER_EM
-            if px < EVIDENCE_MIN_PX:
+            if px < least:
                 name = Path(str(ref.get("src") or "")).stem
                 out.append(Issue("warning", f"{c.get('id')} @ {(c.get('from') or 0) / fps:.1f}s",
                                  f"the proving sentence of {name} will read at about {px:.0f} px (under "
-                                 f"{EVIDENCE_MIN_PX} px is hard to read on a phone): its box {cap} is "
+                                 f"{least:.0f} px is hard to read on this canvas): its box {cap} is "
                                  f"{cap[2]:g} capture px wide for a {w:.0f} px clip; box a shorter span (capture "
                                  "again with a shorter match, one line), capture at phone width, or give the clip "
                                  "a wider box"))
     return out
 
 
+def length_limits(profile: Profile) -> str:
+    lo, hi = profile.min_s, profile.max_s
+    if lo is not None and hi is not None:
+        return f"{lo:g}-{hi:g} s"
+    return f"at least {lo:g} s" if lo is not None else f"at most {hi:g} s" if hi is not None else "any length"
+
+
+def outside_length(profile: Profile, seconds: float) -> bool:
+    return (profile.min_s is not None and seconds < profile.min_s) or \
+        (profile.max_s is not None and seconds > profile.max_s)
+
+
 def duration_issues(resolved: dict, profile: Profile) -> list[Issue]:
-    """The platform's length limits: the film check would refuse the film, so they block before a render is spent."""
+    """The profile's length limits: the film check would refuse the film, so they block before a render is spent."""
     total = (resolved.get("durationInFrames") or 0) / _fps(resolved)
-    if total and not profile.min_s <= total <= profile.max_s:
-        limits = f"{profile.min_s:g}-{profile.max_s:g} s"
-        return [Issue("error", "duration", f"{total:.1f} s; {profile.name} takes {limits}")]
+    if total and outside_length(profile, total):
+        return [Issue("error", "duration", f"{total:.1f} s; {profile.name} takes {length_limits(profile)}")]
     return []
 
 
@@ -561,13 +590,15 @@ def hard_to_read(ratio: float, delta_e: float) -> bool:
 def check_layout(inspect: dict, profile: Profile, resolved: dict | None = None,
                  ignore: set | None = None) -> list[Issue]:
     """Visible text outside the safe area or cut by the canvas edge (errors), text overflowing its clip box
-    (warning), text under 28 px (warning; under 20 px an error), text of one clip over text of another (warning)
+    (warning), text under 28 px (warning; under 20 px an error; both at a 1080 px short side, scaled to the canvas),
+    text of one clip over text of another (warning)
     and text on a background of about its own brightness (warning, sampled from the frame's still); one issue per
     clip and problem. With `resolved`, frames inside enter/exit animations are skipped; `ignore` = clip ids not
     measured (a crashed component's error box)."""
     canvas = (0.0, 0.0, float(profile.width), float(profile.height))
     s = profile.safe
     safe = (float(s.x), float(s.y), float(s.w), float(s.h))
+    small, tiny = profile.px(SMALL_TEXT_PX), profile.px(TINY_TEXT_PX)
     transitions = transition_windows(resolved)
     ignore = set(ignore or ())
     stills = _Stills(profile.width)
@@ -609,8 +640,8 @@ def check_layout(inspect: dict, profile: Profile, resolved: dict | None = None,
                 if px > tol:
                     note("overflow", who, frame, px, side, text)
             size = it.get("size")
-            if isinstance(size, (int, float)) and 0 < size < SMALL_TEXT_PX:
-                note("tiny" if size < TINY_TEXT_PX else "small", who, frame, size, "", text, worst=min)
+            if isinstance(size, (int, float)) and 0 < size < small:
+                note("tiny" if size < tiny else "small", who, frame, size, "", text, worst=min)
             judged = _text_contrast(stills, fr.get("png"), rect, it)
             if judged and hard_to_read(judged[0], judged[1]):
                 note("contrast", who, frame, judged[0], "", text, worst=min, color=str(it.get("color")),
@@ -637,12 +668,15 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
         return Issue("error", where, f"{quote} is cut by the canvas edge ({side}, {px} px){also}: move it in or "
                                      "make it smaller")
     if kind == "unsafe":
-        return Issue("error", where, f"{quote} sits {px} px outside the safe area ({side}){also}: the platform's UI "
-                                     f"covers it there; keep words inside x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
+        why = "the platform's UI covers it there" if profile.ui else "that is the title-safe margin"
+        return Issue("error", where, f"{quote} sits {px} px outside the safe area ({side}){also}: {why}; keep words "
+                                     f"inside x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
     if kind in ("tiny", "small"):
         level = "error" if kind == "tiny" else "warning"
-        return Issue(level, where, f"{quote} is {e['px']:g} px{also}: under {SMALL_TEXT_PX} px is hard to read on a "
-                                   f"phone{' and render refuses under ' + str(TINY_TEXT_PX) if kind == 'tiny' else ''}"
+        small, tiny = f"{profile.px(SMALL_TEXT_PX):.4g}", f"{profile.px(TINY_TEXT_PX):.4g}"
+        return Issue(level, where, f"{quote} is {e['px']:g} px{also}: under {small} px is hard to read on this "
+                                   f"{profile.width}x{profile.height} canvas"
+                                   f"{' and render refuses under ' + tiny if kind == 'tiny' else ''}"
                                    "; give it a bigger box or a bigger size, or say less")
     if kind.startswith("overlap"):
         other = f"text \"{e['other_text']}\" of {e['other']}" if e.get("other_text") else e["other"]
@@ -686,11 +720,13 @@ def check_film(path: str | Path, profile: Profile) -> dict:
         problems.append("no video stream")
     if audio:
         _check_audio(path, audio, profile, out)
-    else:
+    elif profile.require_audio:
         problems.append("no audio stream")
-    if not profile.min_s <= length <= profile.max_s:
-        problems.append(f"{length:.1f} s long; {profile.name} takes {profile.min_s:g}-{profile.max_s:g} s")
-    if out["size_mb"] > profile.max_mb:
+    else:
+        out["notes"].append("a silent film (this profile allows one)")
+    if outside_length(profile, length):
+        problems.append(f"{length:.1f} s long; {profile.name} takes {length_limits(profile)}")
+    if profile.max_mb is not None and out["size_mb"] > profile.max_mb:
         problems.append(f"{out['size_mb']:.0f} MB; the upload limit is {profile.max_mb:g} MB (a shorter film, or less "
                         "noise and grain in the picture)")
     if video and length > 0:
@@ -722,7 +758,10 @@ def _check_audio(path: Path, audio: dict, profile: Profile, out: dict) -> None:
         lufs, peak = None, None
     out.update(lufs=lufs, peak_db=peak)
     if lufs is None or lufs < SILENT_LUFS:
-        out["problems"].append("the audio is near silent")
+        if profile.require_audio:
+            out["problems"].append("the audio is near silent")
+        else:
+            out["notes"].append("the audio is silent (this profile allows a silent film)")
     elif abs(lufs - profile.lufs) > LUFS_TOLERANCE:
         out["notes"].append(f"loudness {lufs:.1f} LUFS; mastered for {profile.lufs:g}")
 
@@ -737,6 +776,6 @@ def _check_motion(path: Path, length: float, profile: Profile, out: dict) -> Non
     if found["black_ratio"] > profile.max_black_ratio:
         out["problems"].append(f"{found['black_s']} s of black ({found['black_ratio']:.0%}; max "
                                f"{profile.max_black_ratio:.0%})")
-    if found["longest_still_s"] > profile.max_still_s:
+    if profile.max_still_s is not None and found["longest_still_s"] > profile.max_still_s:
         out["problems"].append(f"{found['longest_still_s']} s without any motion (max {profile.max_still_s:g} s): "
                                "move something in that stretch (keyframes, motion, a reveal)")

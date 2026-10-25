@@ -19,7 +19,8 @@ name. Check it with `typecheck(p)`, then `preview(p, [...])` a moment where it s
 - **Time**: animate from `useCurrentFrame()` (frames from the clip's start) only. No `Date`, no `Math.random`: use
   remotion's `random(seed)` for noise. Every frame is rendered on its own, in any order.
 - **Text**: draw it as HTML (`div`/`span`), so the layout check can measure it; size it to the box with `fit` and
-  keep it at 40 px or more on the 1080-wide canvas (the layout check warns under 28 px; render refuses under 20 px). Use
+  keep it at 40 px or more at a 1080 px short side, `Math.min(width, height) / 1080` times that on other canvases
+  (the layout check warns under 28 px and render refuses under 20 px, scaled the same way). Use
   `whiteSpace: "pre"` for text you have fitted, so the browser does not wrap it again.
 - **SVG ids** (`clipPath`, `mask`, gradients) are global to the page: two copies of a component on screen share them
   unless each instance makes its own. Use React's `useId()`:
@@ -38,7 +39,7 @@ helpers with your default), except two kinds of key, at any depth (arrays and ne
 
 The asset ref: `src` a project-relative path (give it to `assetSrc` or `Media`), `kind` `"image" | "video" | "audio" |
 "evidence"`, `size` `[w, h]` pixels (images and evidence), `box` `[x, y, w, h]` the proving sentence in capture
-pixels (evidence; captures are 3× a phone page), `site` the page's site (evidence), `duration` seconds (video, audio).
+pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the page's site (evidence), `duration` seconds (video, audio).
 
 ## useClip()
 
@@ -48,10 +49,10 @@ pixels (evidence; captures are 3× a phone page), `site` the page's site (eviden
 |---|---|
 | `w`, `h` | the clip box now, in canvas px (keyframed `w`/`h` included) |
 | `dur` | the clip's length in frames |
-| `fps` | frames per second (30) |
+| `fps` | frames per second (the profile's; 30 unless it says otherwise) |
 | `theme` | the theme's colours: `paper`, `ink`, `night`, `snow`, `accent`, `gold`, `good`, `bad`, `muted` (CSS hex) |
-| `width`, `height` | the canvas (1080 × 1920) |
-| `safe` | the platform's UI-safe area `{x, y, w, h}` in canvas px |
+| `width`, `height` | the canvas (1920 × 1080 on the default `landscape` profile, 1080 × 1920 on the vertical ones) |
+| `safe` | the safe area `{x, y, w, h}` in canvas px (the platform's UI-safe area, or a title-safe margin) |
 | `progress` | 0..1: the clip's `progress` keyframes if it has them, else how far through the clip it is |
 
 Theme tokens: `paper` light ground, `ink` text on paper, `night` dark ground, `snow` text on night, `accent` the one
@@ -85,7 +86,7 @@ colour usually accept a token name or CSS: resolve them with `themeColor`.
 | export | | example |
 |---|---|---|
 | `FONTS` | CSS font-families: `sans` Noto Sans SC (weights 100–900: body, numbers), `serif` Noto Serif SC (200–900: quotes), `display` 得意黑 Smiley Sans (one weight, oblique: headlines, verdicts), `zcool` ZCOOL QingKe HuangYou (one weight; loud, some glyphs hard to read) | `fontFamily: FONTS.sans` |
-| `fontFamily(name)` | a `FONTS` key to its CSS family; anything else passes through (empty: sans) | `fontFamily(props.font)` |
+| `fontFamily(name)` | a `FONTS` key to its CSS family; a family of the workspace's fonts (`library/fonts`) to that family with the sans as fallback; anything else passes through (empty: sans) | `fontFamily(props.font)` |
 | `fit(text, width, max, family = "sans", weight = 400)` | the largest font size ≤ `max` at which `text` fits `width` on one line | `fit(label, w * 0.9, 64, FONTS.sans, 800)` |
 | `fitLines(text, width, max, min = 0, family = "sans", weight = 400)` | `{size, lines}`: one line, or two (`twoLines`) when one line would be under `min` and two fit larger; render `lines.join("\n")` with `whiteSpace: "pre"` | `const { size, lines } = fitLines(label, w * 0.6, 56, 28, FONTS.sans, 800)` |
 | `textWidth(text, size, family = "sans", weight = 400, tabular = false)` | width in px of one line; `tabular` measures digits as `fontVariantNumeric: "tabular-nums"` | `textWidth(fmt(value), size, FONTS.sans, 900, true)` |

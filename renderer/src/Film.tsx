@@ -4,7 +4,7 @@ import { AbsoluteFill, Sequence } from "remotion";
 import { AudioTrack } from "./elements/AudioTrack";
 import { Captions } from "./elements/Captions";
 import { Element } from "./elements/Element";
-import { useFontsReady } from "./fonts";
+import { useFontsReady, useWorkspaceFonts } from "./fonts";
 import { useInspect } from "./inspect";
 import type { Box, CaptionTrack, FilmProps, RenderMode, Resolved, Theme, VisualTrack } from "./types";
 
@@ -45,7 +45,8 @@ const Stage: React.FC<{ r: Resolved; mode: RenderMode }> = ({ r, mode }) => {
 
 export const Film: React.FC<FilmProps> = ({ resolved, mode = "studio" }) => {
   const ready = useFontsReady();
-  const ok = !!resolved && Array.isArray(resolved.tracks);
+  const own = useWorkspaceFonts(resolved?.fonts);
+  const ok = !!resolved && Array.isArray(resolved.tracks) && own;
   return (
     <AbsoluteFill style={{ background: "#000" }}>
       {ok && ready ? <Stage r={resolved} mode={mode} /> : null}

@@ -24,7 +24,8 @@ FILM_TIMEOUT_S = 40 * 60
 STILLS_TIMEOUT_S = 15 * 60
 MAX_PREVIEW_FRAMES = 24
 KEEP_STILLS = 96                    # earlier previews' stills stay readable; the oldest go past this
-SHEET_TILE = (360, 640)             # a third of 1080x1920: about what a phone shows at arm's length
+SHEET_AREA = 360 * 640              # a tile's pixels: a third of 1080x1920, about a phone at arm's length
+SHEET_WIDTH = 2600                  # columns are added while the sheet stays about this wide (at most 6)
 LAYOUT_EVERY_S = 1.0
 # One bundle or render at a time (they share the CPU and webpack's cache). Reentrant: render holds it from resolve
 # to film, so a preview in between waits instead of changing what is rendered.
@@ -226,12 +227,20 @@ def _read_inspect(out_dir: Path) -> dict:
     return data
 
 
+def sheet_tile(profile: Profile) -> tuple[int, int]:
+    """A contact-sheet tile in the canvas's aspect, of about SHEET_AREA pixels (even sides)."""
+    k = (SHEET_AREA / (profile.width * profile.height)) ** 0.5
+    return 2 * max(8, round(profile.width * k / 2)), 2 * max(8, round(profile.height * k / 2))
+
+
 def _sheet(pngs: list, out: Path, profile: Profile, labels: list[str] | None = None) -> str | None:
     pairs = [(p, lab) for p, lab in zip(pngs, labels or [""] * len(pngs)) if p and Path(p).is_file()]
     s = profile.safe
+    tile = sheet_tile(profile)
     try:
         sheet = media.contact_sheet([p for p, _ in pairs], out, profile.outside_safe(), (profile.width, profile.height),
-                                    SHEET_TILE, outline=(s.x, s.y, s.w, s.h), labels=[lab for _, lab in pairs])
+                                    tile, outline=(s.x, s.y, s.w, s.h), labels=[lab for _, lab in pairs],
+                                    cols=min(6, max(2, SHEET_WIDTH // tile[0])))
     except RuntimeError:
         return None
     return str(sheet) if sheet else None
@@ -470,10 +479,21 @@ def render(project: str | Path) -> dict:
             return finish("film", "render.mjs reported ok but wrote no film")
         lap("film", res)
 
-    if not _has_audio(raw):
-        return finish("master", "the film has no sound: add narration (speak) or an audio clip")
     try:
-        media.master(raw, mastered, profile.lufs, profile.peak_db)
+        sound = _has_audio(raw)
+        if not sound and profile.require_audio:
+            return finish("master", f"the film has no sound and {profile.name} wants it: add narration (speak) or "
+                                    "an audio clip")
+        if sound:
+            media.master(raw, mastered, profile.lufs, profile.peak_db)
+        else:
+            _replace(raw, mastered)             # a silent film: no loudness to master
+            report["master"] = "silent film: not mastered"
+    except media.SilentAudio as exc:
+        if profile.require_audio:
+            return finish("master", str(exc))
+        _replace(raw, mastered)
+        report["master"] = "silent audio: not mastered"
     except RuntimeError as exc:
         return finish("master", str(exc))
     finally:

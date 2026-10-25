@@ -17,11 +17,11 @@ from typing import Annotated, Any, Iterator, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, PlainValidator, Tag, ValidationError, model_validator
 from pydantic_core import PydanticCustomError
 
-from . import library
+from . import library, locales
 from . import timeexpr as T
 from .issues import Issue
-from .profiles import THEMES, Profile, get_profile
-from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, project_root
+from .profiles import THEMES, Profile, choose
+from .workspace import BUILTIN_FONTS, PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
 KEYFRAME_PROPS = ("x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "zoom", "pan_x", "pan_y",
                   "progress")
@@ -34,7 +34,7 @@ CLIP_TYPES = ("image", "video", "text", "shape", "evidence", "component")
 TRACK_KINDS = ("visual", "audio", "captions")
 ASSET_KINDS = ("image", "video", "audio", "evidence")
 THEME_TOKENS = ("paper", "ink", "night", "snow", "accent", "gold", "good", "bad", "muted")
-FONTS = ("sans", "serif", "display", "zcool")      # display = Smiley Sans; zcool = ZCOOL QingKe HuangYou
+FONTS = BUILTIN_FONTS            # display = Smiley Sans; zcool = ZCOOL QingKe HuangYou; workspace fonts add more
 ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 OFFSET_LIKE = re.compile(r"-\d+(?:\.\d+)?$")       # "clip:c-1" would read as clip c minus 1 s
 EXTENSIONS = {
@@ -162,7 +162,7 @@ class Bg(_M):
 
 
 class TextStyle(_M):
-    font: Optional[Literal["sans", "serif", "display", "zcool"]] = None
+    font: Optional[str] = Field(None, min_length=1)          # a built-in name or a workspace font (validate)
     size: Optional[Size] = None
     max_size: Optional[float] = Field(None, gt=0)
     min_size: Optional[float] = Field(None, gt=0)
@@ -317,7 +317,7 @@ class CaptionsTrack(_M):
     box: Optional[BoxValue] = None
     style: Optional[TextStyle] = None
     emphasis: list[str] = Field(default_factory=list)
-    max_chars: int = Field(14, ge=4, le=40)
+    max_chars: Optional[int] = Field(None, ge=4, le=60)       # default: by the locale (locales.caption_chars)
     overrides: list[Override] = Field(default_factory=list)
     items: Optional[list[CaptionItem]] = None
 
@@ -328,7 +328,8 @@ Clip = Union[ImageClip, VideoClip, TextClip, ShapeClip, EvidenceClip, ComponentC
 
 class Document(_M):
     version: Literal[2] = 2
-    profile: Optional[str] = None
+    profile: Optional[Union[str, dict[str, Any]]] = None        # a name or an inline profile (profiles.make_profile)
+    locale: Optional[str] = None
     theme: dict[str, str] = Field(default_factory=dict)
     meta: Meta = Field(default_factory=Meta)
     voice: Optional[str] = None
@@ -602,12 +603,23 @@ def _voice_audio(root: Path, voice_json: Path, name) -> tuple[Path | None, str |
 
 # ------------------------------------------------------------------ profile, theme, timing
 def profile_of(project, doc: Document) -> Profile:
-    """project profile, else the workspace's, else douyin; ValueError for an unknown name."""
-    name = doc.profile
-    if not name:
-        ws = find_workspace(project)
-        name = (ws.config.get("profile") if ws else None) or None
-    return get_profile(name)
+    """project profile (a name or inline), else the workspace's, else landscape; ValueError for a bad one."""
+    ws = find_workspace(project)
+    return choose(doc.profile, ws.config.get("profile") if ws else None, ws.profiles if ws else None)
+
+
+def locale_of(project, doc: Document) -> str:
+    """project locale, else the workspace's, else "en"; ValueError for a malformed tag."""
+    if doc.locale is not None:
+        return locales.check(doc.locale)
+    ws = find_workspace(project)
+    return (ws.locale if ws else None) or locales.DEFAULT_LOCALE
+
+
+def font_names(project) -> tuple[str, ...]:
+    """The fonts a TextStyle may name: the built-in ones, then the workspace's families."""
+    ws = find_workspace(project)
+    return (*BUILTIN_FONTS, *(ws.fonts if ws else {}))
 
 
 def theme_of(project, doc: Document) -> dict:
@@ -674,12 +686,14 @@ class _Check:
         self.sched: T.Schedule | None = None
         self.film_end: float | None = None
         self.comps: dict | None = None
+        self.fonts: tuple | None = None
 
     def add(self, level: str, where: str, msg: str) -> None:
         self.issues.append(Issue(level, where, msg))
 
     def run(self) -> list[Issue]:
         self.profile()
+        self.locale()
         self.theme()
         self.ids()
         self.voice, issues = load_voice(self.root, self.doc.voice)
@@ -703,10 +717,31 @@ class _Check:
         try:
             p = profile_of(self.root, self.doc)
             self.fps = p.fps
-        except ValueError as exc:
-            self.add("error", "profile", str(exc))
         except WorkspaceError as exc:
             self.add("error", "workspace", str(exc))
+        except ValueError as exc:
+            self.add("error", "profile", str(exc))
+
+    def locale(self) -> None:
+        if self.doc.locale is not None:
+            try:
+                locales.check(self.doc.locale)
+            except ValueError as exc:
+                self.add("error", "locale", str(exc))
+
+    def font(self, style, where: str) -> None:
+        if style is None or style.font is None:
+            return
+        if self.fonts is None:
+            try:
+                self.fonts = font_names(self.root)
+            except WorkspaceError:
+                self.fonts = FONTS          # reported under "workspace" already
+        if style.font not in self.fonts:
+            extra = [f for f in self.fonts if f not in FONTS]
+            self.add("error", f"{where}.style.font", f"unknown font {style.font!r}: built-in {', '.join(FONTS)}"
+                     + (f"; the workspace's {', '.join(extra)}" if extra else "; a workspace adds its own as "
+                        "library/fonts/<Family>.woff2 (or .woff, .ttf, .otf)"))
 
     def theme(self) -> None:
         for k, v in self.doc.theme.items():
@@ -869,6 +904,7 @@ class _Check:
                                        "those props")
 
     def text(self, c, where: str) -> None:
+        self.font(c.style, where)
         if not c.text.strip():
             self.add("warning", where, "the text is empty")
         elif c.text.count("**") % 2:
@@ -915,6 +951,7 @@ class _Check:
 
     def captions(self, track) -> None:
         where = f"track {track.id}"
+        self.font(track.style, where)
         if track.items is not None:
             for n, it in enumerate(track.items):
                 w = f"{where}.items[{n}]"
