@@ -67,7 +67,8 @@ def test_loopback_and_remote_rules(tmp_path):
 
 def test_cli_refuses_before_serving(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv(mcp_server.TOKEN_ENV, raising=False)
-    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    monkeypatch.setenv("REELSMITH_ROOT", "")
+    monkeypatch.delenv("REELSMITH_ROOT")
     assert cli.main(["mcp", "--http", "--host", "0.0.0.0"]) == 2
     assert cli.main(["mcp", "--http", "--host", "0.0.0.0", "--allow-remote"]) == 2
     assert cli.main(["mcp", "--port", "9000"]) == 2                   # --port without --http
@@ -83,7 +84,8 @@ def test_a_remote_bind_is_fenced_and_warned(monkeypatch, capsys, tmp_path):
     import uvicorn
     served = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.append(kw))
-    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    monkeypatch.setenv("REELSMITH_ROOT", "")                # recorded, so the value --root sets is undone
+    monkeypatch.delenv("REELSMITH_ROOT")
     monkeypatch.setenv(mcp_server.TOKEN_ENV, TOKEN)
     assert cli.main(["mcp", "--http", "--host", "0.0.0.0", "--allow-remote", "--root", str(tmp_path)]) == 0
     assert served == [{"host": "0.0.0.0", "port": mcp_server.DEFAULT_PORT, "log_level": "warning"}]
