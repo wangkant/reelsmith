@@ -23,8 +23,8 @@ Tested with `@deepseek-ai/dsh` **0.2.1-rc.3** (a developer preview: pin that ver
    ```sh
    dsh plugin --profile web add dsh-plugin-reelsmith                  # from npm, once published
    dsh plugin --profile web add ./dsh-plugin-reelsmith-0.1.0.tgz      # a tarball from `npm pack`
-   cd integrations/dsh && npm install && npm run build                # or a checkout of this folder:
-   dsh plugin --profile web add ./integrations/dsh
+   (cd integrations/dsh && npm install && npm run build)              # or a checkout of this folder, from
+   dsh plugin --profile web add ./integrations/dsh                    # the repository root
    ```
 
    The Web UI's **Plugins > Add plugin** accepts the same package name, tarball or folder. A plain git install is
