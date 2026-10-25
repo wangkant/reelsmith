@@ -193,6 +193,7 @@ class ClipTiming:
     trim_in: float = 0.0        # source seconds skipped at its start
     rate: float = 1.0           # source seconds per film second
     loop: bool = False
+    retimed: str = ""           # why source seconds do not map to film time (document.retimed), or ""
 
 
 class _NeedsEnd(Exception):
@@ -246,6 +247,9 @@ class Schedule:
             raise TimeError(f"{where}: clip {clip_id} is a {c.kind} clip; src: takes a video or audio clip")
         if c.loop:
             raise TimeError(f"{where}: clip {clip_id} loops, so a source second plays more than once; use "
+                            f"clip:{clip_id}+seconds")
+        if c.retimed:
+            raise TimeError(f"{where}: clip {clip_id} {c.retimed}, so source seconds are not film times; use "
                             f"clip:{clip_id}+seconds")
         if seconds < c.trim_in - 1e-6:
             raise TimeError(f"{where} is before clip {clip_id}'s in point (trim_in {c.trim_in:g} s): that part of the "

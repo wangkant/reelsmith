@@ -23,8 +23,13 @@ from .issues import Issue
 from .profiles import THEMES, Profile, choose
 from .workspace import BUILTIN_FONTS, PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
-KEYFRAME_PROPS = ("x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "zoom", "pan_x", "pan_y",
-                  "progress", "volume")
+KEYFRAME_PROPS = ("x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "contrast", "saturate",
+                  "hue_rotate", "grayscale", "sepia", "invert", "zoom", "pan_x", "pan_y", "focus_x", "focus_y",
+                  "progress", "volume", "rate")
+# keyframe values outside these spans are errors; props not listed take any number
+KEYFRAME_RANGES = {"contrast": (0, None), "saturate": (0, None), "grayscale": (0, 1), "sepia": (0, 1),
+                   "invert": (0, 1), "focus_x": (0, 1), "focus_y": (0, 1), "volume": (0, None), "rate": (0, 16)}
+PICTURES = ("image", "video")       # clip types that fit a picture into their box (fit, focus)
 EASES = ("linear", "in", "out", "inOut", "spring", "step")
 PRESETS = ("fade", "rise", "drop", "pop", "wipe_left", "wipe_up", "zoom")
 CUTS = ("crossfade", "dip_black", "dip_white", "wipe_left", "wipe_right", "wipe_up", "slide_left", "zoom")
@@ -143,6 +148,9 @@ class Filter(_M):
     contrast: Optional[float] = Field(None, ge=0)
     saturate: Optional[float] = Field(None, ge=0)
     grayscale: Optional[float] = Field(None, ge=0, le=1)
+    sepia: Optional[float] = Field(None, ge=0, le=1)
+    invert: Optional[float] = Field(None, ge=0, le=1)
+    hue_rotate: Optional[float] = None          # degrees
 
 
 class Transition(_M):
@@ -168,8 +176,9 @@ class Keyframe(_M):
     ease: Optional[Literal["linear", "in", "out", "inOut", "spring", "step"]] = None
 
 
-KeyframeProp = Literal["x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "zoom", "pan_x", "pan_y",
-                       "progress", "volume"]
+KeyframeProp = Literal["x", "y", "w", "h", "opacity", "rotate", "scale", "blur", "brightness", "contrast", "saturate",
+                       "hue_rotate", "grayscale", "sepia", "invert", "zoom", "pan_x", "pan_y", "focus_x", "focus_y",
+                       "progress", "volume", "rate"]
 
 
 class Stroke(_M):
@@ -233,6 +242,8 @@ class _Visual(_Timed):
     opacity: float = Field(1, ge=0, le=1)
     rotate: float = 0
     scale: float = 1
+    flip_x: bool = False                # mirror the content left-right (the box stays put)
+    flip_y: bool = False
     origin: str = "center"
     radius: float = Field(0, ge=0)
     blend: Literal[BLENDS] = "normal"  # type: ignore[valid-type]
@@ -258,6 +269,8 @@ class VideoClip(_Visual):
     trim_in: float = Field(0, ge=0)
     rate: float = Field(1, gt=0, le=16)
     loop: bool = False
+    reverse: bool = False               # plays its source span backwards (a proxy in build/proxies)
+    hold: Optional[float] = Field(None, ge=0)       # a source second shown for the whole clip
     fit: Literal["cover", "contain"] = "cover"
     focus: Optional[Annotated[list[Unit], Field(min_length=2, max_length=2)]] = None
     volume: float = Field(0, ge=0)
@@ -718,13 +731,28 @@ def clips_of(doc: Document) -> Iterator[tuple[Any, Clip]]:
             yield track, clip
 
 
+def retimed(clip) -> str:
+    """How a video clip (model or dict) departs from playing its source forward at one rate, or "": source seconds
+    (src: anchors, transcripts, source trims) need a clip that does not."""
+    get = clip.get if isinstance(clip, dict) else (lambda k, d=None: getattr(clip, k, d))
+    if get("type") != "video":
+        return ""
+    if get("hold") is not None:
+        return "holds one frame (hold)"
+    if get("reverse"):
+        return "plays backwards (reverse)"
+    if (get("keyframes") or {}).get("rate"):
+        return "has a speed curve (rate keyframes)"
+    return ""
+
+
 def schedule(doc: Document, voice: Voice | None) -> T.Schedule:
     clips = {}
     for track, c in clips_of(doc):
         clips.setdefault(c.id, T.ClipTiming(c.start, c.end, c.dur, counts=not track.hidden, kind=c.type,
                                             trim_in=float(getattr(c, "trim_in", 0.0) or 0.0),
                                             rate=float(getattr(c, "rate", 1.0) or 1.0),
-                                            loop=bool(getattr(c, "loop", False))))
+                                            loop=bool(getattr(c, "loop", False)), retimed=retimed(c)))
     lines = [(ln.t0, ln.t1) for ln in voice.lines] if voice else []
     return T.Schedule(lines, clips, duration=doc.duration, voice_end=voice.end if voice else None,
                       markers=doc.markers)
@@ -937,7 +965,7 @@ class _Check:
         except T.TimeError:
             return
         c = self.by_id.get(e.ref) if e.anchor == "src" else None
-        if c is None or c.type not in SOUNDING or getattr(c, "loop", False):
+        if c is None or c.type not in SOUNDING or getattr(c, "loop", False) or retimed(c):
             return
         try:
             a, b = self.sched.span(c.id)
@@ -969,10 +997,27 @@ class _Check:
         elif c.type == "audio" and span and c.fade_in + c.fade_out > span[1] - span[0] + 1e-6:
             self.add("warning", where, f"fade_in + fade_out ({c.fade_in + c.fade_out:g} s) are longer than the clip")
         self.keyframes(c, where, span)
+        if c.type == "video":
+            self.retime(c, where)
         self.cut(c, where, span)
         if c.type == "audio" and c.duck is not None:
             self.duck(track, c, where)
         return (c, *span) if span else None
+
+    def retime(self, c, where: str) -> None:
+        """reverse, hold and a speed curve against loop, each other and the clip's sound."""
+        curve = bool(c.keyframes.get("rate"))
+        if c.hold is not None:
+            dropped = [n for n, on in (("reverse", c.reverse), ("loop", c.loop), ("rate keyframes", curve)) if on]
+            if dropped:
+                self.add("warning", where, f"hold shows one frame for the whole clip: {', '.join(dropped)} "
+                                           f"{'does' if len(dropped) == 1 else 'do'} nothing")
+        elif c.loop and (c.reverse or curve):
+            self.add("error", where, f"a clip that {'plays backwards' if c.reverse else 'has a speed curve'} cannot "
+                                     "loop: split it, or give the loop its own clip")
+        if (c.hold is not None or curve) and (c.volume > 0 or c.keyframes.get("volume")):
+            self.add("warning", where, f"{'a held clip' if c.hold is not None else 'a speed curve'} plays the picture "
+                                       "only: its sound is silent (put the sound on an audio clip of the same asset)")
 
     def cut(self, c, where: str, span) -> None:
         tr = c.transition
@@ -1070,11 +1115,22 @@ class _Check:
 
     def keyframes(self, c, where: str, span) -> None:
         for prop, frames in c.keyframes.items():
+            w = f"{where}.keyframes.{prop}"
+            lo, hi = KEYFRAME_RANGES.get(prop, (None, None))
             if prop == "volume" and c.type not in SOUNDING:
-                self.add("error", f"{where}.keyframes.volume", f"volume keyframes are for video and audio clips (a "
-                                                               f"{c.type} clip makes no sound)")
+                self.add("error", w, f"volume keyframes are for video and audio clips (a {c.type} clip makes no "
+                                     "sound)")
             elif prop == "volume" and any(k.v < 0 for k in frames):
-                self.add("error", f"{where}.keyframes.volume", "a volume is 0 (silent) or more")
+                self.add("error", w, "a volume is 0 (silent) or more")
+            elif prop in ("focus_x", "focus_y") and c.type not in PICTURES:
+                self.add("error", w, f"{prop} moves the picture inside an image or video clip's box (a {c.type} clip "
+                                     "has none): move the box with x / y keyframes")
+            elif prop == "rate" and c.type != "video":
+                self.add("error", w, f"rate keyframes are a video clip's speed curve (a {c.type} clip has no source "
+                                     "time)")
+            elif any((lo is not None and k.v < lo) or (hi is not None and k.v > hi) for k in frames):
+                self.add("error", w, f"{prop} keyframes take values {lo:g} to {hi:g}" if hi is not None else
+                         f"{prop} keyframes take values {lo:g} or more")
             for n, k in enumerate(frames):
                 self.in_clip(k.t, span, f"{where}.keyframes.{prop}[{n}]")
         motion = getattr(c, "motion", None)
@@ -1194,6 +1250,9 @@ class _Check:
         if getattr(c, "loop", False):
             self.add("error", f"{where}.source", f"clip {cid} loops, so its words would repeat: captions from a "
                                                  "transcript need a clip that plays its source once")
+        elif retimed(c):
+            self.add("error", f"{where}.source", f"clip {cid} {retimed(c)}: captions from a transcript need a clip "
+                                                 "that plays its source forward at one rate")
         a = self.doc.assets.get(c.asset)
         if a is None:
             return                              # the clip's own asset error says it

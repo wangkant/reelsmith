@@ -134,7 +134,8 @@ names the asset's word timing: `{"version": 1, "asset", "source", "duration_s", 
 or unreadable transcript is a warning (an error when captions follow it).
 Accepted files: image `.png .jpg .jpeg .webp .gif`; evidence `.png .jpg .jpeg .webp`; video `.mp4 .m4v .mov .webm
 .mkv`; audio `.wav .mp3 .m4a .aac .ogg .oga .opus .flac`. An image clip takes an image or evidence asset, an audio
-clip an audio or video asset.
+clip an audio or video asset. An animated image (a GIF of more than one frame, an APNG, an animated WebP; resolve
+reads the file's header) plays from the clip's start and loops; a still one holds.
 
 **Track**: `{"id": "v1", "kind": "visual"|"audio"|"captions", "hidden": false, ...}`
 
@@ -180,9 +181,10 @@ A Time is a number (seconds from the start of the film) or a string:
 - `"clip:ID"` start of clip ID; `"clip:ID.end"` its end
 - `"mark:NAME"` the project marker NAME (`markers`, section 3; a marker is itself a Time)
 - `"src:ID@S"` the film time at which source second S of video or audio clip ID plays: start + (S − trim_in) ÷
-  rate. A looping clip (a source second plays more than once) and a second before its `trim_in` are errors; a
-  second past the clip's end resolves but is a warning (that moment is not in the film). This is how source times
-  from `scenes`, `silences` and transcripts become cut points.
+  rate. A looping clip (a source second plays more than once), a clip that is reversed, held or has a speed curve
+  (section 3.4) and a second before its `trim_in` are errors; a second past the clip's end resolves but is a warning
+  (that moment is not in the film). This is how source times from `scenes`, `silences` and transcripts become cut
+  points.
 - `"end"` end of the film
 - any of these `+` or `-` seconds: `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"mark:hit-1"`, `"src:c1@12.5+0.2"`,
   `"end-2"`
@@ -202,16 +204,23 @@ Common fields:
 id, type, start: Time, end: Time | dur: seconds          one of end and dur
 box: {x,y,w,h} | "full" | "safe"          default "full"; canvas pixels
 opacity 1, rotate 0 (deg), scale 1, origin "center"|"top-left"|..., radius 0
+flip_x false, flip_y false   mirror the content left-right / top-bottom inside the box (the box, its shadow and its
+     transitions stay as they are; zoom and pan keep screen directions)
 blend "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|... (CSS mix-blend-mode values)
-filter: {blur, brightness, contrast, saturate, grayscale}   (CSS filter units)
+filter: {blur, brightness, contrast, saturate, grayscale, sepia, invert, hue_rotate}   (CSS filter units: blur px,
+     grayscale/sepia/invert 0..1, hue_rotate degrees; applied in that order)
 shadow: bool | css string
 enter: {"preset": "fade"|"rise"|"drop"|"pop"|"wipe_left"|"wipe_up"|"zoom", "dur": 0.4}   exit: the same presets
 transition: {"type": "crossfade"|"dip_black"|"dip_white"|"wipe_left"|"wipe_right"|"wipe_up"|"slide_left"|"zoom",
      "dur": 0.5}   in from the previous clip on the SAME track (below)
 keyframes: {"<prop>": [{"t": number | Time, "v": number, "ease": "linear"|"in"|"out"|"inOut"|"spring"|"step"}]}
-     props: x, y, w, h, opacity, rotate, scale, blur, brightness, zoom, pan_x, pan_y, progress, volume
-     zoom/pan_x/pan_y move the CONTENT inside the box (Ken Burns); progress (0..1) drives shapes and components;
-     volume (>= 0) is a video clip's sound curve, replacing its volume (an error on other visual clips)
+     props: x, y, w, h, opacity, rotate, scale, blur, brightness, contrast, saturate, hue_rotate, grayscale, sepia,
+     invert, zoom, pan_x, pan_y, focus_x, focus_y, progress, volume, rate
+     zoom/pan_x/pan_y move the CONTENT inside the box (Ken Burns); the filter props replace their `filter` field;
+     focus_x/focus_y (0..1, image and video) replace that coordinate of `focus` (reframing, section 3.4); progress
+     (0..1) drives shapes and components; volume (>= 0) is a video clip's sound curve, replacing its volume (an error
+     on other visual clips); rate (0-16) is a video clip's speed curve (section 3.4). Values outside a prop's range
+     (contrast, saturate >= 0; grayscale, sepia, invert, focus 0..1) are errors
 motion: "push"|"pull"|"pan_left"|"pan_right"|"rise"|"still"   (image/video shorthand for zoom/pan keyframes;
      keyframes on the same property win)
 ```
@@ -220,8 +229,8 @@ Types and their fields:
 
 - `image`: `asset`, `fit` `"cover"|"contain"` (default cover), `focus` `[fx, fy]` 0..1, `motion`
 - `video`: `asset`, `trim_in` s (source seconds skipped), `rate` 1 (source seconds per film second), `loop` false,
-  `fit`, `focus`, `motion`, `volume` 0 (muted); film second t of the clip shows source second trim_in + (t − start)
-  × rate
+  `fit`, `focus`, `motion`, `volume` 0 (muted), `reverse` false, `hold` (a source second; section 3.4); film second
+  t of the clip shows source second trim_in + (t − start) × rate
 - `text`: `text` (markup `**x**` = accent colour), `style`: TextStyle, `reveal`: `{"mode": "chars"|"words"|"lines"|
   "none", "dur": s}` (`lines` reveals the lines as laid out)
 - `shape`: `shape` `"rect"|"ellipse"|"line"|"arrow"|"path"`, `fill`, `stroke`, `stroke_width`, `d` (SVG path in box
@@ -272,7 +281,42 @@ overlap longer than the transition, and an overlap with any clip other than the 
 
 In component props, any key named `at` or ending in `_at` takes a Time and reaches the component as **frames from
 the clip's start**; any key named `asset` or ending in `_asset` takes an asset id and reaches the component as
-`{src, kind, size?, box?, site?, duration?}`. This applies at any depth (arrays, nested objects).
+`{src, kind, size?, box?, site?, duration?, animated?}`. This applies at any depth (arrays, nested objects).
+
+### 3.4 Reframing, speed, reverse and freeze frames
+
+**Reframing.** `fit: "cover"` crops a picture whose shape differs from its box; `focus` `[fx, fy]` is the point of
+the picture kept in view (CSS `object-position`: the picture's point fx lands at fraction fx of the box, so fx 0
+shows the left edge and 1 the right edge), and `zoom` closes in around it. `focus_x` / `focus_y` keyframes move that
+point over time: this is how landscape footage on a vertical canvas follows a speaker across the cropped-away
+slack. To centre a subject at source fraction s when the box shows a fraction v of the picture's width (v = box
+aspect ÷ picture aspect: 0.316 for 16:9 in 9:16), set fx = (s − v/2) ÷ (1 − v), clamped to 0..1. `pan_x` / `pan_y`
+move the fitted picture inside its box and never reveal what `cover` cropped away (the renderer zooms in just enough
+to cover the widest pan, computed over every focus the clip moves through).
+
+**Speed curves.** `rate` keyframes replace a video clip's `rate`: the source moves on by the curve's value each
+frame from `trim_in` (frame n shows source frame trim_in + the sum of the curve over frames 0..n−1; resolve's
+`source_frames` and the renderer add up the same values), so a ramp `1 → 0.25 → 1` slows to a quarter and back
+without a jump. 0 holds the frame where it is. The renderer seeks the source per frame (a `<Freeze>` around the
+in-page decoder), which is frame-accurate; a clip with a speed curve plays the picture only (its sound is
+silent: put the sound on an audio clip) and cannot loop.
+
+**Reverse.** `reverse: true` plays the clip's source span (trim_in to trim_in + the source it covers at its `rate`
+or speed curve) backwards, sound included. Resolve has ffmpeg write the span backwards once, as
+`build/proxies/<asset>-rev-<hash>.mp4` (cached per source file and span, reversed in pieces small enough for
+ffmpeg's in-memory reverse filter, a proxy unused for a day is deleted), and the clip plays that proxy forwards.
+Seeking an h264 source backwards frame by frame would decode a whole group of pictures for every frame in the
+browser; the proxy keeps reverse on the renderer's ordinary forward path. A reversed clip cannot loop.
+
+**Freeze frames.** `hold: S` shows source second S of a video clip, at its full resolution, for the clip's whole
+length (silent; `reverse`, `loop` and a speed curve do nothing then, a warning). For "freeze on the punchline":
+`split_clip` at the moment, `insert_gap` the freeze's length there, and put a clip with `hold` in the gap: the second
+half's `trim_in` is the source second that was on screen at the cut.
+
+A reversed, held or speed-curved clip has no source-second-to-film-time mapping: `src:` anchors on it and captions
+from its transcript are errors, and `trim_clip` refuses it (change start and end with `move_clip`, `trim_in` with
+`update_clip`). `split_clip` keeps its picture: a speed curve's second half starts where the source had got to, and
+a reversed clip's first half takes the end of the span (`trim_in` moved on), the second keeps its `trim_in`.
 
 ## 4. Python API (package `reelsmith`)
 
@@ -336,7 +380,8 @@ gives `"[level] where: msg"`.
 ```
 
 **split_clip** on a video or audio clip moves the second half's `trim_in` on by the time cut off × `rate` (a
-looping clip continues where its loop was); the first half keeps `fade_in` and loses `fade_out`, the second keeps
+looping clip continues where its loop was; a speed curve, a reversed or a held clip as in section 3.4); the first
+half keeps `fade_in` and loses `fade_out`, the second keeps
 `fade_out` and loses `fade_in`, `enter` and `transition`; `src:<id>@S` Times with S in the second half are pointed
 at the new clip. The halves meet at `at` as written, unless it is a number or a Time that moves with the clip itself
 (`clip:<id>...`, `src:<id>@S`, a marker on one): then at the cut's frame in seconds (3 decimals), which the second
@@ -368,8 +413,9 @@ it but got shorter than it is shortened to fit. Captions from a transcript whose
   source second where it ends); for any other clip, Times of its new start and end. Without `ripple` the picture
   stays where it is on the timeline and only the clip's edges move (extending past a neighbour is refused as an
   overlap); with `ripple` the clip keeps its start, and the clips after it on its track move by the change in its
-  length. Other clips anchored on it follow their anchors. An out point past the end of a non-looping source, or
-  an in point that would start the clip before 0 s without ripple, is refused.
+  length. Other clips anchored on it follow their anchors. An out point past the end of a non-looping source, an
+  in point that would start the clip before 0 s without ripple, and a reversed, held or speed-curved video clip
+  (its source seconds are not in film order) are refused.
 
 A batch is refused, and project.json left untouched, when an op fails or when the result has validation errors the
 project did not have before: errors that were already there do not block edits that leave them alone. Before each
@@ -423,16 +469,18 @@ copies (`resolved.film.json`, `resolved.inspect.json`, `resolved.preview.json`, 
   "inspect": false
 }
 RClip = {"id", "type", "track", "from", "dur" (frames), "box": {x,y,w,h},
-         "style": {opacity, rotate, scale, origin, radius, blend, filter, shadow},
+         "style": {opacity, rotate, scale, flipX, flipY, origin, radius, blend, filter, shadow},
          "keyframes": {prop: [{"f": frames from clip start, "v", "ease"}]},
          "enter": {"preset", "dur" (frames)} | null, "exit": {...} | null,
          "transition": {"type", "dur" (frames), "from": id of the clip it comes from | null} | null,
          "transitionOut": {"type", "dur" (frames), "at": frames into this clip, "to": id} | null,
          "content": {...}}
 content by type:
-  image     {"src", "size": [w,h], "fit", "focus"}
+  image     {"src", "size": [w,h], "fit", "focus", "animated"?: true}
   video     {"src", "duration": s, "trimIn": frames, "rate", "loop", "fit", "focus", "volume",
-             "volumeKeys"?: [Keyframe], "fadeIn"?, "fadeOut"? (frames: crossfades)}
+             "volumeKeys"?: [Keyframe], "fadeIn"?, "fadeOut"? (frames: crossfades),
+             "hold"?: source frame shown throughout, "rateKeys"?: [Keyframe] (speed curve),
+             "reversed"?: true (src is the reversed proxy, trimIn 0)}
   text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
   shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
   evidence  {"src", "size", "box", "site", "highlight": {"at" frames, "dur" frames, "color"} | null}
@@ -459,13 +507,18 @@ A captions track's `mode` is `"phrase"`, `"words"` or `"build"` (section 3). In 
 word's code-point span `[a, b)` in the item's text (the runs joined; trailing punctuation rides with its word).
 Characters outside every word (spaces, an opening quote) go with the next word.
 
+Picture and time additions (section 3.4): `rate` keyframes leave `keyframes` for `content.rateKeys`; `hold` is in
+frames (source seconds × fps, may be fractional); a reversed clip's `src` is its proxy under `build/proxies/`. `fps`
+may be fractional (30000/1001 = 29.97002997...): Remotion hands it to ffmpeg as `-r 29.97002997002997`, which ffmpeg
+reads back as exactly 30000/1001.
+
 ## 8. describe
 
 `describe(project, at=None)` returns text an agent reads like the editor's window: canvas (profile, size, fps,
 orientation), safe area (and whether the platform's UI or a title-safe margin lies outside it), locale, theme,
 duration, markers (`name seconds (as written)`), voice lines (`[n] t0-t1 text`), tracks bottom to top with their
-clips (`id type start-end (as written) box summary`; the summary names transitions, trims, volume keyframes and
-ducking) and every caption phrase (a transcript track says which clips it follows), assets (with their transcript's
+clips (`id type start-end (as written) box summary`; the summary names transitions, trims, volume keyframes,
+ducking, `reversed`, `hold S`, flips and the keyframed props) and every caption phrase (a transcript track says which clips it follows), assets (with their transcript's
 word count, or `transcript MISSING`), and the current validation issues. With `at`, only what is on screen then,
 bottom to top (an audio clip with volume keyframes shows its volume then).
 
@@ -1065,7 +1118,7 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | field | value |
 |---|---|
 | `width`, `height` | even whole numbers 64-4096 (h264 needs even sides) |
-| `fps` | a whole number 1-120 (24, 25, 30, 50 and 60 are the usual ones) |
+| `fps` | a rate 1-120: a whole number (24, 25, 30, 50 and 60 are the usual ones), an NTSC rate (23.976, 29.97, 59.94: any rate within 0.002 of n × 1000/1001 means exactly that ratio) or a ratio string such as `"30000/1001"`; the film carries it as a ratio (`r_frame_rate` 30000/1001) |
 | `safe`, `captions` | `{"x", "y", "w", "h"}` or `[x, y, w, h]` in canvas pixels, inside the canvas |
 | `min_s`, `max_s`, `max_mb`, `max_still_s` | numbers > 0, or null for no limit (no check) |
 | `target_s` | `[min, max]` seconds, or null |
@@ -1076,7 +1129,8 @@ or another custom one of the workspace; default `landscape`) and every other fie
 
 A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
 new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.
-`new_project(canvas="1920x1080@25")` writes such an inline profile. Unknown fields, sizes, boxes outside the canvas
+`new_project(canvas="1920x1080@25")` writes such an inline profile (`"@29.97"` writes `"fps": "30000/1001"`; `describe`
+prints the rate as 29.97). Unknown fields, sizes, boxes outside the canvas
 and loops of `base` are refused with the field named (workspace.json profiles when the workspace loads, an inline
 profile by `check`).
 

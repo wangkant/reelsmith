@@ -117,8 +117,10 @@ def test_custom_profiles_from_workspace_json(tmp_path):
 @pytest.mark.parametrize("profiles, fragment", [
     ({"x": {"width": 1001}}, "profiles.x.width must be an even whole number 64-4096"),
     ({"x": {"height": 32}}, "profiles.x.height"),
-    ({"x": {"fps": 0}}, "profiles.x.fps must be a whole number 1-120"),
-    ({"x": {"fps": 29.97}}, "profiles.x.fps"),
+    ({"x": {"fps": 0}}, "profiles.x.fps must be a frame rate 1-120"),
+    ({"x": {"fps": "fast"}}, "profiles.x.fps"),
+    ({"x": {"fps": "30000/0"}}, "profiles.x.fps"),
+    ({"x": {"fps": True}}, "profiles.x.fps"),
     ({"x": {"safe": [0, 0, 1921, 10]}}, "profiles.x.safe [0, 0, 1921, 10] must lie inside the 1920x1080 canvas"),
     ({"x": {"captions": {"x": 0, "y": 1000, "w": 100, "h": 100}}}, "profiles.x.captions"),
     ({"x": {"min_s": 50, "max_s": 10}}, "min_s 50 is over max_s 10"),
@@ -143,6 +145,26 @@ def test_canvas_strings():
     for bad in ("1920", "1920x", "16:9", "1920x1080@", "x1080"):
         with pytest.raises(P.ProfileError, match="1920x1080@25"):
             P.parse_canvas(bad)
+    assert P.parse_canvas("1920x1080@29.97") == {"width": 1920, "height": 1080, "fps": "30000/1001"}
+    assert P.parse_canvas("3840x2160@24000/1001")["fps"] == "24000/1001"
+    with pytest.raises(P.ProfileError, match="frame rate 1-120"):
+        P.parse_canvas("1920x1080@240")
+
+
+def test_fractional_frame_rates():
+    ntsc = 30000 / 1001
+    assert P.parse_fps(30) == 30 and isinstance(P.parse_fps("30"), int) and P.parse_fps(25.0) == 25
+    for written in (29.97, "29.97", "30000/1001", 29.970029, "29.970"):
+        assert P.parse_fps(written) == ntsc, written
+    assert P.parse_fps(23.976) == 24000 / 1001 and P.parse_fps("59.94") == 60000 / 1001
+    assert P.parse_fps(12.5) == 12.5                                            # any other rate stays as written
+    assert P.fps_ratio(ntsc) == "30000/1001" and P.fps_ratio(24000 / 1001) == "24000/1001" and P.fps_ratio(25) == "25"
+    assert [P.fps_label(r) for r in (30, ntsc, 24000 / 1001, 60000 / 1001)] == ["30", "29.97", "23.976", "59.94"]
+    p = P.make_profile({"base": "vertical", "fps": "30000/1001"}, name="ntsc")
+    assert p.fps == ntsc and (p.width, p.height) == (1080, 1920)
+    assert P.make_profile({"fps": p.fps}).fps == ntsc                         # a float read back stays exact
+    with pytest.raises(P.ProfileError, match="frame rate 1-120"):
+        P.make_profile({"fps": 0.5})
 
 
 # ------------------------------------------------------------------ 2. custom canvases in project.json

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import media
 from .issues import Issue
-from .profiles import REFERENCE_SIDE, Profile
+from .profiles import REFERENCE_SIDE, Profile, fps_label
 from .workspace import PROJECT_FILE, WorkspaceError, default_rules, find_workspace, profile_for, project_root
 
 TITLE_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
@@ -777,7 +777,7 @@ def _check_video(video: dict, profile: Profile, out: dict) -> None:
     if (video.get("width"), video.get("height")) != (profile.width, profile.height):
         out["problems"].append(f"{video.get('width')}x{video.get('height')}; want {profile.width}x{profile.height}")
     if abs(fps - profile.fps) > 0.01:
-        out["problems"].append(f"{fps:g} fps; want {profile.fps}")
+        out["problems"].append(f"{fps:g} fps; want {fps_label(profile.fps)}")
     if video.get("codec_name") != profile.vcodec:
         out["problems"].append(f"video codec {video.get('codec_name')}; want {profile.vcodec}")
 

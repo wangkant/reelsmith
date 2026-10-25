@@ -47,7 +47,8 @@ music at the bottom), and there a film needs sound and nothing may stand still f
 sound only). Backgrounds may bleed to the edges; **words must stay inside the safe area** — render measures the
 film and refuses text outside it. The owner may define other canvases (workspace.json `profiles`, or an inline
 `"profile": {"base": "landscape", "width": 1280, "height": 720, "fps": 25}`); `new_project(p,
-canvas="1920x1080@25")` makes one.
+canvas="1920x1080@25")` makes one. NTSC rates work too: `"fps": 29.97` (or 23.976, 59.94,
+`"30000/1001"`) renders at exactly 30000/1001, for broadcast or to match camera footage.
 
 Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose short side is 1080 px; the checks
 scale them with your canvas.
@@ -170,16 +171,21 @@ Cut on the narration: start clips at `line:N` and they stay in sync when you re-
 ### Clips
 
 Common fields: `id` (unique in the project), `type`, `start`, `end` | `dur`, `box` (`{x,y,w,h}` | `"full"` |
-`"safe"`, default full), `opacity`, `rotate` (deg), `scale`, `origin` (`"center"`, `"top-left"`, ...), `radius`,
-`blend` (`"multiply"`, `"screen"`, ...), `filter` `{blur, brightness, contrast, saturate, grayscale}`, `shadow`
+`"safe"`, default full), `opacity`, `rotate` (deg), `scale`, `flip_x` / `flip_y` (mirror the content inside the
+box: selfie footage, a subject that should face into the frame), `origin` (`"center"`, `"top-left"`, ...),
+`radius`, `blend` (`"multiply"`, `"screen"`, ...), `filter` `{blur, brightness, contrast, saturate, grayscale,
+sepia, invert, hue_rotate}` (grayscale/sepia/invert 0..1, hue_rotate degrees: sepia 0.6 for a flashback, a small
+hue_rotate with saturate 1.1 to warm a shot), `shadow`
 (true or a CSS shadow), `enter` / `exit` `{"preset": "fade"|"rise"|"drop"|"pop"|"wipe_left"|"wipe_up"|"zoom",
 "dur": 0.4}`, `transition` `{"type": "crossfade"|"dip_black"|"dip_white"|"wipe_left"|"wipe_right"|"wipe_up"|
 "slide_left"|"zoom", "dur": 0.5}` (in from the clip before it on the same track: see Editing footage).
 
 `keyframes`: `{"<prop>": [{"t": Time, "v": number, "ease": "linear"|"in"|"out"|"inOut"|"spring"|"step"}]}` for
-`x y w h opacity rotate scale blur brightness zoom pan_x pan_y progress`, and `volume` on video and audio clips;
-the ease shapes the move into that keyframe. `progress` (0..1) drives shapes and components; `volume` replaces the
-clip's `volume` (0 silent, 1 full).
+`x y w h opacity rotate scale zoom pan_x pan_y progress`, the filter props `blur brightness contrast saturate
+grayscale sepia invert hue_rotate` (a fade from colour to black and white is `grayscale` 0 → 1), `focus_x focus_y`
+on image and video clips, `volume` on video and audio clips and `rate` on video clips; the ease shapes the move
+into that keyframe. `progress` (0..1) drives shapes and components; `volume` replaces the clip's `volume` (0
+silent, 1 full); `rate` is a speed curve (below).
 
 **Ken Burns** (image and video clips; the content moves inside the box, which crops it):
 - `zoom` is a factor around the clip's `focus` point: 1 = the picture as fitted, 1.2 = 20 % closer.
@@ -187,14 +193,21 @@ clip's `volume` (0 silent, 1 full).
   renderer zooms in just enough for the widest pan you keyframe; to choose the zoom yourself, keep a pan within
   (zoom − 1) × box width ÷ 2 (height for `pan_y`), e.g. zoom 1.2 in an 840 px box allows ±84 px.
 - `focus` `[fx, fy]` (0..1, default centre) picks what `cover` keeps when the picture's shape differs from the
-  box, and is where `zoom` closes in.
+  box, and is where `zoom` closes in: the picture's point fx sits at fraction fx of the box, so 0 shows the left
+  edge, 1 the right edge, and a subject at fraction fx of the picture stays in view.
+- `focus_x` / `focus_y` keyframes move that point: **reframing**. Landscape footage on a vertical canvas shows a
+  third of its width; to follow a speaker, find where they are (`frames` or `scenes`: their x as a fraction of the
+  picture width) and keyframe `focus_x` there, e.g. `[{"t": 0, "v": 0.3}, {"t": 4, "v": 0.3}, {"t": 4.6, "v": 0.7,
+  "ease": "inOut"}]`. To centre a subject at fraction s exactly, fx = (s − v/2) ÷ (1 − v) where v is the shown
+  fraction (box aspect ÷ picture aspect: 0.316 for 16:9 footage in a 9:16 box). `pan_x`/`pan_y` cannot do this:
+  they move the fitted picture inside its box and never reveal what `cover` cropped.
 - `motion` is shorthand: `push` (zoom 1.02 → 1.12), `pull` (1.12 → 1.02), `pan_left`/`pan_right` (zoom 1.14,
   pan ±3.4 % of the box), `rise` (zoom 1.1, pan_y ±2.2 %), `still`. Keyframes on the same property win.
 
 | type | fields |
 |---|---|
-| `image` | `asset`, `fit` `"cover"`/`"contain"`, `focus` `[fx, fy]`, `motion` |
-| `video` | `asset`, `trim_in` (source seconds skipped), `rate` (2 = twice as fast), `loop`, `fit`, `focus`, `motion`, `volume` (default 0: muted) |
+| `image` | `asset`, `fit` `"cover"`/`"contain"`, `focus` `[fx, fy]`, `motion`; an animated GIF, APNG or WebP plays and loops |
+| `video` | `asset`, `trim_in` (source seconds skipped), `rate` (2 = twice as fast), `loop`, `fit`, `focus`, `motion`, `volume` (default 0: muted), `reverse` (plays backwards), `hold` (a source second shown throughout: a freeze frame) |
 | `text` | `text` (`**word**` = accent colour), `style` (TextStyle), `reveal` `{"mode", "dur"}` |
 | `shape` | `shape` `"rect"|"ellipse"|"line"|"arrow"|"path"`, `fill`, `stroke`, `stroke_width`, `d` (SVG path in box pixels), `draw` (the stroke draws on) |
 | `evidence` | `asset` (kind evidence): the capture's box (the proving sentence) scaled to the clip's width (at most 2×), with a little page above and below; the panel hugs that content, the rest of the clip box stays transparent, and cut edges fade out; `highlight` `{"at", "dur", "color"}` sweeps the sentence |
@@ -319,8 +332,18 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
    goes; markers move with ripple edits. Chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"}, ...]`)
    anchored on markers move with them too.
-9. `describe` to see the cut as text, `preview` the joins and the captions, `render(p, draft=true, start=...,
-   end=...)` to watch a join or a stretch as video, then `render`.
+9. Time effects, on a piece of its own (split first; do these after the cuts that use `src:` on it):
+   - speed ramp: `rate` keyframes, e.g. `[{"t": 0, "v": 1}, {"t": 0.4, "v": 0.25, "ease": "inOut"}, {"t": 1.6, "v":
+     0.25}, {"t": 2, "v": 1, "ease": "inOut"}]`; the source walks on by the curve, frame-accurately;
+   - freeze frame: `split_clip` at the moment, `insert_gap` of the freeze's length there, and a clip with `"hold":
+     <source second>` (the second half's `trim_in`) in the gap; full resolution, unlike a `frames` still;
+   - `"reverse": true` plays the piece backwards, sound too (a cached proxy in `build/proxies`).
+
+   A held or speed-curved piece is silent (lay its sound as an audio clip if you want it). On a reversed, held or
+   speed-curved piece `src:` anchors, captions from its transcript and `trim_clip` are refused: their source seconds
+   are not in film order.
+10. `describe` to see the cut as text, `preview` the joins and the captions, `render(p, draft=true,
+    start=..., end=...)` to watch a join or a stretch as video, then `render`.
 
 A complete example: a talk recorded in one take on the default `landscape` canvas, with a pause cut out (the
 pieces `a` and `a_2`), b-roll over it, a title, a music bed that ducks under the talk and captions from the
@@ -372,7 +395,7 @@ transcript. No narration: the film lasts until `a_2` ends.
 | `manual()` | this manual | `manual()` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md` with your file tools) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
+| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
 | `undo(project, steps=1)` | undo applied batches | `undo(p)` |

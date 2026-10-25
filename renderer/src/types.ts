@@ -21,7 +21,8 @@ export type Ease = "linear" | "in" | "out" | "inOut" | "spring" | "step";
 export type Keyframe = { f: number; v: number; ease?: Ease | null };
 
 export type KeyframeProp =
-  | "x" | "y" | "w" | "h" | "opacity" | "rotate" | "scale" | "blur" | "brightness" | "zoom" | "pan_x" | "pan_y" | "progress";
+  | "x" | "y" | "w" | "h" | "opacity" | "rotate" | "scale" | "blur" | "brightness" | "contrast" | "saturate" | "hue_rotate"
+  | "grayscale" | "sepia" | "invert" | "zoom" | "pan_x" | "pan_y" | "focus_x" | "focus_y" | "progress";
 
 export type Preset = "fade" | "rise" | "drop" | "pop" | "wipe_left" | "wipe_up" | "zoom";
 
@@ -35,12 +36,19 @@ export type CutIn = { type: CutType; dur: number; from: string | null };
 /** The same transition seen from the clip it leaves: it starts `at` frames into this clip. */
 export type CutOut = { type: CutType; dur: number; at: number; to: string };
 
-export type FilterSpec = { blur?: number; brightness?: number; contrast?: number; saturate?: number; grayscale?: number };
+/** CSS filter units; `hue_rotate` in degrees. */
+export type FilterSpec = {
+  blur?: number; brightness?: number; contrast?: number; saturate?: number; grayscale?: number; sepia?: number; invert?: number;
+  hue_rotate?: number;
+};
 
 export type ClipStyle = {
   opacity?: number;
   rotate?: number;
   scale?: number;
+  /** mirror the content inside the box (left-right, top-bottom) */
+  flipX?: boolean;
+  flipY?: boolean;
   origin?: string;
   radius?: number;
   blend?: string;
@@ -83,9 +91,13 @@ export type MediaRef = {
   box?: [number, number, number, number] | null;
   site?: string;
   duration?: number | null;
+  /** an image that moves (GIF, APNG, animated WebP): it plays, looping */
+  animated?: boolean;
 };
 
-export type ImageContent = { src: string; size?: [number, number] | null; fit?: "cover" | "contain"; focus?: [number, number] | null };
+export type ImageContent = {
+  src: string; size?: [number, number] | null; fit?: "cover" | "contain"; focus?: [number, number] | null; animated?: boolean;
+};
 
 export type VideoContent = {
   src: string;
@@ -100,6 +112,12 @@ export type VideoContent = {
   volumeKeys?: Keyframe[] | null;
   fadeIn?: number;
   fadeOut?: number;
+  /** the source frame (in film frames, may be fractional) shown for the whole clip, silent */
+  hold?: number;
+  /** a speed curve (frames from the clip start) replacing `rate`: the source moves on by its value every frame, silent */
+  rateKeys?: Keyframe[] | null;
+  /** `src` is a reversed proxy of the clip's span (build/proxies), played forward */
+  reversed?: boolean;
 };
 
 export type TextContent = { runs: Run[]; style?: Partial<TextStyle> | null; reveal?: Reveal | null };
