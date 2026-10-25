@@ -225,6 +225,9 @@ phrase-split between words (never inside a word or a number) and timed from the 
 `items`. `max_chars` (4–60) defaults to 14 for Chinese, Japanese and Korean and 32 for other languages. Phrases
 drop the punctuation they were cut at. Fix a bad split with an override that adds a comma where the cut should be.
 `"source": "clip:a"` captions what clip `a` says instead, from its asset's transcript (see Editing footage).
+`"mode": "words"` lights each word in the accent colour while it is said (karaoke; `emphasis` is not shown then),
+`"build"` shows the words one by one as they are said, `"phrase"` (the default) shows each phrase whole. Word times
+come from the transcript; voice lines and given `items` are timed by characters.
 
 ## Edit ops
 
@@ -269,12 +272,16 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 3. Lay it down: `{"id": "a", "type": "video", "asset": "talk", "start": 0, "end": "src:a@95", "volume": 1}` runs
    until source second 95. `trim_in` skips the head, `rate` speeds it up; give video `volume` 1 to hear it.
 4. Cut. `ripple_delete` takes a range out and closes the gap: clips crossing its edges are split (the part after
-   the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on), later clips, markers and caption items move
-   up. Jump cuts from `silences`: one `ripple_delete` per silence from `"src:a@<start + 0.1>"` to `"src:a@<end -
-   0.1>"` (a breath of air each side), **from the last silence back** in one batch, so each `src:a@...` still names
-   the piece that plays it. `trim_clip` sets a clip's in/out in source seconds (`ripple: true` pulls the rest of
-   its track along; without it the picture stays put and only the edges move), `insert_gap` opens room, and
-   `split_clip` cuts a clip in two. Anchors that stay true after a ripple edit stay; the rest become numbers.
+   the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on; a clip whose head is cut keeps its id), later
+   clips, markers and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence from
+   `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), **from the last silence back** in
+   one batch, so each `src:a@...` still names the piece that plays it. Name the tracks to cut
+   (`"tracks": ["v1"]`, plus the track of its sound if that is separate, and a captions track with `items`): left
+   out, every track is cut, a music bed included, and the music skips at each jump; or cut first and lay the bed
+   after. A cut that falls inside a transition keeps what is left of it (shortened to fit). `trim_clip` sets a clip's
+   in/out in source seconds (`ripple: true` pulls the rest of its track along; without it the picture stays put and
+   only the edges move), `insert_gap` opens room, and `split_clip` cuts a clip in two. Anchors that stay true after
+   a ripple edit stay; the rest become numbers.
 5. Join shots: give the later clip `"transition": {"type": "crossfade", "dur": 0.4}` and start it that long before
    the previous one ends (`"start": "clip:a.end-0.4"`); that is the only overlap a track allows. Without the
    overlap it transitions in over whatever is beneath it. `dip_black`/`dip_white` go through a colour,
@@ -283,8 +290,9 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 6. Sound: `volume` keyframes ride a clip's level (`{"t": 3, "v": 0.2}`); a music bed with `"duck": {"under": "v1"}`
    (or `"voice"`) drops to 0.25 while that track's clips with sound play, easing 0.3 s either side.
 7. Captions that follow the speech: a captions track with `"source": "clip:a"` once `talk` is transcribed. It
-   follows every piece of that recording on `a`'s track, drops the words you cut, and phrases by pauses and
-   sentence ends within `max_chars`.
+   follows every piece of that recording on `a`'s track (if a cut or `remove_clip` takes `a` away, the next piece
+   you can hear), drops the words you cut, and phrases by pauses and sentence ends, then within `max_chars` the way
+   voice captions are. `"mode": "words"` lights each word as it is said, `"build"` adds the words one by one.
 8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
    goes; markers move with ripple edits.
 9. `describe` to see the cut as text, `preview` the joins and the captions, `render`.
@@ -419,8 +427,9 @@ latest attempt, `out/report.json` the delivered film's.
 **Warnings** (information; take them seriously): text under 28 px (at a 1080 px short side); text of one clip
 over text of another
 (captions included); text on a background of about its own brightness (contrast measured on the still); text
-overflowing its clip box; evidence whose proving sentence will read under 40 px; words that are not whole on
-frame 0, which is the cover (mid-reveal, mid-enter, fading in), or no words there at all.
+overflowing its clip box; evidence whose proving sentence will read under 40 px; on platform profiles (or when
+`rules.json` sets `hook_seconds`), words that are not whole on frame 0, which is the cover (mid-reveal, mid-enter,
+fading in), or no words there at all.
 **Advice**, only what the owner's `rules.json` asks for: for example no words on screen in the first 2 s (the
 hook), one still picture held longer than 8 s with nothing moving it, a length outside the target. An empty title
 is a warning only when the owner has a title rule.
