@@ -25,8 +25,9 @@ project.json (new_project makes one, with a profile and a locale). To edit foota
 (probe, frames, scenes, silences, transcribe), then cut with ripple_delete and trim_clip at "src:<clip>@<seconds>"
 Times. To make a film from a script, gather assets with speak, capture, draw, animate and import_asset. Loop: edit
 -> check -> preview (look at the stills; sweep=true measures the whole film's layout as render would) -> fix ->
-render -> review. speak, animate and transcribe cost money and draw spends Codex tries: they estimate first and
-refuse over budget. Failures come back as text that says what to do."""
+render -> review; render(draft=true) is a quick look at a stretch as video, export_captions writes .srt/.vtt.
+speak, animate and transcribe cost money and draw spends Codex tries: they estimate first and refuse over budget.
+Failures come back as text that says what to do."""
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN_ENV = "REELSMITH_MCP_TOKEN"

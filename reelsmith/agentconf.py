@@ -45,7 +45,8 @@ and look at what you make. Any canvas, any language.
 - The user's footage: import_asset, look (probe, frames, scenes, silences, transcribe), cut at "src:<clip>@<seconds>"
   Times with ripple_delete and trim_clip. A film from a script: script.md, speak, capture, draw, animate.
 - Loop: notes -> new_project (profile, locale) -> material -> edit -> check -> preview (read the PNG stills) -> fix ->
-  preview with sweep=true -> render -> review -> note what you learned.
+  preview with sweep=true -> render -> review -> note what you learned. render(draft=true) is a quick look at a
+  stretch as video; export_captions writes the captions as .srt/.vtt.
 - speak, animate and transcribe cost money and draw spends limited tries: they estimate first and refuse over the
   budget.
 """

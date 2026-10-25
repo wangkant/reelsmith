@@ -13,8 +13,8 @@ clip and look at it as you go. Any canvas (landscape by default, vertical, squar
 ## Before you start
 
 The reelsmith MCP server must be connected: its tools are `manual`, `notes`, `new_project`, `describe`, `edit`,
-`undo`, `check`, `preview`, `render`, `review`, `library`, the footage tools `probe`, `frames`, `scenes`, `silences`
-and `transcribe`, and the asset tools `import_asset`, `speak`, `capture`, `draw`, `animate` and `assets`. If they
+`undo`, `check`, `preview`, `render`, `review`, `export_captions`, `library`, the footage tools `probe`, `frames`,
+`scenes`, `silences` and `transcribe`, and the asset tools `import_asset`, `speak`, `capture`, `draw`, `animate` and `assets`. If they
 are missing, tell the user to run `reelsmith setup <their agent>` and restart the agent. Every tool is also a shell
 command (`reelsmith <tool> --help`) when no MCP client is attached.
 
@@ -37,8 +37,10 @@ command (`reelsmith <tool> --help`) when no MCP client is attached.
 5. `edit(project, ops)` in batches: a batch applies whole or not at all, and `undo` reverts it. `describe` shows
    the timeline as text; `library` lists the components.
 6. `check`, then `preview` the key moments and read the PNG stills. Fix what you see, repeat.
-   `preview(sweep=true)` measures the whole film's layout as `render` will.
-7. `render`, then `review` the delivered frames, then `note` what you learned.
+   `preview(sweep=true)` measures the whole film's layout as `render` will; `render(draft=true, start?, end?)` is a
+   quick low-quality look at a join or a stretch as video.
+7. `render`, then `review` the delivered frames, then `note` what you learned. The captions also come out as
+   `.srt`/`.vtt` files (`export_captions` writes them without rendering).
 
 ## Rules that save a render
 

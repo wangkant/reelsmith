@@ -9,7 +9,12 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolUseBlock
+
+try:
+    from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolUseBlock
+except ImportError:                 # the runner extra is optional: only the agent-sdk engine's tests need it
+    AssistantMessage = ResultMessage = SystemMessage = TextBlock = ToolUseBlock = None
+needs_sdk = pytest.mark.skipif(ResultMessage is None, reason="the runner extra (claude-agent-sdk) is not installed")
 
 from reelsmith import backends, guard, runner
 from reelsmith.agent import providers
@@ -89,6 +94,7 @@ def test_settings_precedence(ws):
         runner.settings_for(w, budget_usd=0)
 
 
+@needs_sdk
 def test_options(ws):
     w, project = ws
     s = runner.settings_for(w)
@@ -110,6 +116,7 @@ def test_options(ws):
     assert o.hooks["PreToolUse"][0].hooks
 
 
+@needs_sdk
 def test_missing_key(ws, monkeypatch):
     w, project = ws
     (w.root / ".env").write_text("", encoding="utf-8")
@@ -172,6 +179,7 @@ def test_backend_flag_reaches_the_run(ws, monkeypatch):
         runner.main([str(project), "--backend", "nope"])
 
 
+@needs_sdk
 def test_deepseek_options_carry_only_the_deepseek_key(ws, monkeypatch):
     w, project = ws
     host = {"ANTHROPIC_API_KEY": "sk-ant-host-999", "ANTHROPIC_WORKSPACE_ID": "wrkspc_host",
@@ -203,6 +211,7 @@ def test_deepseek_options_carry_only_the_deepseek_key(ws, monkeypatch):
     assert "manual.md" in o.system_prompt["append"] and o.permission_mode == "dontAsk"
 
 
+@needs_sdk
 def test_deepseek_pro_model(ws):
     w, project = ws
     w = deepseek(w, model="deepseek-v4-pro")
@@ -217,6 +226,7 @@ def test_deepseek_pro_model(ws):
     assert backends.cli_model(b, "deepseek-other") == "deepseek-other"
 
 
+@needs_sdk
 def test_deepseek_key_lookup(ws, monkeypatch):
     w, project = ws
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -248,6 +258,7 @@ def test_deepseek_price_estimate():
                                 "claude-opus-5-5") == pytest.approx(0.006)
 
 
+@needs_sdk
 def test_deepseek_summary_estimates_over_the_cli_figure():
     r = ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=4,
                       session_id="s1", total_cost_usd=9.99, model_usage={
@@ -264,6 +275,7 @@ def test_deepseek_summary_estimates_over_the_cli_figure():
     assert row["cost_usd"] == 9.99 and "cli_cost_usd" not in row
 
 
+@needs_sdk
 def test_deepseek_run_report(ws, no_checks):
     w, project = ws
     deepseek(w)
@@ -290,6 +302,7 @@ def test_deepseek_run_report(ws, no_checks):
     assert "on deepseek deepseek-flash" in out.getvalue() and "Claude prices, not used" in out.getvalue()
 
 
+@needs_sdk
 def test_deepseek_session_stops_at_the_budget(ws, no_checks):
     w, project = ws
     deepseek(w)                                                # budget $3
@@ -308,6 +321,7 @@ def test_deepseek_session_stops_at_the_budget(ws, no_checks):
     assert "never seen" not in out.getvalue()
 
 
+@needs_sdk
 def test_under_budget_streaming_does_not_stop(ws):
     _, project = ws
     msgs = [AssistantMessage(content=[TextBlock(f"m{i}")], model="deepseek-flash", message_id=f"m{i}",
@@ -326,6 +340,7 @@ def test_under_budget_streaming_does_not_stop(ws):
     assert out["aborted"] and out["messages"] == 4                  # stopped at the 4th: $0.12
 
 
+@needs_sdk
 def test_deepseek_pro_warns_it_cannot_see(ws, no_checks):
     w, project = ws
     deepseek(w, model="deepseek-v4-pro")
@@ -344,6 +359,7 @@ def test_a_session_resumes_only_on_its_own_backend(ws, no_checks):
 
 
 # ------------------------------------------------------------------ runs
+@needs_sdk
 def test_delivered_run(ws, no_checks):
     _, project = ws
     calls = []
@@ -366,6 +382,7 @@ def test_new_run_needs_a_brief(ws):
         go(project, fake_query())
 
 
+@needs_sdk
 def test_fixup_then_delivered(ws, no_checks):
     _, project = ws
     calls = []
@@ -376,6 +393,7 @@ def test_fixup_then_delivered(ws, no_checks):
     assert calls[1]["options"].max_budget_usd == 2.5
 
 
+@needs_sdk
 def test_fixups_are_capped(ws, no_checks):
     _, project = ws
     q = fake_query([init(), result(0.1)], [result(0.1)], [result(0.1)], [result(0.1)])
@@ -383,6 +401,7 @@ def test_fixups_are_capped(ws, no_checks):
     assert not rep["delivered"] and len(rep["sessions"]) == 3
 
 
+@needs_sdk
 def test_budget_stops_fixups(ws, no_checks):
     _, project = ws
     q = fake_query([init(), result(2.99)])
@@ -390,6 +409,7 @@ def test_budget_stops_fixups(ws, no_checks):
     assert not rep["delivered"] and any("budget" in p for p in rep["problems"])
 
 
+@needs_sdk
 def test_crash_resumes_in_process(ws, no_checks):
     _, project = ws
     calls = []
@@ -406,6 +426,7 @@ def test_crash_resumes_in_process(ws, no_checks):
     assert rep["cost_usd"] == pytest.approx(first["cost_usd"] + 0.3)
 
 
+@needs_sdk
 def test_killed_process_resumes_next_time(ws, no_checks):
     _, project = ws
     (project / "build").mkdir()
@@ -418,6 +439,7 @@ def test_killed_process_resumes_next_time(ws, no_checks):
     assert rep["cost_usd"] == pytest.approx(0.7)
 
 
+@needs_sdk
 def test_fresh_ignores_old_state(ws, no_checks):
     _, project = ws
     go(project, fake_query([init("old"), result(0.1)], [result(0.1)], [result(0.1)]), brief="b")
@@ -517,6 +539,7 @@ def test_a_failed_rerender_is_not_delivered(ws, no_checks):
     assert not ok and "latest render failed at layout" in problems[0] and "older film" in problems[0]
 
 
+@needs_sdk
 def test_stall_aborts(ws, no_checks):
     _, project = ws
 
@@ -643,6 +666,7 @@ def test_tools_stop_once_a_workspace_appears_in_the_project(ws):
     assert guard.decide("mcp__reelsmith__check", {"project": "."}, scope)[0]
 
 
+@needs_sdk
 def test_a_workspace_written_into_the_project_stops_the_run(ws, no_checks):
     _, project = ws
 
