@@ -33,14 +33,18 @@ DSH_PROJECT_PATCH = Path(".dsh") / "reelsmith.cordis.yml"
 INSTRUCTIONS = """## Video editing with reelsmith
 
 For any request to make or edit a video, use the reelsmith MCP tools (manual, notes, new_project, describe, edit,
-check, preview, render, review, speak, import_asset, capture, draw, animate). reelsmith is an editor you drive, not
-a text-to-video model: build the film clip by clip on its timeline and look at what you make.
+check, preview, render, review; probe, frames, scenes, silences, transcribe; import_asset, speak, capture, draw,
+animate). reelsmith is an editor you drive, not a text-to-video model: build the film clip by clip on its timeline
+and look at what you make. Any canvas, any language.
 
 - Call `manual` once before the first edit: it is the full contract (project format, Times, edit ops, components,
   what blocks delivery). Every tool takes `project` = the folder holding project.json.
-- Loop: notes -> new_project -> script.md and assets -> edit -> check -> preview (read the PNG stills) -> fix ->
+- The user's footage: import_asset, look (probe, frames, scenes, silences, transcribe), cut at "src:<clip>@<seconds>"
+  Times with ripple_delete and trim_clip. A film from a script: script.md, speak, capture, draw, animate.
+- Loop: notes -> new_project (profile, locale) -> material -> edit -> check -> preview (read the PNG stills) -> fix ->
   preview with sweep=true -> render -> review -> note what you learned.
-- speak, draw and animate may cost money; they estimate first and refuse over the budget.
+- speak, animate and transcribe cost money and draw spends limited tries: they estimate first and refuse over the
+  budget.
 """
 
 

@@ -212,8 +212,8 @@ def system_append(project: Path, ws) -> str:
     notes = ws.notes_path if ws is not None else None
     rows = [
         "You are making a film in this project with the reelsmith tools (describe shows its canvas and locale). "
-        "Nobody is online: every choice is yours (topic angle, script, voice, pictures, edit); write your reasons "
-        "in script.md.",
+        "Nobody is online: within what the brief asks, every choice is yours (the cut, the words, the pictures, the "
+        "sound); write your reasons in script.md.",
         f"Read the manual first ({MANUAL}, or the manual tool), then the notes"
         + (f" ({notes})" if notes else "") + " for what worked before.",
         f"Project: {project}. Pass it as `project` to every reelsmith tool.",
@@ -244,8 +244,10 @@ def cli_role(project: Path, ws) -> str:
 
 def first_prompt(project: Path, brief: str) -> str:
     return (f"{brief.strip()}\n\nProject: {project}\n"
-            "The project is yours: research, write the script, gather assets, edit, preview, render. Finish when "
-            "out/film.mp4 passes the render checks and you would publish it, then note what you learned.")
+            "The project is yours: do what the brief asks. Edit the material it names (look at it first: probe, "
+            "frames, scenes, silences, transcribe), or research and script a film and gather its assets; then edit, "
+            "preview, render. Finish when out/film.mp4 passes the render checks and you would publish it, then note "
+            "what you learned.")
 
 
 def resume_prompt(why: str, state: dict) -> str:
