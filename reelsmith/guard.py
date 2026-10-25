@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import timeexpr
+
 MCP_PREFIX = "mcp__reelsmith__"
 
 # Never read, never written, in any folder: keys, credentials, tool configs, the spend ledger.
@@ -38,7 +40,7 @@ SESSION_TOOLS = {"WebSearch", "TodoWrite", "ToolSearch"}
 SHELL_TOOLS = {"Bash", "PowerShell", "BashOutput", "KillShell", "KillBash", "TaskOutput", "TaskStop", "Monitor"}
 ASK_TOOLS = {"AskUserQuestion", "ExitPlanMode", "EnterPlanMode"}
 # MCP argument keys whose string values may name files or URLs (asset ids, Times and dotted paths have no slash)
-_PATH_KEYS = {"path", "file", "file_path", "source", "src", "dir", "folder", "out", "output", "out_dir"}
+_PATH_KEYS = {"path", "file", "file_path", "source", "src", "dir", "folder", "out", "output", "out_dir", "asset"}
 _URL_KEYS = {"url", "href"}
 
 NO_SHELL = ("There is no shell in this run. Render, preview, check and type-check with the reelsmith tools; "
@@ -411,6 +413,15 @@ def _same_project(value, scope: Scope) -> bool:
     return path is not None and (_norm(path) == _norm(scope.project) or _real(path) == _real(scope.project))
 
 
+def _reference(text: str) -> bool:
+    """A Time ("src:c1@12.5", "mark:hit") or a captions source ("clip:a"): project grammar, not a path or a URL."""
+    try:
+        timeexpr.parse(text)
+    except timeexpr.TimeError:
+        return False
+    return True
+
+
 def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     k, v = key.lower(), value.strip()
     if not v:                           # an empty optional field (an evidence asset's url); the tool validates it
@@ -418,6 +429,8 @@ def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     if k in _URL_KEYS:
         return check_url(v)
     if k not in _PATH_KEYS:
+        return ""
+    if _reference(v):
         return ""
     scheme = re.match(r"^([A-Za-z][A-Za-z0-9+.-]+):", v)     # one letter before ':' is a drive, not a scheme
     if scheme:

@@ -580,6 +580,20 @@ def test_denials_reach_the_report(ws, no_checks):
     ("Write", {"file_path": "ledger.jsonl"}, False),
     ("Read", {"file_path": "../../.cache/draw.log"}, False),
     ("Grep", {"pattern": "x", "path": "../../.cache"}, False),
+    # Times and a transcript's captions source are project grammar, not paths
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "update_track", "id": "capb",
+                                                       "set": {"source": "clip:a"}}]}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": json.dumps([{"op": "add_track", "id": "capb", "kind": "captions",
+                                                                  "source": "clip:a"}])}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "set", "path": "markers", "value": {
+        "src": "src:c1@12.5+0.2", "source": "mark:hit-1", "out": "line:3.end"}}]}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "update_track", "id": "capb",
+                                                       "set": {"source": "file:///C:/x"}}]}, False),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "add_asset", "id": "a",
+                                                       "path": "../../../victim/x.mp4"}]}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "../../../../victim"}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "C:/Users/x/Videos"}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "a1"}, True),
 ])
 def test_guard_table(ws, tool, inp, allowed):
     w, project = ws

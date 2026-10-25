@@ -806,8 +806,9 @@ carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `output
   or `ledger.jsonl` under any name, never scripts, executables or package files. Reads stay in the workspace, the
   manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and `.cache/` are
   unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
-  redirects included, as `capture` does); reelsmith tool arguments that name files or URLs are held to the same
-  rules. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
+  redirects included, as `capture` does); reelsmith tool arguments that name files or URLs (keys such as `path`,
+  `source`, `src` and `asset`, at any depth, edit ops included) are held to the same rules, except values in the Time
+  grammar (section 3.1), which covers a captions track's `"clip:<id>"`. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
   project and the library; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP
   server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
