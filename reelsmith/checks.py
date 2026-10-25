@@ -423,6 +423,12 @@ def transition_windows(resolved: dict | None) -> dict:
                 spans.append((start, start + (c["enter"].get("dur") or 0)))
             if c.get("exit"):
                 spans.append((start + dur - (c["exit"].get("dur") or 0), start + dur))
+            if c.get("transition"):             # transitions between clips on a track move them on purpose too
+                spans.append((start, start + (c["transition"].get("dur") or 0)))
+            leaving = c.get("transitionOut")
+            if leaving:
+                at = start + (leaving.get("at") or 0)
+                spans.append((at, at + (leaving.get("dur") or 0)))
             if spans:
                 out[c.get("id")] = spans
     return out

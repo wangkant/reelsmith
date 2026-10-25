@@ -4,7 +4,7 @@
 import React from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { ClipContext, type ClipCtx } from "../kit/context";
-import { sample, transitionAt } from "../keyframes";
+import { cutAt, sample, transitionAt } from "../keyframes";
 import type { Box, ClipStyle, EvidenceContent, Keyframe, RClip, RenderMode, Theme } from "../types";
 import { ComponentHost } from "./ComponentHost";
 import { EvidenceCrop } from "./EvidenceCrop";
@@ -31,6 +31,7 @@ const Content: React.FC<{ clip: RClip; w: number; h: number; progress: number | 
         <Media
           media={{ src: c.src, kind: "video", duration: c.duration }} fit={c.fit ?? "cover"} focus={c.focus}
           trimIn={num(c.trimIn, 0)} rate={num(c.rate, 1)} loop={!!c.loop} volume={num(c.volume, 0)}
+          volumeKeys={c.volumeKeys} fadeIn={c.fadeIn} fadeOut={c.fadeOut}
         />
       );
     case "text":
@@ -93,6 +94,7 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, mode }) => {
   const zoom = Math.max(at("zoom", 1), picture ? panFloor(k, box.w, box.h, fx, fy) : 1);
   const kfProgress = k.progress && k.progress.length ? clamp01(at("progress", 0)) : null;
   const tr = transitionAt(clip.enter, clip.exit, f, clip.dur, fps, h);
+  const cut = cutAt(clip.transition, clip.transitionOut, f, w);
   const radius = Math.max(0, num(st.radius, 0));
   const shadow = shadowFor(st, clip.type);
   const cropped = CROPPED.has(clip.type);
@@ -110,12 +112,12 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, mode }) => {
       data-track={clip.track}
       style={{
         position: "absolute", left: x, top: y, width: w, height: h, boxSizing: "border-box",
-        opacity: opacity * tr.opacity,
-        transform: `translate(${tr.tx}px, ${tr.ty}px) rotate(${rotate}deg) scale(${scale * tr.scale})`,
+        opacity: opacity * tr.opacity * cut.opacity,
+        transform: `translate(${tr.tx + cut.tx}px, ${tr.ty + cut.ty}px) rotate(${rotate}deg) scale(${scale * tr.scale * cut.scale})`,
         transformOrigin: origin(st.origin),
         filter: filterCss(st.filter, blur, brightness, shadow.drop),
         mixBlendMode: (st.blend && st.blend !== "normal" ? st.blend : undefined) as React.CSSProperties["mixBlendMode"],
-        clipPath: tr.clip ?? undefined,
+        clipPath: cut.clip ?? tr.clip ?? undefined,
         // shapes and evidence round their own outline (evidence: the panel hugging its content)
         borderRadius: clip.type === "shape" || clip.type === "evidence" ? undefined : radius || undefined,
         overflow: cropped || (radius > 0 && clip.type !== "shape" && clip.type !== "text") ? "hidden" : "visible",
@@ -123,13 +125,16 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, mode }) => {
       }}
     >
       <div style={{
-        position: "absolute", left: 0, top: 0, width: w, height: h,
+        position: "absolute", left: 0, top: 0, width: w, height: h, opacity: cut.content < 1 ? cut.content : undefined,
         transform: moved ? `translate(${panX}px, ${panY}px) scale(${zoom})` : undefined, transformOrigin: contentOrigin,
       }}>
         <ClipContext.Provider value={ctx}>
           <Content clip={clip} w={w} h={h} progress={kfProgress} theme={theme} mode={mode} radius={radius} />
         </ClipContext.Provider>
       </div>
+      {cut.veil && cut.veilOpacity > 0 ? (
+        <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, background: cut.veil, opacity: clamp01(cut.veilOpacity) }} />
+      ) : null}
     </div>
   );
 };

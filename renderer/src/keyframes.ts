@@ -1,6 +1,6 @@
 // Keyframe interpolation and the enter/exit presets. Pure functions of the frame, so stills match the film.
 import { Easing, spring } from "remotion";
-import type { Ease, Keyframe, Transition } from "./types";
+import type { CutIn, CutOut, Ease, Keyframe, Transition } from "./types";
 
 const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
 
@@ -109,6 +109,65 @@ export const transitionAt = (
       opacity: st.opacity * out.opacity, tx: st.tx + out.tx, ty: st.ty + out.ty, scale: st.scale * out.scale,
       clip: out.clip ?? st.clip,
     };
+  }
+  return st;
+};
+
+export type CutState = TransitionState & { content: number; veil: string | null; veilOpacity: number };
+
+const sweep = Easing.inOut(Easing.cubic);
+
+/** A clip's look at frame `f` from the transitions it takes part in: in from the clip before it over its first
+ *  `cin.dur` frames (painted over that clip), out to the clip after it from `cout.at`. `w` is the box width. */
+export const cutAt = (cin: CutIn | null | undefined, cout: CutOut | null | undefined, f: number, w: number): CutState => {
+  const st: CutState = { ...NONE, content: 1, veil: null, veilOpacity: 0 };
+  if (cin && cin.dur > 0 && f < cin.dur) {
+    const p = clamp01(f / cin.dur);
+    const e = sweep(p);
+    switch (cin.type) {
+      case "crossfade":
+        st.opacity = p;
+        break;
+      case "dip_black":
+      case "dip_white": // the colour rises over the clip before, then falls off this one
+        st.veil = cin.type === "dip_black" ? "#000000" : "#FFFFFF";
+        st.content = p < 0.5 ? 0 : 1;
+        st.veilOpacity = p < 0.5 ? 2 * p : 2 * (1 - p);
+        break;
+      case "wipe_left": // the edge travels leftward: this clip appears from the right
+        st.clip = `inset(0 0 0 ${(1 - e) * 100}%)`;
+        break;
+      case "wipe_right":
+        st.clip = `inset(0 ${(1 - e) * 100}% 0 0)`;
+        break;
+      case "wipe_up":
+        st.clip = `inset(${(1 - e) * 100}% 0 0 0)`;
+        break;
+      case "slide_left": // pushes in from the right
+        st.tx = (1 - e) * w;
+        break;
+      case "zoom":
+        st.opacity = p;
+        st.scale = 1.2 - 0.2 * e;
+        break;
+    }
+  }
+  if (cout && cout.dur > 0 && f >= cout.at) {
+    const p = clamp01((f - cout.at) / cout.dur);
+    const e = sweep(p);
+    switch (cout.type) {
+      case "dip_black":
+      case "dip_white":
+        st.veil = cout.type === "dip_black" ? "#000000" : "#FFFFFF";
+        st.veilOpacity = Math.max(st.veilOpacity, Math.min(1, 2 * p));
+        break;
+      case "slide_left": // pushed out to the left
+        st.tx -= e * w;
+        break;
+      case "zoom":
+        st.scale *= 1 + 0.2 * e;
+        break;
+    }
   }
   return st;
 };

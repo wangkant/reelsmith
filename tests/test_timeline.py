@@ -302,6 +302,189 @@ def test_audio_clips_take_volume_keyframes_only(cut):
     ok(cut, {"op": "set_keyframes", "id": "m1", "prop": "volume", "frames": [{"t": 0, "v": 1}, {"t": 2, "v": 0.2}]})
     assert clip(raw(cut), "m1")["keyframes"]["volume"][1]["v"] == 0.2
     assert "except volume" in refused(cut, {"op": "set_keyframes", "id": "m1", "prop": "opacity",
-                                                     "frames": [{"t": 0, "v": 1}]})
+                                            "frames": [{"t": 0, "v": 1}]})
     assert "volume keyframes are for video and audio" in refused(
         cut, {"op": "set_keyframes", "id": "note", "prop": "volume", "frames": [{"t": 0, "v": 1}]})
+
+
+# ------------------------------------------------------------------ transitions
+def rclip(resolved, cid):
+    return next(c for t in resolved["tracks"] for c in t.get("clips") or [] if c["id"] == cid)
+
+
+def raudio(resolved, cid):
+    return next(a for a in resolved["audio"] if a["id"] == cid)
+
+
+def test_a_transition_lets_a_clip_overlap_the_one_before_by_its_dur(cut):
+    ok(cut, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.5"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "crossfade", "dur": 0.5}}})
+    r = R.resolve(cut)
+    c1, c2 = rclip(r, "c1"), rclip(r, "c2")
+    assert c2["transition"] == {"type": "crossfade", "dur": 15, "from": "c1"} and c2["transitionOut"] is None
+    assert c1["transitionOut"] == {"type": "crossfade", "dur": 15, "at": 165, "to": "c2"}
+    assert c1["content"]["fadeOut"] == 15 and "fadeIn" not in c2["content"]        # c2 is muted: only c1 fades
+    assert rclip(r, "note")["transition"] is None
+    rows = refused(cut, {"op": "move_clip", "id": "c2", "start": 5})
+    assert "overlap by 1.00 s, more than c2's transition (0.5 s)" in rows
+    rows = refused(cut, {"op": "update_clip", "id": "c2", "set": {"transition": None}})
+    assert "must not overlap" in rows
+    rows = refused(cut, {"op": "update_clip", "id": "note", "set": {"transition": {"type": "zoom", "dur": 2}}})
+    assert "longer than the clip" in rows
+
+
+def test_every_transition_type_resolves_and_the_first_clip_comes_from_nothing(cut):
+    for kind in D.CUTS:
+        ok(cut, {"op": "update_clip", "id": "c1", "set": {"transition": {"type": kind, "dur": 0.4}}})
+        assert rclip(R.resolve(cut), "c1")["transition"] == {"type": kind, "dur": 12, "from": None}
+    rows = refused(cut, {"op": "update_clip", "id": "c1", "set": {"transition": {"type": "spin", "dur": 1}}})
+    assert "transition.type" in rows
+
+
+def test_audio_clips_crossfade_through_their_fades(cut):
+    ok(cut, {"op": "split_clip", "id": "m1", "at": 4, "new_id": "m2"})
+    ok(cut, {"op": "move_clip", "id": "m2", "start": 3},
+       {"op": "update_clip", "id": "m2", "set": {"transition": {"type": "crossfade", "dur": 1}}})
+    r = R.resolve(cut)
+    m1, m2 = raudio(r, "m1"), raudio(r, "m2")
+    assert m1["fadeOut"] == 30 and m2["fadeIn"] == 30 and m1["fadeIn"] == 15
+    rows = refused(cut, {"op": "update_clip", "id": "m2", "set": {"transition": {"type": "wipe_left", "dur": 1}}})
+    assert "audio clips crossfade only" in rows
+
+
+def test_layout_checks_skip_frames_inside_a_transition(cut):
+    from reelsmith import checks
+    ok(cut, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.5"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "slide_left", "dur": 0.5}}})
+    windows = checks.transition_windows(R.resolve(cut))
+    assert windows["c2"] == [(165, 180)] and windows["c1"] == [(165, 180)]
+
+
+# ------------------------------------------------------------------ volume keyframes and ducking
+def test_volume_keyframes_become_sound_curves_not_picture_keyframes(cut):
+    ok(cut, {"op": "set_keyframes", "id": "c1", "prop": "volume", "frames": [{"t": 0, "v": 0}, {"t": 1, "v": 1}]},
+       {"op": "set_keyframes", "id": "m1", "prop": "volume",
+        "frames": [{"t": 0, "v": 1}, {"t": "clip:c2", "v": 0.2, "ease": "inOut"}]})
+    r = R.resolve(cut)
+    assert "volume" not in rclip(r, "c1")["keyframes"]
+    assert rclip(r, "c1")["content"]["volumeKeys"] == [{"f": 0, "v": 0, "ease": "linear"},
+                                                       {"f": 30, "v": 1, "ease": "linear"}]
+    assert raudio(r, "m1")["volumeKeys"][1] == {"f": 180, "v": 0.2, "ease": "inOut"}
+    rows = refused(cut, {"op": "set_keyframes", "id": "m1", "prop": "volume", "frames": [{"t": 0, "v": -1}]})
+    assert "0 (silent) or more" in rows
+
+
+def test_a_music_bed_ducks_under_a_track_while_it_sounds(cut):
+    ok(cut, {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "v1", "to": 0.2, "fade": 0.5}}})
+    duck = raudio(R.resolve(cut), "m1")["duck"]
+    assert duck == [{"start": 0, "end": 180, "level": 0.2, "fade": 15}]          # c1 sounds 0-6 s; c2 is muted
+    ok(cut, {"op": "update_clip", "id": "c2", "set": {"volume": 0.5}})
+    duck = raudio(R.resolve(cut), "m1")["duck"]
+    assert duck == [{"start": 0, "end": 270, "level": 0.2, "fade": 15}]          # touching ranges merge
+    assert "no track 'zz'" in refused(cut, {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "zz"}}})
+    assert "its own track" in refused(cut, {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "a1"}}})
+    assert "has none" in refused(cut, {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "voice"}}})
+
+
+def test_ducking_under_the_voice_follows_the_lines(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    demo = tmp_path / "demo"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "demo", demo, ignore=shutil.ignore_patterns("build"))
+    ok(demo, {"op": "update_clip", "id": "bed1", "set": {"dur": 21, "duck": {"under": "voice", "fade": 0.1}}})
+    duck = raudio(R.resolve(demo), "bed1")["duck"]
+    assert len(duck) == 7 and duck[1] == {"start": 103, "end": 162, "level": 0.25, "fade": 3}   # one per line
+    ok(demo, {"op": "update_clip", "id": "bed1", "set": {"duck": {"under": "voice", "fade": 0.15}}})
+    duck = raudio(R.resolve(demo), "bed1")["duck"]
+    assert duck == [{"start": 0, "end": 630, "level": 0.25, "fade": 5}]         # gaps under 2 x fade are bridged
+
+
+# ------------------------------------------------------------------ captions from a transcript
+def transcript(p, words, asset="v"):
+    (p / "assets" / f"{asset}.transcript.json").write_text(json.dumps({
+        "version": 1, "asset": asset, "words": [{"word": w, "start": a, "end": b} for w, a, b in words]}),
+        encoding="utf-8")
+    data = raw(p)
+    data["assets"][asset]["transcript"] = f"assets/{asset}.transcript.json"
+    write(p, data)
+
+
+WORDS = [("cut", 1.0, 1.4), ("Hello", 2.5, 2.9), ("there,", 3.0, 3.4), ("my", 3.5, 3.7), ("friend.", 3.8, 4.2),
+         ("This", 6.0, 6.3), ("is", 6.4, 6.5), ("footage", 6.6, 7.2)]
+
+
+def caption_track(p, **extra):
+    data = raw(p)
+    track(data, "cap").pop("items")
+    track(data, "cap").update({"source": "clip:c1", "max_chars": 14, **extra})
+    write(p, data)
+
+
+def caption_texts(p):
+    items = next(t for t in R.resolve(p)["tracks"] if t["id"] == "cap")["items"]
+    return items, ["".join(r["text"] for r in it["runs"]) for it in items]
+
+
+def test_captions_follow_the_transcript_through_the_clip(cut):
+    transcript(cut, WORDS)
+    caption_track(cut, emphasis=["friend"])
+    assert errors(cut) == []
+    items, texts = caption_texts(cut)
+    assert texts == ["Hello there,", "my friend.", "This is", "footage"]      # "cut" is trimmed away (trim_in 2)
+    assert (items[0]["from"], items[0]["to"]) == (15, 45)                    # 0.5 s; held until the next phrase
+    assert items[2]["from"] == 120 and items[-1]["to"] <= 180                # within c1 (0-6 s)
+    assert any(r["accent"] and r["text"] == "friend" for r in items[1]["runs"])
+
+
+def test_captions_from_a_transcript_survive_a_ripple_cut(cut):
+    transcript(cut, WORDS)
+    caption_track(cut)
+    ok(cut, {"op": "ripple_delete", "start": "src:c1@4.4", "end": "src:c1@5.8"})
+    items, texts = caption_texts(cut)
+    assert texts[-2:] == ["This is", "footage"]                               # through the piece after the cut
+    assert items[-2]["from"] == round((6.0 - 2 - 1.4) * 30)
+
+
+def test_captions_from_a_transcript_are_checked(cut):
+    caption_track(cut)
+    assert any("has no transcript: transcribe v first" in e for e in errors(cut))
+    transcript(cut, WORDS)
+    (cut / "assets" / "v.transcript.json").unlink()
+    issues = [str(i) for i in D.check_data(cut, raw(cut))[1]]
+    assert any("[error] track cap.source" in i and "missing or unreadable" in i for i in issues)
+    assert any("[warning] assets.v.transcript" in i for i in issues)
+    data = raw(cut)
+    track(data, "cap")["source"] = "clip:nope"
+    assert any("no clip 'nope'" in str(i) for i in D.check_data(cut, data)[1])
+    track(data, "cap")["source"] = "words"
+    assert any('"voice" or "clip:<id>"' in str(i) for i in D.check_data(cut, data)[1])
+
+
+def test_join_words_spaces_latin_and_not_cjk():
+    assert R.join_words(["Hello", "there", ",", "you"]) == "Hello there, you"
+    assert R.join_words(["你好", "世界", "。"]) == "你好世界。"
+    assert R.join_words(["iPhone", "17", "发布"]) == "iPhone 17发布"
+
+
+def test_transcript_phrases_break_at_pauses_sentences_and_length():
+    def w(t, a, b):
+        return {"word": t, "a": a, "b": b}
+    out = R.transcript_phrases([w("one", 0, 0.2), w("two", 0.3, 0.5), w("three", 1.5, 1.8), w("four.", 1.9, 2.1),
+                                w("five", 2.2, 2.4), w("sixsix", 2.5, 2.7)], 12)
+    assert [R.join_words([x["word"] for x in ph]) for ph in out] == ["one two", "three four.", "five sixsix"]
+
+
+# ------------------------------------------------------------------ describe
+def test_describe_shows_markers_transcripts_transitions_and_sound(cut):
+    transcript(cut, WORDS)
+    caption_track(cut)
+    ok(cut, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.5"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "dip_black", "dur": 0.5}}},
+       {"op": "set_keyframes", "id": "m1", "prop": "volume", "frames": [{"t": 0, "v": 1}, {"t": 2, "v": 0.3}]},
+       {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "v1"}}})
+    text = R.describe(cut)
+    assert 'markers ("mark:NAME"): hit 4.50, late 6.50 (clip:c2+1)' in text
+    assert "transcript 8 words" in text and "transition dip_black 0.5s" in text
+    assert "vol kf(2)" in text and "ducks under v1 to 0.25" in text
+    assert "from the transcript of v through c1" in text
+    at = R.describe(cut, at=1)
+    assert "now: volume" in at and 'caption "' in at

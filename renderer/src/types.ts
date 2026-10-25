@@ -27,6 +27,14 @@ export type Preset = "fade" | "rise" | "drop" | "pop" | "wipe_left" | "wipe_up" 
 
 export type Transition = { preset: Preset; dur: number };
 
+export type CutType = "crossfade" | "dip_black" | "dip_white" | "wipe_left" | "wipe_right" | "wipe_up" | "slide_left" | "zoom";
+
+/** The clip's transition in from the clip before it on its track, over its first `dur` frames (it paints on top). */
+export type CutIn = { type: CutType; dur: number; from: string | null };
+
+/** The same transition seen from the clip it leaves: it starts `at` frames into this clip. */
+export type CutOut = { type: CutType; dur: number; at: number; to: string };
+
 export type FilterSpec = { blur?: number; brightness?: number; contrast?: number; saturate?: number; grayscale?: number };
 
 export type ClipStyle = {
@@ -85,6 +93,10 @@ export type VideoContent = {
   fit?: "cover" | "contain";
   focus?: [number, number] | null;
   volume?: number;
+  /** a volume curve (frames from the clip start) replacing `volume`; crossfade ramps in frames */
+  volumeKeys?: Keyframe[] | null;
+  fadeIn?: number;
+  fadeOut?: number;
 };
 
 export type TextContent = { runs: Run[]; style?: Partial<TextStyle> | null; reveal?: Reveal | null };
@@ -123,6 +135,8 @@ export type RClip = {
   keyframes?: Partial<Record<KeyframeProp, Keyframe[]>> | null;
   enter?: Transition | null;
   exit?: Transition | null;
+  transition?: CutIn | null;
+  transitionOut?: CutOut | null;
   // the shape depends on `type` (see the *Content types above)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   content: any;
@@ -143,6 +157,10 @@ export type CaptionTrack = {
 
 export type Track = VisualTrack | CaptionTrack | { id: string; kind: "audio"; hidden?: boolean };
 
+/** Frames from the item start where the duck's target sounds: the gain is `level` inside, eased over `fade` frames
+ *  before `start` and after `end`. */
+export type DuckRange = { start: number; end: number; level: number; fade: number };
+
 export type AudioItem = {
   id: string;
   src: string;
@@ -154,6 +172,9 @@ export type AudioItem = {
   fadeOut?: number;
   /** repeat the asset (from trimIn) until the clip ends */
   loop?: boolean;
+  /** a volume curve (frames from the item start) replacing `volume` */
+  volumeKeys?: Keyframe[] | null;
+  duck?: DuckRange[] | null;
 };
 
 export type Resolved = {

@@ -25,7 +25,8 @@ const Stage: React.FC<{ r: Resolved; mode: RenderMode }> = ({ r, mode }) => {
         if (track.kind === "visual") {
           return (
             <React.Fragment key={track.id}>
-              {((track as VisualTrack).clips ?? []).map((clip) =>
+              {/* in time order: a clip that transitions in paints over the clip it comes from */}
+              {[...((track as VisualTrack).clips ?? [])].sort((a, b) => (a?.from ?? 0) - (b?.from ?? 0)).map((clip) =>
                 clip && clip.dur > 0 ? (
                   <Sequence key={clip.id} from={Math.round(clip.from)} durationInFrames={Math.round(clip.dur)} layout="none" name={clip.id}>
                     <Element clip={{ ...clip, track: clip.track ?? track.id }} theme={theme} safe={safe} mode={mode} />
