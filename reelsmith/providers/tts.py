@@ -15,9 +15,10 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, rel, run_tree, safe_tool,
-                     set_voice_if_unset, tail, write_json)
-from .openrouter import KEY_NAME, OpenRouter, synthesize
+from .. import locales
+from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, project_locale, rel, run_tree,
+                     safe_tool, set_voice_if_unset, tail, write_json)
+from .openrouter import KEY_NAME, ZH_VOICE, OpenRouter, synthesize
 
 PACE = {"slower": 1.10, "normal": 1.25, "faster": 1.35}
 PACE_FACTOR = (0.5, 2.0)
@@ -71,8 +72,11 @@ class OpenRouterTTS(TTSEngine):
 
     def identity(self) -> str:
         c = self.cfg
-        return "|".join(["openrouter", str(c.get("model")), str(c.get("voice")), str(c.get("speed_scale") or 1),
-                         str(c.get("instructions") or "")])
+        parts = ["openrouter", str(c.get("model")), str(c.get("voice")), str(c.get("speed_scale") or 1),
+                 str(c.get("instructions") or "")]
+        if not locales.is_chinese(c.get("locale") or "zh"):
+            parts.append(locales.language(c["locale"]))         # its pace and mood words are not Chinese
+        return "|".join(parts)
 
     def check(self) -> None:
         _ = self.client
@@ -85,6 +89,17 @@ class OpenRouterTTS(TTSEngine):
 
 
 ENGINES = {"openrouter": lambda ctx, cfg: OpenRouterTTS(cfg, ctx.key(KEY_NAME))}
+
+
+def default_voice(cfg: dict, locale: str) -> str:
+    """providers.tts.voice, else the default model's Mandarin voice for a Chinese locale; ProviderError otherwise."""
+    if cfg.get("voice"):
+        return str(cfg["voice"])
+    if locales.is_chinese(locale):
+        return ZH_VOICE
+    raise ProviderError(f"no voice for locale {locale}: the default voice ({ZH_VOICE}) speaks Mandarin; set "
+                        f"providers.tts.voice in workspace.json to a voice of {cfg.get('model')} that speaks {locale} "
+                        "(or set the project's locale if the film is in Chinese)")
 
 
 def make_engine(ctx: Context) -> TTSEngine:
@@ -265,7 +280,10 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
     gap = number(gap_s, 0, MAX_GAP_S, "gap_s")
     cfg = ctx.providers["tts"]
     target = number(cfg.get("line_lufs", -12.0), -30, -6, "providers.tts.line_lufs")
-    engine = engine or make_engine(ctx)
+    if engine is None:
+        locale = project_locale(ctx)
+        cfg.update(voice=default_voice(cfg, locale), locale=locale)
+        engine = make_engine(ctx)
     cache = ctx.cache_dir / "tts"
     cache.mkdir(parents=True, exist_ok=True)
     with _project_lock(ctx):

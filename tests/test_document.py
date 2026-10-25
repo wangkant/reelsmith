@@ -339,14 +339,16 @@ def test_numbers_inside_a_clip_count_from_its_start(demo):
     assert find(issues_of(demo, data), "advice", "clip proof.highlight.at", "before the clip starts")
 
 
-def test_fonts_are_the_four_named_ones(demo):
+def test_fonts_are_the_built_in_ones_or_the_workspaces(demo):
     data = raw(demo)
     for font in D.FONTS:
         clip(data, "hook")["style"]["font"] = font
         assert not [i for i in issues_of(demo, data) if i.level == "error"], font
     clip(data, "hook")["style"]["font"] = "comic"
-    rows = schema(data)
-    assert any(r.startswith("clip hook.style.font: should be 'sans', 'serif', 'display' or 'zcool'") for r in rows)
+    data["tracks"][-1]["style"] = {"font": "comic"}
+    bad = [str(i) for i in issues_of(demo, data) if i.level == "error"]
+    assert len(bad) == 2 and "clip hook.style.font: unknown font 'comic': built-in sans, serif, display, zcool" in bad[0]
+    assert "library/fonts/<Family>.woff2" in bad[0] and bad[1].startswith("[error] track cap.style.font")
 
 
 def test_audio_clip_loop(demo):

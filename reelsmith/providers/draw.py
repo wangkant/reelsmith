@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import (Context, ProviderError, check_id, check_replaceable, context, existing_asset, exe,
-                     image_size, register_asset, run_tree, safe_tool, tail)
+                     image_size, project_profile, register_asset, run_tree, safe_tool, tail)
 from .ledger import utc_now
 
 TIMEOUT_S = 6 * 60
@@ -216,10 +216,16 @@ def make_provider(ctx: Context) -> ImageProvider:
 
 
 # ------------------------------------------------------------------ pictures
-def parse_size(size) -> tuple[tuple[int, int], tuple[int, int]]:
-    """(size asked of the generator, size delivered) from an aspect like "9:16", "WxH" or [w, h]."""
+def nearest_aspect(width: int, height: int) -> str:
+    """The ASPECTS key closest to width:height (compared as log ratios)."""
+    want = math.log(width / height)
+    return min(ASPECTS, key=lambda k: abs(math.log(int(k.split(":")[0]) / int(k.split(":")[1])) - want))
+
+
+def parse_size(size, default: str = "9:16") -> tuple[tuple[int, int], tuple[int, int]]:
+    """(size asked of the generator, size delivered) from an aspect like "9:16", "WxH" or [w, h]; empty: default."""
     if size in (None, ""):
-        size = "9:16"
+        size = default
     if isinstance(size, str) and size in ASPECTS:
         return ASPECTS[size]
     wh = None
@@ -317,7 +323,8 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
     prompt = str(prompt or "").strip()
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         return f"prompt must describe the picture in 1-{MAX_PROMPT_CHARS} characters", True
-    gen, out_size = parse_size(size)
+    profile = project_profile(ctx)
+    gen, out_size = parse_size(size, nearest_aspect(profile.width, profile.height) if profile else "9:16")
     ref = _style_ref(ctx, style_ref_asset)
     check_replaceable(ctx, asset_id, "image")
     cfg = ctx.providers["image"]

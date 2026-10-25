@@ -1,5 +1,6 @@
 {
   "profile": "douyin",
+  "locale": "zh-CN",
   "theme": {"accent": "#C8372D"},
   "providers": {
     "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "longanlufeng"},

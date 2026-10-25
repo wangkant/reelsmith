@@ -1,6 +1,6 @@
 // The captions track: already phrase-split and timed items, each shown in the track's box with its style over
 // caption defaults (white, heavy, fitted to one line, on a dark plate; a phrase too long for one line at the floor
-// size wraps between words).
+// size wraps between words). Sizes are written for a 1080 px short side and follow the canvas.
 import React from "react";
 import { Sequence, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Box, CaptionItem, CaptionTrack, TextStyle, Theme } from "../types";
@@ -12,13 +12,29 @@ export const CAPTION_DEFAULTS: TextStyle = {
   shadow: "0 2px 8px rgba(0,0,0,0.5)",
 };
 
-/** Without a box: a 200 px band at the bottom of the safe area. */
-export const captionBox = (track: CaptionTrack, safe: Box): Box =>
-  track.box && track.box.w > 0 && track.box.h > 0 ? track.box : { x: safe.x, y: safe.y + safe.h - 200, w: safe.w, h: 200 };
+/** The canvas's short side / 1080: what caption sizes are multiplied by. */
+export const canvasScale = (width: number, height: number): number =>
+  width > 0 && height > 0 ? Math.min(width, height) / 1080 : 1;
+
+/** CAPTION_DEFAULTS sized for the canvas. */
+export const captionDefaults = (scale: number): TextStyle =>
+  scale === 1
+    ? CAPTION_DEFAULTS
+    : {
+        ...CAPTION_DEFAULTS, max_size: Math.round(66 * scale), min_size: Math.round(36 * scale),
+        bg: { ...CAPTION_DEFAULTS.bg, radius: Math.round(14 * scale), pad: Math.round(14 * scale) },
+      };
+
+/** Without a box (resolve.py always sends the profile's): the safe area's bottom band, 200 px at scale 1. */
+export const captionBox = (track: CaptionTrack, safe: Box, scale = 1): Box => {
+  if (track.box && track.box.w > 0 && track.box.h > 0) return track.box;
+  const band = Math.min(safe.h, Math.round(200 * scale));
+  return { x: safe.x, y: safe.y + safe.h - band, w: safe.w, h: band };
+};
 
 const Item: React.FC<{ item: CaptionItem; track: CaptionTrack; box: Box; theme: Theme }> = ({ item, track, box, theme }) => {
   const f = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   const pop = spring({ frame: f, fps, config: { damping: 18, stiffness: 240 }, durationInFrames: 8 });
   return (
     <div
@@ -29,15 +45,16 @@ const Item: React.FC<{ item: CaptionItem; track: CaptionTrack; box: Box; theme: 
       }}
     >
       <TextBlock
-        runs={item.runs ?? []} style={track.style} base={CAPTION_DEFAULTS} w={box.w} h={box.h} theme={theme} fps={fps}
-        maxLines={1}
+        runs={item.runs ?? []} style={track.style} base={captionDefaults(canvasScale(width, height))} w={box.w} h={box.h}
+        theme={theme} fps={fps} maxLines={1}
       />
     </div>
   );
 };
 
 export const Captions: React.FC<{ track: CaptionTrack; safe: Box; theme: Theme }> = ({ track, safe, theme }) => {
-  const box = captionBox(track, safe);
+  const { width, height } = useVideoConfig();
+  const box = captionBox(track, safe, canvasScale(width, height));
   return (
     <>
       {(track.items ?? []).map((item, i) =>

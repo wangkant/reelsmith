@@ -1,11 +1,12 @@
-"""capture: an evidence screenshot of a public web page at phone width, with the box of the sentence that proves it.
+"""capture: an evidence screenshot of a public web page, with the box of the sentence that proves it.
 
 Playwright drives a Chromium browser (installed Microsoft Edge, else installed Google Chrome, else Playwright's own
-Chromium) with a 430 CSS px layout viewport at 3x DPR. All of the browser's traffic goes through a
-netcheck.GuardProxy, so neither the page nor its redirects, frames or scripts reach local or private addresses.
-The page's fixed and sticky overlays are hidden, a text column wider than the phone is reflowed to it, the deepest
-visible element holding the match is found, the match grows to its sentence (whole lines of the text column), the
-crop widens to a readable block, and the box comes back in the PNG's own pixels.
+Chromium) at a phone viewport (430 CSS px at 3x DPR) or a desktop one (1440 CSS px at 2x), in the project's locale.
+All of the browser's traffic goes through a netcheck.GuardProxy, so neither the page nor its redirects, frames or
+scripts reach local or private addresses. The page's fixed and sticky overlays are hidden, a text column wider than
+the viewport is reflowed to it, the deepest visible element holding the match is found, the match grows to its
+sentence (whole lines of the text column), the crop widens to a readable block, and the box comes back in the PNG's
+own pixels.
 """
 from __future__ import annotations
 
@@ -16,18 +17,26 @@ import threading
 from pathlib import Path
 
 from .. import netcheck
-from .config import (ProviderError, check_id, check_replaceable, context, header_size, read_project, register_asset,
-                     rel, safe_tool)
+from .. import locales
+from .config import (ProviderError, check_id, check_replaceable, context, header_size, project_locale,
+                     project_profile, read_project, register_asset, rel, safe_tool)
 
 VIEWPORT = {"width": 430, "height": 932}
 DEVICE_SCALE = 3
+DESKTOP_VIEWPORT = {"width": 1440, "height": 900}
+DESKTOP_SCALE = 2
 TIMEOUT_MS = 30000
 PAD_CSS = 14
 MAX_MATCH_CHARS = 200
 MAX_BOX_LINES = 4           # a longer sentence is boxed on the match's own lines
-READABLE_PX = 40            # the house minimum for text on the 1080-wide canvas
+READABLE_PX = 40            # the house minimum for text at a 1080 px short side (scaled to the canvas)
 MOBILE_UA = ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
              "Chrome/141.0.0.0 Mobile Safari/537.36")
+DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/141.0.0.0 Safari/537.36")
+# viewport name -> (layout viewport, device scale, user agent, touch)
+VIEWPORTS = {"phone": (VIEWPORT, DEVICE_SCALE, MOBILE_UA, True),
+             "desktop": (DESKTOP_VIEWPORT, DESKTOP_SCALE, DESKTOP_UA, False)}
 # WebRTC would otherwise open UDP around the proxy
 LAUNCH_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 # Playwright channels in order of preference; None is the Chromium that `playwright install chromium` downloads
@@ -245,15 +254,23 @@ def launch_browser(chromium, proxy: str):
     raise ProviderError(INSTALL_HINT)
 
 
-def capture_page(p, url: str, match: str, out: Path, guard) -> dict:
+def default_viewport(profile) -> str:
+    """phone for vertical and portrait canvases, desktop for landscape and square ones."""
+    return "phone" if profile is None or profile.orientation == "portrait" else "desktop"
+
+
+def capture_page(p, url: str, match: str, out: Path, guard, viewport: str = "phone",
+                 locale: str = locales.DEFAULT_LOCALE) -> dict:
     """One browser session behind `guard`: {"error"} | {"miss", "final_url"} | the FIND_JS result plus final_url."""
     browser = launch_browser(p.chromium, guard.address)
     try:
+        size, scale, agent, touch = VIEWPORTS[viewport]
         # not is_mobile: mobile emulation lays a page without a fitting meta viewport out at 980 px (or its content
-        # width) and zooms out, so crops came out ~630 CSS px wide; a 430 px desktop viewport keeps the layout at 430
-        context = browser.new_context(viewport=VIEWPORT, device_scale_factor=DEVICE_SCALE, is_mobile=False,
-                                      has_touch=True, user_agent=MOBILE_UA, locale="zh-CN",
-                                      timezone_id="Asia/Shanghai")
+        # width) and zooms out, so crops came out ~630 CSS px wide; a 430 px desktop viewport keeps the layout at 430.
+        # The locale sets navigator.language and Accept-Language.
+        zone = {"timezone_id": "Asia/Shanghai"} if locales.is_chinese(locale) else {}
+        context = browser.new_context(viewport=size, device_scale_factor=scale, is_mobile=False, has_touch=touch,
+                                      user_agent=agent, locale=locale, **zone)
         page = context.new_page()
         page.set_default_timeout(TIMEOUT_MS)
         response = page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
@@ -291,11 +308,12 @@ def box_in_pixels(info: dict, size: tuple[int, int], scale: float = DEVICE_SCALE
     return [int(round(x0)), int(round(y0)), int(round(x1 - x0)), int(round(y1 - y0))]
 
 
-def readable_width(font_css: float, box_w: int, scale: float = DEVICE_SCALE) -> int | None:
-    """How wide (canvas px) the box must be shown for its text to stand READABLE_PX tall; None when unknown."""
+def readable_width(font_css: float, box_w: int, scale: float = DEVICE_SCALE,
+                   readable: float = READABLE_PX) -> int | None:
+    """How wide (canvas px) the box must be shown for its text to stand `readable` px tall; None when unknown."""
     if not font_css or font_css <= 0 or box_w <= 0:
         return None
-    return int(math.ceil(READABLE_PX * box_w / (font_css * scale)))
+    return int(math.ceil(readable * box_w / (font_css * scale)))
 
 
 def _next_id(ctx) -> str:
@@ -321,10 +339,17 @@ def _refused_text(rows: list[str]) -> str:
 
 
 @safe_tool
-def capture(project, url, match="", id="", *, sync_playwright=None, proxy="default", resolve=None, trusted=()):
+def capture(project, url, match="", id="", viewport=None, *, sync_playwright=None, proxy="default", resolve=None,
+            trusted=()):
     """(text, is_error): assets/<id>.png evidence of a public web page, its box around the sentence that holds
-    `match` (whole lines of the text column; the headline when match is empty)."""
+    `match` (whole lines of the text column; the headline when match is empty). viewport "phone" or "desktop";
+    None follows the canvas."""
     ctx = context(project)
+    profile = project_profile(ctx)
+    viewport = viewport or default_viewport(profile)
+    if viewport not in VIEWPORTS:
+        return f"viewport must be one of {', '.join(VIEWPORTS)} (or empty to follow the canvas)", True
+    locale = project_locale(ctx)
     url = str(url or "").strip()
     if not re.match(r"^https?://[^\s/]+", url):
         return "url must be a public web page address starting with http:// or https://", True
@@ -351,7 +376,7 @@ def capture(project, url, match="", id="", *, sync_playwright=None, proxy="defau
     out = ctx.assets_dir / f"{asset_id}.png"
     part = ctx.assets_dir / f".{asset_id}.capture.png"
     try:
-        info = _run_browser(sync_playwright, url, match, part, proxy, resolve, trusted)
+        info = _run_browser(sync_playwright, url, match, part, proxy, resolve, trusted, viewport, locale)
         if info.get("error"):
             return info["error"], True
         if "miss" in info:
@@ -362,7 +387,8 @@ def capture(project, url, match="", id="", *, sync_playwright=None, proxy="defau
         part.replace(out)
     finally:
         part.unlink(missing_ok=True)
-    box = box_in_pixels(info, size)
+    scale = VIEWPORTS[viewport][1]
+    box = box_in_pixels(info, size, scale)
     note = " | ".join(x for x in (str(info.get("title") or "").strip()[:120],
                                   str(info.get("excerpt") or "").strip()[:240]) if x)
     entry = {"path": rel(ctx, out), "kind": "evidence", "box": box, "site": str(info.get("site") or "")[:80],
@@ -374,16 +400,18 @@ def capture(project, url, match="", id="", *, sync_playwright=None, proxy="defau
         "the matched text" if match else "the headline"
     if info.get("cut"):
         what = f"the match's own lines (its sentence runs over {MAX_BOX_LINES} lines)"
-    rows = [f"Evidence {asset_id!r}: {entry['path']}, {size[0]}x{size[1]} px.{reg}",
+    rows = [f"Evidence {asset_id!r}: {entry['path']}, {size[0]}x{size[1]} px ({viewport} viewport).{reg}",
             f"Source: {info.get('title')} ({entry['site']}) {url}{moved}",
             f"It shows: {info.get('excerpt')}",
             f"Box of {what} (x, y, w, h in the image's pixels, whole lines of the text column): {box}. That is the "
             "part to enlarge and highlight."]
-    need = readable_width(float(info.get("font_px") or 0), box[2])
+    readable = READABLE_PX * (profile.scale if profile else 1.0)
+    need = readable_width(float(info.get("font_px") or 0), box[2], scale, readable)
     if need:
-        at840 = READABLE_PX * 840 / need
+        wide = profile.safe.w if profile else 840
         rows.append(f"Its text is {float(info['font_px']):.0f} CSS px: the box must be shown at least {need} px wide "
-                    f"for it to stand {READABLE_PX} px tall (at 840 px wide: {at840:.0f} px).")
+                    f"for it to stand {readable:.0f} px tall (at {wide} px wide, the safe area's width: "
+                    f"{readable * wide / need:.0f} px).")
     if info.get("refused"):
         rows.append(f"Blocked while loading (local or private addresses): {_refused_text(info['refused'])}.")
     rows.append("Look at the PNG once to confirm it is clear and not covered, and add the page to meta.sources.")
@@ -406,14 +434,15 @@ def _browser_error(exc: Exception, guard) -> Exception:
     return exc
 
 
-def _run_browser(sync_playwright, url, match, out, proxy, resolve=None, trusted=()) -> dict:
+def _run_browser(sync_playwright, url, match, out, proxy, resolve=None, trusted=(), viewport="phone",
+                 locale=locales.DEFAULT_LOCALE) -> dict:
     with _LOCK:
         with sync_playwright() as p:
             upstream = proxy
             while True:
                 with netcheck.GuardProxy(upstream, resolve=resolve, trusted=trusted) as guard:
                     try:
-                        info = capture_page(p, url, match, out, guard)
+                        info = capture_page(p, url, match, out, guard, viewport, locale)
                     except Exception as exc:  # noqa: BLE001
                         if upstream and guard.upstream_failed:
                             upstream = None                 # the outbound proxy is down: go direct

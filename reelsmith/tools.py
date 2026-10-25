@@ -9,10 +9,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from . import locales
 from . import render as R
 from .checks import check_project
 from .media import run_tree
-from .profiles import get_profile
+from .profiles import ProfileError, choose, parse_canvas
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,7 +22,7 @@ KIT_DOC = ROOT / "docs" / "kit.md"
 MAX_NOTE_CHARS = 4000
 MAX_NOTES_SHOWN = 30000
 MAX_LINES = 60
-SHEET_KEY = "dark bands = the platform's UI, yellow line = the safe area"
+SHEET_KEY = "dark bands = outside the safe area (the platform's UI or the title-safe margin), yellow line = its edge"
 TYPECHECK_TIMEOUT_S = 5 * 60
 
 
@@ -255,15 +256,35 @@ def note(project: str, text: str) -> str:
 
 # ------------------------------------------------------------------ editing
 @tool
-def new_project(project: str, profile: str = "", title: str = "") -> str:
+def new_project(project: str, profile: str = "", title: str = "", canvas: str = "", locale: str = "") -> str:
     """Create a project folder with an empty project.json (no tracks yet), assets/, voice/ and script.md.
-    Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys."""
+    Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys. profile: a profile name
+    (landscape, vertical, square, portrait, youtube, douyin, douyin-long, tiktok, shorts, reels or one of the
+    workspace's); empty takes the workspace's (else landscape). canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" (e.g.
+    "1920x1080@25") for a canvas of your own, starting from `profile` (or the workspace's): its safe area scales to
+    the new size. locale: the film's language as a BCP-47 tag
+    ("en", "zh-CN", "ja"); empty takes the workspace's (else en)."""
     root = _project(project, must_exist=False)
     if (root / PROJECT_FILE).is_file():
         return _fail(f"{root / PROJECT_FILE} already exists: edit it instead")
-    if profile:
-        get_profile(profile)
-    doc = {"version": 2, **({"profile": profile} if profile else {}),
+    ws = find_workspace(root)
+    custom, own = (ws.profiles, ws.config.get("profile")) if ws else (None, None)
+    value = None
+    try:
+        if canvas:
+            base = profile or (own if isinstance(own, str) else "")
+            value = {**({"base": base} if base else {}), **parse_canvas(canvas)}
+        elif profile:
+            value = profile
+        made = choose(value, own, custom)
+    except ProfileError as exc:
+        raise ToolInputError(str(exc)) from None
+    if locale:
+        try:
+            locale = locales.check(locale)
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from None
+    doc = {"version": 2, **({"profile": value} if value else {}), **({"locale": locale} if locale else {}),
            "meta": {"title": title, "desc": "", "topic": "", "shape": "", "sources": []}, "assets": {}, "tracks": []}
     for sub in ("assets", "voice"):
         (root / sub).mkdir(parents=True, exist_ok=True)
@@ -273,9 +294,10 @@ def new_project(project: str, profile: str = "", title: str = "") -> str:
     script = root / "script.md"
     if not script.exists():
         script.write_text("# Research, sources and script\n", encoding="utf-8", newline="\n")
-    ws = find_workspace(root)
     where = f"in workspace {ws.root}" if ws else "outside any workspace (no library, default rules, keys from env)"
-    return f"created {root / PROJECT_FILE} {where}"
+    s = made.safe
+    return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {made.fps} fps, safe area "
+            f"x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
 
 
 def _ops_arg(ops) -> list[dict]:
@@ -363,7 +385,7 @@ def preview(project: str, times: list[float | str] = [], sweep: bool = False) ->
     rows.append(f"{len(res['frames'])} still(s) of a {res['duration_s']} s film at {res['fps']:g} fps (look with Read):")
     rows += [f"- {f['t']:.2f}s (frame {f['frame']}): {f['png']}" for f in res["frames"]]
     if res.get("contact"):
-        rows.append(f"contact sheet ({SHEET_KEY}; words there are hidden on a phone): {res['contact']}")
+        rows.append(f"contact sheet ({SHEET_KEY}; keep words out of the dark bands): {res['contact']}")
     rows += _layout_rows(res.get("layout") or [])
     rows += [f"note: {n}" for n in res.get("notes") or []]
     if res.get("browserErrors"):
@@ -425,8 +447,8 @@ def render(project: str) -> str:
 
 @tool
 def review(project: str, n: int = 12) -> str:
-    """Evenly spaced frames (2-24) from the delivered out/film.mp4 and a contact sheet, to judge the film as a phone
-    viewer would."""
+    """Evenly spaced frames (2-24) from the delivered out/film.mp4 and a contact sheet, to judge the film as a viewer
+    would."""
     res = R.review(_project(project), n)
     rows = [f"{len(res['frames'])} frame(s) of {res['film']} ({res['duration_s']} s), look with Read:"]
     rows += [f"- {f['t']:.2f}s: {f['png']}" for f in res["frames"]]
@@ -532,19 +554,24 @@ def speak(project: str, lines: list[str | dict], gap_s: float = 0.22) -> str:
 
 
 @tool
-def capture(project: str, url: str, id: str, match: str = "") -> str:
-    """Screenshot a web page at phone width as evidence asset `id` (assets/<id>.png), boxing the sentence that
-    contains `match` (a short exact phrase from the page, 8-20 characters is safest; empty boxes the title)."""
+def capture(project: str, url: str, id: str, match: str = "", viewport: str = "") -> str:
+    """Screenshot a web page as evidence asset `id` (assets/<id>.png), boxing the sentence that contains `match` (a
+    short exact phrase from the page, 8-20 characters is safest; empty boxes the title). viewport: "phone" (430 CSS
+    px wide) or "desktop" (1440 CSS px wide); empty follows the canvas (phone for vertical and portrait, desktop for
+    landscape and square)."""
     if not re.match(r"^https?://", url or ""):
         raise ToolInputError("url must start with http:// or https://")
-    return _provider("capture", _project(project), url=url, match=match or None, id=_id_arg(id))
+    if viewport not in ("", "phone", "desktop"):
+        raise ToolInputError('viewport must be "phone", "desktop" or empty (follow the canvas)')
+    return _provider("capture", _project(project), url=url, match=match or None, id=_id_arg(id),
+                     viewport=viewport or None)
 
 
 @tool
 def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "") -> str:
     """Generate an original image asset `id` from `prompt` (optionally in the style of an image asset). size: an
-    aspect "9:16" (default, 1080x1920), "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9", or pixels "WxH" with
-    sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes)."""
+    aspect "9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9" (default: the one nearest the project's canvas),
+    or pixels "WxH" with sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes)."""
     if not (prompt or "").strip():
         raise ToolInputError("prompt is empty: describe the picture")
     return _provider("draw", _project(project), id=_id_arg(id), prompt=prompt,

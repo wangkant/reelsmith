@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from reelsmith import workspace as W
-from reelsmith.profiles import DOUYIN, TIKTOK
+from reelsmith.profiles import DOUYIN, LANDSCAPE, TIKTOK
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "workspace"
 
@@ -41,7 +41,8 @@ def test_find_workspace_accepts_project_json_path_and_missing_folder(tmp_path):
 def test_outside_any_workspace(tmp_path):
     assert W.find_workspace(tmp_path / "lonely") is None
     assert W.rules_for(tmp_path / "lonely") == W.DEFAULT_RULES
-    assert W.profile_for(tmp_path / "lonely") is DOUYIN
+    assert W.profile_for(tmp_path / "lonely") is LANDSCAPE
+    assert W.locale_for(tmp_path / "lonely") == "en"
 
 
 def test_workspace_paths(tmp_path):
@@ -57,11 +58,11 @@ def test_workspace_paths(tmp_path):
 def test_rules_merge_defaults(tmp_path):
     ws = W.Workspace.load(make_ws(tmp_path / "ws", rules={"hard": {"max_title": 18, "banned": ["x"]},
                                                           "advice": {"hook_seconds": 3}, "custom": 1}))
-    assert ws.rules["hard"] == {"max_title": 18, "max_title_numbers": 2, "min_sources": 1, "banned": ["x"]}
-    assert ws.rules["advice"]["hook_seconds"] == 3
-    assert ws.rules["advice"]["max_same_visual_s"] == 8
+    assert ws.rules["hard"] == {"max_title": 18, "banned": ["x"]}          # nothing the owner did not set
+    assert ws.rules["advice"] == {"hook_seconds": 3}
     assert ws.rules["custom"] == 1
-    assert W.DEFAULT_RULES["hard"]["max_title"] == 24          # defaults untouched
+    assert W.DEFAULT_RULES == {"hard": {}, "advice": {}}       # defaults untouched
+    assert W.merge_rules({"advice": {"target_s": True}})["advice"]["target_s"] is True
 
 
 @pytest.mark.parametrize("rules, fragment", [

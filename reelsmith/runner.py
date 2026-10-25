@@ -180,8 +180,9 @@ def key_for(ws, name: str) -> str:
 def system_append(project: Path, ws) -> str:
     notes = ws.notes_path if ws is not None else None
     rows = [
-        "You are making a vertical short in this project with the reelsmith tools. Nobody is online: every choice "
-        "is yours (topic angle, script, voice, pictures, edit); write your reasons in script.md.",
+        "You are making a film in this project with the reelsmith tools (describe shows its canvas and locale). "
+        "Nobody is online: every choice is yours (topic angle, script, voice, pictures, edit); write your reasons "
+        "in script.md.",
         f"Read the manual first ({MANUAL}, or the manual tool), then the notes"
         + (f" ({notes})" if notes else "") + " for what worked before.",
         f"Project: {project}. Pass it as `project` to every reelsmith tool.",

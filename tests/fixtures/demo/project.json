@@ -1,5 +1,7 @@
 {
  "version": 2,
+ "profile": "douyin",
+ "locale": "zh-CN",
  "meta": {"title": "一杯奶茶的成本", "desc": "一杯奶茶，算完账才知道钱去哪了 #奶茶", "topic": "奶茶成本拆解",
           "shape": "receipt explainer, verdict at the end",
           "sources": [{"title": "示例来源", "url": "https://example.com/milk-tea-cost"}]},

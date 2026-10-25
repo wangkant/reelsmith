@@ -311,9 +311,9 @@ def test_one_segmenter_call_per_resolve_then_the_cache(demo, monkeypatch):
     calls = []
     real = R._node_words
 
-    def counting(texts):
+    def counting(texts, locale="en"):
         calls.append(list(texts))
-        return real(texts) if shutil.which("node") else [R.char_words(t) for t in texts]
+        return real(texts, locale) if shutil.which("node") else [R.char_words(t) for t in texts]
     monkeypatch.setattr(R, "_node_words", counting)
     monkeypatch.setattr(R, "_WORDS", {})
     R.resolve(demo)
@@ -334,7 +334,7 @@ def test_one_segmenter_call_per_resolve_then_the_cache(demo, monkeypatch):
 
 
 def test_captions_without_node_use_the_fallback(demo, monkeypatch):
-    monkeypatch.setattr(R, "_node_words", lambda texts: None)
+    monkeypatch.setattr(R, "_node_words", lambda texts, locale="en": None)
     monkeypatch.setattr(R, "_WORDS", {})
     items = rtrack(R.resolve(demo), "cap")["items"]
     assert ["".join(r["text"] for r in it["runs"]) for it in items][:3] == ["一杯十八块的奶茶", "成本到底多少钱",
@@ -440,7 +440,8 @@ def test_media_duration_tolerates_failure(tmp_path):
 # ------------------------------------------------------------------ describe
 def test_describe_window(demo):
     text = R.describe(demo)
-    assert text.startswith("project demo: douyin 1080x1920 30 fps; safe area x 40-880, y 220-1460")
+    assert text.startswith("project demo: douyin 1080x1920 30 fps, portrait; safe area x 40-880, y 220-1460 (the "
+                           "platform's UI covers the rest); locale zh-CN")
     assert "duration 21.80 s (654 frames, voice end + 0.6 s)" in text
     assert "  [3] 5.62-8.00 茶底加奶，大约两块五。" in text
     assert "    shop video 5.62-11.62 (line:3 -> line:5)  [full]  asset clip cover trim 0.5s loop" in text
@@ -544,7 +545,7 @@ def test_describe_shows_theme_caption_box_and_every_phrase(demo):
     text = R.describe(demo)
     assert "theme paper (a colour may name a token): paper #F3EBDD, ink #1E1A16, night #16130F" in text
     assert "accent #C8372D" in text
-    assert ("box 40,1260 840x200, y 1260-1460 (default: the bottom 200 px of the safe area)" in text)
+    assert "box 40,1260 840x200, y 1260-1460 (default: douyin's captions band)" in text
     lines = text.splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("  cap (captions)"))
     rows = lines[start + 1:start + 15]

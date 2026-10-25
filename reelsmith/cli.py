@@ -41,8 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     cmd("manual", tools.manual)
     proj(cmd("describe", tools.describe)).add_argument("--at", help="seconds or a Time, e.g. line:3")
     p = proj(cmd("new", tools.new_project, "new_project"))
-    p.add_argument("--profile", default="")
+    p.add_argument("--profile", default="", help="a profile name (default: the workspace's, else landscape)")
     p.add_argument("--title", default="")
+    p.add_argument("--canvas", default="", help="WIDTHxHEIGHT[@FPS] for a canvas of your own, e.g. 1920x1080@25")
+    p.add_argument("--locale", default="", help="the film's language, a BCP-47 tag (en, zh-CN, ja)")
     proj(cmd("edit", tools.edit)).add_argument("ops", help="JSON list of ops, @file.json, or - for stdin")
     proj(cmd("undo", tools.undo)).add_argument("--steps", type=int, default=1)
     proj(cmd("check", tools.check))
@@ -59,11 +61,14 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("url")
     p.add_argument("id")
     p.add_argument("--match", default="")
+    p.add_argument("--viewport", default="", choices=["", "phone", "desktop"],
+                   help="default: phone for vertical and portrait canvases, desktop for landscape and square")
     p = proj(cmd("draw", tools.draw))
     p.add_argument("id")
     p.add_argument("prompt")
     p.add_argument("--style-ref", default="", dest="style_ref_asset")
-    p.add_argument("--size", default="", help="9:16 (default), 2:3, 3:4, 4:5, 1:1, 4:3, 3:2, 16:9 or WxH pixels")
+    p.add_argument("--size", default="", help="9:16, 2:3, 3:4, 4:5, 1:1, 4:3, 3:2, 16:9 or WxH pixels "
+                                              "(default: the aspect nearest the canvas)")
     p = proj(cmd("animate", tools.animate))
     p.add_argument("id")
     p.add_argument("image_asset")
@@ -91,7 +96,7 @@ def _call(args) -> tools.ToolResult:
     if c == "describe":
         return tools.describe(args.project, args.at)
     if c in ("new", "new_project"):
-        return tools.new_project(args.project, args.profile, args.title)
+        return tools.new_project(args.project, args.profile, args.title, args.canvas, args.locale)
     if c == "edit":
         return tools.edit(args.project, _text_arg(args.ops))
     if c == "undo":
@@ -105,7 +110,7 @@ def _call(args) -> tools.ToolResult:
     if c == "speak":
         return tools.speak(args.project, _lines_arg(args.lines), args.gap_s)
     if c == "capture":
-        return tools.capture(args.project, args.url, args.id, args.match)
+        return tools.capture(args.project, args.url, args.id, args.match, args.viewport)
     if c == "draw":
         return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size)
     if c == "animate":

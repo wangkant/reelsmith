@@ -16,7 +16,7 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Callable
 
-from .. import guard, netcheck
+from .. import guard, locales, netcheck
 
 FETCH_TIMEOUT_S = 30
 SEARCH_TIMEOUT_S = 20
@@ -177,15 +177,15 @@ def default_proxy() -> str | None:
     return found
 
 
-def _open(url: str, upstream: str | None, resolve, trusted, connect, timeout: float):
+def _open(url: str, upstream: str | None, resolve, trusted, connect, timeout: float,
+          language: str = locales.accept_language(locales.DEFAULT_LOCALE)):
     """(status, headers, body bytes, final url) through a GuardProxy; FetchError when it cannot be fetched."""
     while True:
         with netcheck.GuardProxy(upstream, resolve=resolve, trusted=trusted, connect=connect) as gp:
             hostport = gp.address.split("//", 1)[1]
             # an empty ProxyHandler: no environment or registry proxy may route around the guard
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _ThroughGuard(hostport))
-            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": ACCEPT,
-                                                       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": ACCEPT, "Accept-Language": language})
             req.set_proxy(hostport, "http")
             try:
                 with opener.open(req, timeout=timeout) as resp:
@@ -223,9 +223,9 @@ def _open(url: str, upstream: str | None, resolve, trusted, connect, timeout: fl
 
 
 def fetch(url: str, max_chars: int = DEFAULT_CHARS, *, proxy: str | None = None, resolve=None, trusted=(),
-          connect=None, timeout: float = FETCH_TIMEOUT_S) -> tuple[str, bool]:
-    """(text, is_error): a public http(s) page as readable text, cut at max_chars. proxy None: the environment's
-    proxy, "" direct. resolve, trusted and connect are netcheck's hooks (tests)."""
+          connect=None, timeout: float = FETCH_TIMEOUT_S, locale: str = locales.DEFAULT_LOCALE) -> tuple[str, bool]:
+    """(text, is_error): a public http(s) page as readable text, cut at max_chars, asked for in `locale` first.
+    proxy None: the environment's proxy, "" direct. resolve, trusted and connect are netcheck's hooks (tests)."""
     url = str(url or "").strip()
     why = guard.check_url(url)
     if why:
@@ -241,7 +241,8 @@ def fetch(url: str, max_chars: int = DEFAULT_CHARS, *, proxy: str | None = None,
         limit = DEFAULT_CHARS
     limit = min(MAX_CHARS, max(MIN_CHARS, limit))
     try:
-        status, headers, raw, final = _open(url, upstream, resolve, trusted, connect, timeout)
+        status, headers, raw, final = _open(url, upstream, resolve, trusted, connect, timeout,
+                                            locales.accept_language(locale))
     except FetchError as exc:
         return str(exc), True
     ctype = str(headers.get("Content-Type") or "").lower() if headers else ""

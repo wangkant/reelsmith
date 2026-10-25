@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import struct
@@ -17,13 +18,12 @@ import subprocess
 from pathlib import Path
 
 from . import document as D
-from . import library
+from . import library, locales
 from . import timeexpr as T
 from .issues import Issue
-from .workspace import project_paths, project_root
+from .workspace import WorkspaceError, find_workspace, project_paths, project_root
 
 PHRASE_MIN = 4
-CAPTION_BAND = 200          # px: without a box, captions sit in this band at the bottom of the safe area (Captions.tsx)
 _BREAK = re.compile(r"(?:[，。！？；：、!?;:…\n]|(?<!\d)[.,]|[.,](?!\d))+")
 _CLOSERS = "”’」』）》】〕〉)]}"               # stay with the text before them
 _OPENERS = "“‘「『（《【〔〈([{"               # stay with the text after them
@@ -40,6 +40,9 @@ _ENDERS = set("的了着过吗呢吧啊呀么")                     # a phrase m
 _STARTERS = set("是和与及而但却把被在从对向给让就都也还又再或跟比按为因由将到于很太最更不没这那")
 _START_WORDS = ("所以", "因为", "如果", "然后", "但是", "可是", "不过", "而且", "并且", "或者", "其实", "结果")
 _FUNCTION = _ENDERS | _STARTERS
+# English words that lead into what follows them: a phrase does not end on one
+_LATIN_LEADS = {"a", "an", "the", "of", "to", "in", "on", "at", "for", "and", "or", "but", "with", "from", "by",
+                "into", "than"}
 TEXT_DEFAULTS = {"font": "sans", "size": 64, "max_size": 160, "min_size": 28, "weight": 700, "color": None,
                  "accent": None, "align": "left", "valign": "top", "line_height": 1.15, "letter_spacing": 0,
                  "wrap": True, "balance": False, "stroke": None, "shadow": False, "bg": None}
@@ -279,10 +282,11 @@ def _segments(text: str) -> list[tuple[int, int]]:
     return out
 
 
-# words: segment.mjs (Intl.Segmenter "zh") once per resolve, cached; characters when node cannot be used
-_WORDS: dict[str, list[int]] = {}               # plain text -> word lengths in code points
+# words: segment.mjs (Intl.Segmenter in the project's locale) once per resolve, cached; characters without node
+_WORDS: dict[tuple[str, str], list[int]] = {}   # (locale, plain text) -> word lengths in code points
 _NODE = {"hung": False}                         # a node call timed out once: do not wait on it again
 SEGMENT_CACHE = "segments.json"                 # in the project's build/: {"version", "words": {sha1: lengths}}
+SEGMENT_VERSION = 2                             # 2: keyed by locale and text
 SEGMENT_CACHE_MAX = 4000
 _CHAR_WORD = re.compile(r"[A-Za-z0-9]+(?:[.,'’-][A-Za-z0-9]+)*|\s+|.", re.S)
 
@@ -297,16 +301,17 @@ def _fits(text: str, lengths) -> bool:
             and sum(lengths) == len(text))
 
 
-def _node_words(texts: list[str]) -> list[list[int]] | None:
+def _node_words(texts: list[str], locale: str = locales.DEFAULT_LOCALE) -> list[list[int]] | None:
     """Word lengths per text from renderer/scripts/segment.mjs in one node call; None when node cannot be used."""
     node = shutil.which("node")
     script = library.renderer_dir() / "scripts" / "segment.mjs"
     if _NODE["hung"] or not node or not script.is_file():
         return None
     from .media import NO_WINDOW
+    payload = json.dumps({"texts": texts, "locale": locale}, ensure_ascii=False).encode()
     try:
-        proc = subprocess.run([node, str(script)], input=json.dumps({"texts": texts}, ensure_ascii=False).encode(),
-                              capture_output=True, timeout=30, creationflags=NO_WINDOW)
+        proc = subprocess.run([node, str(script)], input=payload, capture_output=True, timeout=30,
+                              creationflags=NO_WINDOW)
         words = json.loads(proc.stdout.decode("utf-8"))["words"]
     except subprocess.TimeoutExpired:
         _NODE["hung"] = True
@@ -318,8 +323,8 @@ def _node_words(texts: list[str]) -> list[list[int]] | None:
     return words if all(_fits(t, w) for t, w in zip(texts, words)) else None
 
 
-def _key(text: str) -> str:
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+def _key(text: str, locale: str = locales.DEFAULT_LOCALE) -> str:
+    return hashlib.sha1(f"{locale}\n{text}".encode("utf-8")).hexdigest()
 
 
 def _read_segment_cache(path: Path) -> dict:
@@ -327,35 +332,37 @@ def _read_segment_cache(path: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    words = data.get("words") if isinstance(data, dict) and data.get("version") == 1 else None
+    ok = isinstance(data, dict) and data.get("version") == SEGMENT_VERSION
+    words = data.get("words") if ok else None
     return words if isinstance(words, dict) else {}
 
 
-def word_breaks(texts, cache_dir: Path | None = None) -> dict[str, list[int] | None]:
-    """{text: word lengths} for caption texts: from memory, then <cache_dir>/segments.json, then one node call for the
-    rest; None for texts node could not segment (the phrase splitter then works on characters)."""
+def word_breaks(texts, cache_dir: Path | None = None,
+                locale: str = locales.DEFAULT_LOCALE) -> dict[str, list[int] | None]:
+    """{text: word lengths} for caption texts in `locale`: from memory, then <cache_dir>/segments.json, then one node
+    call for the rest; None for texts node could not segment (the phrase splitter then works on characters)."""
     want = [t for t in dict.fromkeys(texts) if t]
-    out: dict[str, list[int] | None] = {t: _WORDS[t] for t in want if t in _WORDS}
+    out: dict[str, list[int] | None] = {t: _WORDS[(locale, t)] for t in want if (locale, t) in _WORDS}
     missing = [t for t in want if t not in out]
     path = Path(cache_dir) / SEGMENT_CACHE if cache_dir is not None else None
     disk = _read_segment_cache(path) if missing and path else {}
     for t in missing:
-        if _fits(t, disk.get(_key(t))):
-            out[t] = _WORDS[t] = disk[_key(t)]
+        if _fits(t, disk.get(_key(t, locale))):
+            out[t] = _WORDS[(locale, t)] = disk[_key(t, locale)]
     missing = [t for t in missing if t not in out]
     if not missing:
         return out
-    words = _node_words(missing)
+    words = _node_words(missing, locale)
     for n, t in enumerate(missing):
         out[t] = words[n] if words is not None else None
         if words is not None:
-            _WORDS[t] = words[n]
+            _WORDS[(locale, t)] = words[n]
     if words is not None and path is not None:
-        disk.update({_key(t): w for t, w in zip(missing, words)})
+        disk.update({_key(t, locale): w for t, w in zip(missing, words)})
         if len(disk) > SEGMENT_CACHE_MAX:
-            disk = {_key(t): out[t] for t in want if out.get(t) is not None}
+            disk = {_key(t, locale): out[t] for t in want if out.get(t) is not None}
         try:
-            D.write_json(path, {"version": 1, "words": disk})
+            D.write_json(path, {"version": SEGMENT_VERSION, "words": disk})
         except OSError:
             pass                                # read-only project: the memo still holds them
     return out
@@ -408,6 +415,8 @@ def _cost(text: str, left: list, right: list, number: list[bool]) -> int:
         return 2                                # a lone preposition or adverb (_STARTERS) leads into what follows it
     if kl != kr and "cjk" in (kl, kr):
         return 0                                # Chinese next to a number or Latin
+    if kl == "latin" and ls.lower() in _LATIN_LEADS:
+        return 2
     if kl != "cjk" or kr != "cjk":
         return 1                                # between Latin words or numbers: keeps "iPhone 17 Pro" together
     if ls in _ENDERS or rs in _STARTERS or rs.startswith(_START_WORDS):
@@ -482,7 +491,8 @@ def phrase_spans(text: str, max_chars: int = 14, words: list[int] | None = None)
             continue
         n = b - a
         prev = sum(y - x for x, y in merged[-1]) if merged else 0
-        if merged and (prev < PHRASE_MIN or n < PHRASE_MIN) and prev + n <= max_chars:
+        least = max(PHRASE_MIN, max_chars // 4)       # a lone short word ("Well,") joins its neighbour
+        if merged and (prev < least or n < least) and prev + n <= max_chars:
             merged[-1].append((a, b))
         else:
             merged.append([(a, b)])
@@ -556,6 +566,11 @@ def line_phrases(text: str, max_chars: int, emphasis: list[str],
     return out
 
 
+def caption_track(track: D.CaptionsTrack, locale: str) -> D.CaptionsTrack:
+    """The track with max_chars filled: unset, it is the locale's default (14 for CJK, 32 otherwise)."""
+    return track if track.max_chars else track.model_copy(update={"max_chars": locales.caption_chars(locale)})
+
+
 def caption_texts(voice: D.Voice | None, track: D.CaptionsTrack) -> list[str]:
     """The markup-free text of each voice line as the track captions it (overrides applied)."""
     if voice is None or track.items is not None:
@@ -572,7 +587,8 @@ def _voice_items(voice: D.Voice, track: D.CaptionsTrack, fps: float, words: dict
     for ln in voice.lines:
         text = overrides.get(ln.i, ln.text)
         plain = _plain(text)[0]
-        parts = line_phrases(text, track.max_chars, track.emphasis, words.get(plain) or char_words(plain))
+        chars = track.max_chars or locales.CJK_CAPTION_CHARS
+        parts = line_phrases(text, chars, track.emphasis, words.get(plain) or char_words(plain))
         total = sum(n for _, n in parts) or 1
         acc = 0
         for runs, n in parts:
@@ -615,6 +631,7 @@ class _Resolver:
         self.doc = D.load(self.root)
         try:
             self.profile = D.profile_of(self.root, self.doc)
+            self.locale = D.locale_of(self.root, self.doc)
         except ValueError as exc:
             raise ResolveError(str(exc)) from None
         self.fps = self.profile.fps
@@ -658,7 +675,7 @@ class _Resolver:
         p = self.profile
         tracks, audio = [], []
         texts = [t for track in self.doc.tracks if track.kind == "captions" for t in caption_texts(self.voice, track)]
-        self.words = word_breaks(texts, project_paths(self.root).build) if texts else {}
+        self.words = word_breaks(texts, project_paths(self.root).build, self.locale) if texts else {}
         if self.voice and self.voice.audio_rel:
             audio.append({"id": "voice", "src": self.voice.audio_rel, "from": 0,
                           "dur": max(1, self.frame(self.voice.duration or self.voice.end)), "trimIn": 0, "volume": 1,
@@ -675,7 +692,8 @@ class _Resolver:
                     audio += [a for c in track.clips if (a := self.audio_clip(c)) is not None]
         return {"version": 2, "fps": self.fps, "width": p.width, "height": p.height,
                 "durationInFrames": self.frames, "safe": {"x": p.safe.x, "y": p.safe.y, "w": p.safe.w, "h": p.safe.h},
-                "theme": D.theme_of(self.root, self.doc), "tracks": tracks, "audio": audio, "inspect": False}
+                "theme": D.theme_of(self.root, self.doc), "fonts": project_fonts(self.root), "tracks": tracks,
+                "audio": audio, "inspect": False}
 
     def span(self, c) -> tuple[int, int] | None:
         try:
@@ -740,7 +758,7 @@ class _Resolver:
                     "rate": c.rate, "loop": c.loop, "fit": c.fit, "focus": c.focus, "volume": c.volume}
         if c.type == "text":
             reveal = {"mode": c.reveal.mode, "dur": c.reveal.dur} if c.reveal else None
-            return {"runs": text_runs(c.text), "style": text_style(c.style), "reveal": reveal}
+            return {"runs": text_runs(c.text), "style": text_style(c.style, self.profile.scale), "reveal": reveal}
         if c.type == "shape":
             return {"shape": c.shape, "fill": c.fill, "stroke": c.stroke, "stroke_width": c.stroke_width, "d": c.d,
                     "draw": c.draw}
@@ -767,10 +785,12 @@ class _Resolver:
         return copy.deepcopy(value)
 
     def captions(self, track: D.CaptionsTrack) -> dict:
-        return {"id": track.id, "kind": "captions", "hidden": track.hidden,
-                "box": self.box(track.box) if track.box is not None else None,
+        c = self.profile.captions
+        box = self.box(track.box) if track.box is not None else {"x": c.x, "y": c.y, "w": c.w, "h": c.h}
+        return {"id": track.id, "kind": "captions", "hidden": track.hidden, "box": box,
                 "style": caption_style(track.style),
-                "items": caption_items(track, self.voice, self.sched, self.fps, self.words)}
+                "items": caption_items(caption_track(track, self.locale), self.voice, self.sched, self.fps,
+                                       self.words)}
 
     def audio_clip(self, c: D.AudioClip) -> dict | None:
         span = self.span(c)
@@ -786,9 +806,12 @@ def _style_value(v):
     return v.model_dump(exclude_none=True) if hasattr(v, "model_dump") else v
 
 
-def text_style(style: D.TextStyle | None) -> dict:
-    """TextStyle with the renderer's defaults filled (Text.tsx TEXT_DEFAULTS)."""
+def text_style(style: D.TextStyle | None, scale: float = 1.0) -> dict:
+    """TextStyle with the renderer's defaults filled (Text.tsx TEXT_DEFAULTS); default sizes follow the canvas
+    (`scale`: its short side / 1080)."""
     out = dict(TEXT_DEFAULTS)
+    if scale != 1:
+        out.update({k: round(out[k] * scale) for k in ("size", "max_size", "min_size")})
     if style is not None:
         for k in style.model_fields_set:
             v = getattr(style, k)
@@ -811,6 +834,52 @@ def caption_style(style: D.TextStyle | None) -> dict | None:
             continue
         out[k] = _style_value(v)
     return D._ints(out)
+
+
+FONTS_DIR = "fonts"                 # in build/: the workspace's fonts, served from the project folder
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        x, y = a.stat(), b.stat()
+    except OSError:
+        return False
+    return x.st_size == y.st_size and (x.st_mtime_ns == y.st_mtime_ns or os.path.samefile(a, b))
+
+
+def project_fonts(project) -> list[dict]:
+    """The workspace's fonts as the renderer loads them: [{family, src (project-relative), weight?, style?}]. The
+    renderer serves only the project folder, so each file is linked (or copied) into build/fonts/ once."""
+    root = project_root(project)
+    try:
+        ws = find_workspace(root)
+        fonts = ws.fonts if ws else {}
+    except WorkspaceError:
+        return []
+    out, taken = [], set()
+    folder = project_paths(root).build / FONTS_DIR
+    for family, faces in fonts.items():
+        for face in faces:
+            src = Path(face["path"])
+            name = src.name
+            while name.lower() in taken:
+                name = f"_{name}"
+            taken.add(name.lower())
+            dst = folder / name
+            if not _same_file(src, dst):
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    dst.unlink(missing_ok=True)
+                    try:
+                        os.link(src, dst)
+                    except OSError:
+                        shutil.copy2(src, dst)
+                except OSError:
+                    continue
+            row = {"family": family, "src": f"build/{FONTS_DIR}/{name}"}
+            row.update({k: face[k] for k in ("weight", "style") if face.get(k)})
+            out.append(row)
+    return out
 
 
 def resolve(project) -> dict:
@@ -922,6 +991,10 @@ class _Window:
         except ValueError:
             from .profiles import get_profile
             self.profile = get_profile(None)
+        try:
+            self.locale = D.locale_of(self.root, self.doc)
+        except ValueError:
+            self.locale = locales.DEFAULT_LOCALE
         self.fps = self.profile.fps
         self.voice, _ = D.load_voice(self.root, self.doc.voice)
         self.sched = D.schedule(self.doc, self.voice)
@@ -935,7 +1008,7 @@ class _Window:
     def words(self) -> dict:
         if self._words is None:
             texts = [t for tr in self.doc.tracks if tr.kind == "captions" for t in caption_texts(self.voice, tr)]
-            self._words = word_breaks(texts, project_paths(self.root).build) if texts else {}
+            self._words = word_breaks(texts, project_paths(self.root).build, self.locale) if texts else {}
         return self._words
 
     def box_px(self, value) -> tuple[float, float, float, float]:
@@ -966,8 +1039,9 @@ class _Window:
 
     def header(self) -> list[str]:
         p, s = self.profile, self.profile.safe
-        rows = [f"project {self.root.name}: {p.name} {p.width}x{p.height} {p.fps} fps; safe area x {s.x}-{s.x + s.w}, "
-                f"y {s.y}-{s.y + s.h}"]
+        what = "the platform's UI covers the rest" if p.ui else "a title-safe margin"
+        rows = [f"project {self.root.name}: {p.name} {p.width}x{p.height} {p.fps} fps, {p.orientation}; safe area x "
+                f"{s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h} ({what}); locale {self.locale}"]
         if self.end is not None:
             rows.append(f"duration {self.end:.2f} s ({T.to_frame(self.end, self.fps)} frames, "
                         f"{self.sched.film_end_source()})")
@@ -1005,6 +1079,7 @@ class _Window:
         return rows
 
     def caption_summary(self, t: D.CaptionsTrack) -> str:
+        t = caption_track(t, self.locale)
         bits = []
         if t.items is not None:
             bits.append(f"{len(t.items)} item(s) given")
@@ -1016,9 +1091,9 @@ class _Window:
         if t.overrides:
             bits.append(f"{len(t.overrides)} override(s)")
         if t.box is None:
-            s = self.profile.safe
-            x, y, w, h = s.x, s.y + s.h - CAPTION_BAND, s.w, CAPTION_BAND
-            how = f" (default: the bottom {CAPTION_BAND} px of the safe area)"
+            c = self.profile.captions
+            x, y, w, h = c.x, c.y, c.w, c.h
+            how = f" (default: {self.profile.name}'s captions band)"
         else:
             (x, y, w, h), how = self.box_px(t.box), "" if isinstance(t.box, D.Box) else f" ({t.box})"
         bits.append(f"box {x:g},{y:g} {w:g}x{h:g}, y {y:g}-{y + h:g}{how}")
@@ -1026,6 +1101,7 @@ class _Window:
 
     def caption_rows(self, t: D.CaptionsTrack) -> list[str]:
         """One line per phrase: [voice line] from-to text, **accent** marked."""
+        t = caption_track(t, self.locale)
         if t.items is None and self.voice:
             items = _voice_items(self.voice, t, self.fps, self.words)
         else:
@@ -1092,7 +1168,7 @@ class _Window:
         return rows
 
     def caption_at(self, t: D.CaptionsTrack, f: int) -> str:
-        items = caption_items(t, self.voice, self.sched, self.fps, self.words)
+        items = caption_items(caption_track(t, self.locale), self.voice, self.sched, self.fps, self.words)
         it = next((x for x in items if x["from"] <= f < x["to"]), None)
         return "".join(r["text"] for r in it["runs"]) if it else ""
 

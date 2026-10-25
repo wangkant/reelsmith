@@ -156,6 +156,9 @@ export type AudioItem = {
   loop?: boolean;
 };
 
+/** A face of the workspace's library/fonts: `src` is project-relative (resolve.py links it into build/fonts). */
+export type WorkspaceFont = { family: string; src: string; weight?: string; style?: string };
+
 export type Resolved = {
   version: number;
   fps: number;
@@ -164,6 +167,7 @@ export type Resolved = {
   durationInFrames: number;
   safe: Box;
   theme: Theme;
+  fonts?: WorkspaceFont[];
   tracks: Track[];
   audio?: AudioItem[];
   inspect?: boolean;

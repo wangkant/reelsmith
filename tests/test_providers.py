@@ -191,7 +191,7 @@ def env(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "workspace.json").write_text(json.dumps({
-        "profile": "douyin",
+        "profile": "douyin", "locale": "zh-CN",
         "providers": {"tts": {"provider": "openrouter", "usd_per_1k_chars": TTS_RATE},
                       "image": {"provider": "codex", "max_draws": 30},
                       "video": {"provider": "openrouter", "resolution": "720p"}},
@@ -254,7 +254,8 @@ def test_context_budget_from_workspace_and_env_override(env, monkeypatch):
     assert ctx.budget == {"per_project_usd": 1.0, "min_balance_usd": 5.0}
     assert ctx.ledger_path == env.ws / "ledger.jsonl" and ctx.cache_dir == env.ws / ".cache"
     assert ctx.project_key == "projects/oil" and ctx.key("OPENROUTER_API_KEY") == KEY
-    assert ctx.providers["tts"]["voice"] == "longanlufeng"          # defaults fill what workspace.json leaves out
+    assert ctx.providers["tts"]["model"] == "qwen/qwen-audio-3.0-tts-plus"   # defaults fill what workspace.json leaves
+    assert ctx.providers["tts"]["voice"] is None                    # out; the voice follows the locale (speak)
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "0.25")
     assert P.context(env.project).budget["per_project_usd"] == 0.25
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "lots")
