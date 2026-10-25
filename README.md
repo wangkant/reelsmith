@@ -111,23 +111,14 @@ reelsmith new ~/studio/projects/first-film --title "My first film"
 
 Every key is optional; [docs/editor-spec.md](docs/editor-spec.md) lists them all with their defaults.
 
-## Use it from Claude Code
+## Use it from a coding agent
 
-Add the MCP server to the project you run Claude Code in, as `.mcp.json`:
+`reelsmith setup claude-code` (or `codex`, `dsh`, `cursor`, `generic`) adds the MCP server to that agent's config in
+the current folder and installs the reelsmith skill; `--print` shows what it would write. In Claude Code the plugin
+works too: `/plugin marketplace add wangkant/reelsmith`, then `/plugin install reelsmith@reelsmith`.
+[docs/agents.md](docs/agents.md) covers each agent, the HTTP transport (`reelsmith mcp --http`) and headless runs.
 
-```json
-{
-  "mcpServers": {
-    "reelsmith": {
-      "command": "reelsmith-mcp",
-      "env": {"REELSMITH_ROOT": "/home/me/studio"}
-    }
-  }
-}
-```
-
-Then ask for a film: *"Make a 60-second film about why tea leaves curl, in /home/me/studio/projects/tea. Read the
-reelsmith manual first."*
+Then ask for a film: *"Make a 60-second film about why tea leaves curl, in /home/me/studio/projects/tea."*
 
 ## Use it from Codex
 
@@ -169,7 +160,7 @@ reelsmith review $P -n 12                      # frames of the delivered film
 ```
 
 The other commands: `manual`, `new`, `library`, `typecheck`, `capture`, `draw`, `animate`, `assets`, `notes`,
-`note`, `run` and `mcp`. A command exits with 1 when the call failed or found blocking problems.
+`note`, `run`, `mcp` and `setup`. A command exits with 1 when the call failed or found blocking problems.
 
 ## The self-hosted runner
 
