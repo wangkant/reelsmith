@@ -82,7 +82,9 @@ sends the agent to the `manual` tool for the contract.
 - **HTTP:** `reelsmith mcp --http` serves streamable HTTP at `http://127.0.0.1:8765/mcp` (`--host`, `--port`). It
   binds loopback addresses only; `--allow-remote` takes any address and needs a bearer token of at least 16
   characters in `REELSMITH_MCP_TOKEN` (or the variable `--token-env` names), which clients send as
-  `Authorization: Bearer <token>`. While that variable is set, loopback requests need the token too.
+  `Authorization: Bearer <token>`, and `--root <folder>` (or `REELSMITH_ROOT`) to fence the projects remote callers
+  reach. It is plain HTTP: put a remote bind behind TLS (a reverse proxy) on a network you trust. While the token
+  variable is set, loopback requests need the token too.
 
 ## Headless runs
 

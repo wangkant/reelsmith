@@ -624,15 +624,18 @@ DeepSeek Harness gets them, with contact sheets as images, a Video editor mode a
 ### 10.1 Transports
 
 ```
-reelsmith mcp [--http [--host 127.0.0.1] [--port 8765] [--allow-remote] [--token-env REELSMITH_MCP_TOKEN]]
+reelsmith mcp [--root DIR] [--http [--host 127.0.0.1] [--port 8765] [--allow-remote] [--token-env REELSMITH_MCP_TOKEN]]
 ```
 
-`reelsmith-mcp` and `python -m reelsmith.mcp_server` take the same flags. Without `--http` the server speaks stdio.
-`--http` serves streamable HTTP at `http://HOST:PORT/mcp` (the `mcp` package's app under uvicorn). The host must be a
-loopback address (`127.0.0.0/8`, `::1`, `localhost`), where the SDK's DNS-rebinding protection checks the Host and
-Origin headers; any other host needs `--allow-remote` and a bearer token of at least 16 characters in the token
-variable, or the command exits with status 2 before binding. While the token variable is set, every request needs
-`Authorization: Bearer <token>` and is answered 401 without it, loopback included.
+`reelsmith-mcp` and `python -m reelsmith.mcp_server` take the same flags. `--root` sets `REELSMITH_ROOT` (an existing
+folder: projects and imports stay inside it). Without `--http` the server speaks stdio. `--http` serves streamable
+HTTP at `http://HOST:PORT/mcp` (the `mcp` package's app under uvicorn). The host must be a loopback address
+(`127.0.0.0/8`, `::1`, `localhost`, in any spelling), where the SDK's DNS-rebinding protection checks the Host and
+Origin headers against that host, `127.0.0.1`, `localhost` and `[::1]` (any port): a foreign Host is answered 421 and
+a foreign Origin 403. Any other host needs `--allow-remote`, a bearer token of at least 16 characters in the token
+variable and a root (`--root` or `REELSMITH_ROOT`), or the command exits with status 2 before binding; it serves plain
+HTTP and says so, so a remote bind belongs behind TLS (a reverse proxy) on a trusted network. While the token
+variable is set, every request needs `Authorization: Bearer <token>` and is answered 401 without it, loopback included.
 
 With `REELSMITH_GUARD_PROJECT` set to a project folder, the server checks every call with the runner guard's MCP
 rules (section 11) before it runs: one project, its workspace, paths the session may read, public http(s) URLs. The
@@ -984,12 +987,12 @@ profile by `check`).
 
 | variable | effect |
 |---|---|
-| `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace) |
+| `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace; `reelsmith mcp --root` sets it, and `--allow-remote` needs it) |
 | `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
-| `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
+| `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project, its workspace and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
 | `REELSMITH_MCP_TOKEN` | the bearer token `reelsmith mcp --http` requires of every request when set, and needs for `--allow-remote` (`--token-env` names another variable) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw` and the codex engine, and Codex's home folder (default `~/.codex`; `reelsmith setup codex --user` writes its `config.toml`) |
 | `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`) |
