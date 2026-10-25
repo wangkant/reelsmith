@@ -46,8 +46,9 @@ Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose s
 scale them with your canvas.
 
 **Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
-(`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language and whether `speak` has a
-default voice (only Chinese has one; otherwise the owner sets `providers.tts.voice`).
+(`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language, the words components add
+(EvidenceCard's `Source: `) and `speak`'s default voice: the default voice reads English and Chinese; for another
+language the owner sets `providers.tts.voice`, or an `openai` TTS endpoint, and `speak` says so.
 
 **Captions** (when the project has a captions track) sit in the profile's captions band, the bottom 200 px of the
 safe area — on landscape x 96–1824, y 826–1026; on douyin x 40–880, y 1260–1460 — one line of 36–66 px, white on a
@@ -319,10 +320,11 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 | `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
 
 - `speak`: `pace` is a speed factor relative to normal (1.0; 0.9 a little slower, 1.1 a little faster; 0.5–2) or
-  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"惊讶"`)
+  `"slower"`/`"normal"`/`"faster"`. `emotion` is a word or two (≤ 20 characters, e.g. `"surprised"`, `"calm"`)
   given to the voice as an instruction; how much it changes depends on the voice model, so listen before relying on
   it. `speak` caches per line — only changed lines are paid for again. The voice is the workspace's
-  `providers.tts.voice`; without one only a Chinese locale has a default (a Mandarin voice), and `speak` says so.
+  `providers.tts.voice`; without one, English and Chinese films get the default model's voice (it speaks both), and
+  any other language needs the owner to choose a voice, which `speak` says.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
 - `speak`, `draw`, `animate` and `transcribe` may cost money: they estimate first and refuse when the project

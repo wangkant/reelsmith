@@ -3,22 +3,31 @@
 Each line is cached by everything that shapes its audio (provider, model, voice, style, pace, emotion, text), so
 re-speaking a script only pays for the lines that changed. Every line is trimmed of the TTS's own padding and
 brought to the same loudness before the lines are joined with fixed gaps.
+
+Providers (workspace.json providers.tts.provider): "openrouter" (OpenRouter's /audio/speech, its balance read for
+the floor) and "openai" (any OpenAI-compatible POST {base_url}/audio/speech: OpenAI, or a local server).
 """
 from __future__ import annotations
 
 import hashlib
+import http.client
+import json
 import os
 import re
 import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .. import locales
-from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, project_locale, rel, run_tree,
-                     safe_tool, set_voice_if_unset, tail, write_json)
-from .openrouter import KEY_NAME, ZH_VOICE, OpenRouter, synthesize
+from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, project_locale, redact, rel,
+                     run_tree, safe_tool, set_voice_if_unset, tail, write_json)
+from .openrouter import DEFAULT_MODEL, KEY_NAME, MIN_AUDIO_BYTES, ZH_VOICE, OpenRouter, synthesize
 
 PACE = {"slower": 1.10, "normal": 1.25, "faster": 1.35}
 PACE_FACTOR = (0.5, 2.0)
@@ -88,18 +97,115 @@ class OpenRouterTTS(TTSEngine):
         return self.client.balance()
 
 
-ENGINES = {"openrouter": lambda ctx, cfg: OpenRouterTTS(cfg, ctx.key(KEY_NAME))}
+OPENAI_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-4o-mini-tts"
+OPENAI_VOICE = "alloy"          # one of the voices every OpenAI TTS model has
+OPENAI_KEY_ENV = "OPENAI_API_KEY"
+OPENAI_TIMEOUT_S = 120
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class OpenAITTS(TTSEngine):
+    """Any OpenAI-compatible POST {base_url}/audio/speech. It reports no cost and has no balance to read: lines are
+    booked at the estimate (usd_per_1k_chars)."""
+    name = "openai"
+
+    def __init__(self, cfg: dict, key: str, opener=None, sleep=None):
+        self.cfg, self.key = dict(cfg), key
+        self.base = str(cfg.get("base_url") or OPENAI_URL).rstrip("/")
+        self.key_env = cfg["key_env"] if "key_env" in cfg else OPENAI_KEY_ENV
+        self.timeout = number(cfg.get("timeout_s") or OPENAI_TIMEOUT_S, 5, 3600, "providers.tts.timeout_s")
+        self._open = opener or urllib.request.urlopen
+        self._sleep = sleep or time.sleep
+
+    def identity(self) -> str:
+        c = self.cfg
+        return "|".join(["openai", self.base, str(c.get("model")), str(c.get("voice")), str(c.get("speed_scale") or 1),
+                         str(c.get("instructions") or "")])
+
+    def check(self) -> None:
+        if not self.base.startswith(("http://", "https://")):
+            raise ProviderError("providers.tts.base_url must be an http(s) address")
+        if self.key_env and not self.key:
+            raise ProviderError(f"no {self.key_env}: put it in the workspace .env (or the environment), or set "
+                                "providers.tts.key_env to null for a server that needs no key")
+
+    def body(self, text: str, speed: float, emotion: str) -> dict:
+        model = str(self.cfg.get("model") or OPENAI_MODEL)
+        body = {"model": model, "input": text, "voice": str(self.cfg.get("voice") or OPENAI_VOICE),
+                "response_format": "mp3"}
+        # speak's speeds are calibrated on Qwen's brisk reading (PACE["normal"]); OpenAI's 1.0 is its own normal
+        factor = speed / PACE["normal"] * float(self.cfg.get("speed_scale") or 1.0)
+        factor = round(min(4.0, max(0.25, factor)), 3)
+        if abs(factor - 1.0) > 0.01:
+            body["speed"] = factor
+        notes = [str(self.cfg.get("instructions") or "").strip(), f"The mood of this line: {emotion}" if emotion else ""]
+        notes = "; ".join(n for n in notes if n)
+        if notes and not model.startswith("tts-1"):         # tts-1 and tts-1-hd take no instructions
+            body["instructions"] = notes
+        return body
+
+    def synth(self, text: str, speed: float, emotion: str) -> bytes:
+        data = json.dumps(self.body(text, speed, emotion)).encode("utf-8")
+        headers = {"Content-Type": "application/json", "User-Agent": "reelsmith"}
+        if self.key:
+            headers["Authorization"] = "Bearer " + self.key
+        url = self.base + "/audio/speech"
+        last = ""
+        for attempt in range(3):
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with self._open(req, timeout=self.timeout) as resp:
+                    audio = resp.read()
+                if len(audio or b"") >= MIN_AUDIO_BYTES:
+                    return audio
+                last = f"empty audio ({len(audio or b'')} bytes)"
+            except urllib.error.HTTPError as exc:
+                try:
+                    said = exc.read().decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001
+                    said = ""
+                last = f"HTTP {exc.code}: {redact(said, [self.key])[:300]}"
+                if exc.code not in (408, 409, 425, 429) and exc.code < 500:
+                    break                       # a bad request or a bad key does not heal on retry
+            except urllib.error.URLError as exc:
+                last = f"cannot reach {urllib.parse.urlsplit(url).hostname}: {redact(exc.reason, [self.key])}"
+            except (OSError, http.client.HTTPException) as exc:
+                last = f"{type(exc).__name__}: {redact(exc, [self.key])}"
+            if attempt < 2:
+                self._sleep(2 * (attempt + 1))
+        raise ProviderError(f"TTS failed: {last}")
+
+
+def _openai(ctx: Context, cfg: dict) -> OpenAITTS:
+    key_env = cfg["key_env"] if "key_env" in cfg else OPENAI_KEY_ENV
+    if key_env is not None and not (isinstance(key_env, str) and _ENV_NAME.match(key_env)):
+        raise ProviderError(f"providers.tts.key_env must name an environment variable, or be null (got {key_env!r})")
+    return OpenAITTS(cfg, ctx.key(key_env) if key_env else "")
+
+
+ENGINES = {"openrouter": lambda ctx, cfg: OpenRouterTTS(cfg, ctx.key(KEY_NAME)), "openai": _openai}
+
+
+def default_model(cfg: dict) -> str:
+    """providers.tts.model, else the provider's default."""
+    if cfg.get("model"):
+        return str(cfg["model"])
+    return OPENAI_MODEL if cfg.get("provider") == "openai" else DEFAULT_MODEL
 
 
 def default_voice(cfg: dict, locale: str) -> str:
-    """providers.tts.voice, else the default model's Mandarin voice for a Chinese locale; ProviderError otherwise."""
+    """providers.tts.voice, else the provider's default for the locale; ProviderError when it has none."""
     if cfg.get("voice"):
         return str(cfg["voice"])
-    if locales.is_chinese(locale):
+    if cfg.get("provider") == "openai":
+        return OPENAI_VOICE                     # its voices read whatever language the model speaks
+    # the default model's voices speak Mandarin and English (Alibaba Cloud's Qwen-Audio TTS voice list)
+    if locales.is_chinese(locale) or locales.language(locale) == "en":
         return ZH_VOICE
-    raise ProviderError(f"no voice for locale {locale}: the default voice ({ZH_VOICE}) speaks Mandarin; set "
-                        f"providers.tts.voice in workspace.json to a voice of {cfg.get('model')} that speaks {locale} "
-                        "(or set the project's locale if the film is in Chinese)")
+    raise ProviderError(f"no voice for locale {locale}: the default voice ({ZH_VOICE}) speaks Mandarin and English. "
+                        f"Set providers.tts.voice in workspace.json to a voice of {cfg.get('model')} that speaks "
+                        f"{locale}, or use the openai provider (any OpenAI-compatible /audio/speech endpoint)")
 
 
 def make_engine(ctx: Context) -> TTSEngine:
@@ -267,9 +373,10 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
       A voice that takes a numeric speed gets the factor itself (times providers.tts.speed_scale). The default Qwen
       voice takes words instead, so for it pace only picks one of three readings: below 0.944 slow and deliberate,
       0.944 up to 1.04 brisk (the normal reading), 1.04 and up faster.
-    - emotion: free words (at most 20 characters, e.g. "惊讶", "严肃", "轻松地笑") passed to the TTS model as the line's
-      style ("这一句的情绪：…"); models with an emotion field also get them there. There is no fixed list and no
-      guarantee of effect: listen to the line. Changing pace or emotion re-synthesizes (and pays for) that line.
+    - emotion: free words (at most 20 characters, e.g. "surprised", "serious", "laughing softly") passed to the TTS
+      model as the line's style ("The mood of this line: ...", in Chinese for a Chinese locale on OpenRouter); models
+      with an emotion field also get them there. There is no fixed list and no guarantee of effect: listen to the
+      line. Changing pace or emotion re-synthesizes (and pays for) that line.
     gap_s: silence between lines, 0-1.5 s (default 0.22)."""
     ctx = context(project)
     if not isinstance(lines, list) or not lines:
@@ -280,6 +387,7 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
     gap = number(gap_s, 0, MAX_GAP_S, "gap_s")
     cfg = ctx.providers["tts"]
     target = number(cfg.get("line_lufs", -12.0), -30, -6, "providers.tts.line_lufs")
+    cfg["model"] = default_model(cfg)
     if engine is None:
         locale = project_locale(ctx)
         cfg.update(voice=default_voice(cfg, locale), locale=locale)

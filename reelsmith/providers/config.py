@@ -32,8 +32,8 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 SHARING_TRIES = 25          # ~6 s of backoff: an editor or another process briefly holding project.json
 
 DEFAULT_PROVIDERS: dict = {
-    # voice None: the model's Chinese default for Chinese locales; other locales must name one (tts.default_voice)
-    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": None,
+    # model and voice None: the provider's defaults, the voice by the locale (tts.default_model, tts.default_voice)
+    "tts": {"provider": "openrouter", "model": None, "voice": None,
             "instructions": "", "speed_scale": 1.0, "usd_per_1k_chars": 0.02, "line_lufs": -12.0},
     "image": {"provider": "codex", "max_draws": 30, "timeout_s": 360, "effort": "low"},
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p",

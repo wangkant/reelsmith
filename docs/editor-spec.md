@@ -447,7 +447,7 @@ like a key are scrubbed from every message.
 
 | tool | provider | needs |
 |---|---|---|
-| `speak` | OpenRouter text-to-speech | `OPENROUTER_API_KEY`; ffmpeg |
+| `speak` | OpenRouter text-to-speech, or an OpenAI-compatible `/audio/speech` endpoint (section 9.1) | `OPENROUTER_API_KEY`, or the endpoint's key; ffmpeg |
 | `capture` | Playwright driving a Chromium browser | the `capture` extra; Microsoft Edge, Google Chrome or Playwright's Chromium |
 | `draw` | Codex CLI image generation | the Codex CLI installed and signed in |
 | `animate` | OpenRouter image-to-video | `OPENROUTER_API_KEY`; ffmpeg |
@@ -465,12 +465,25 @@ is trimmed of the TTS's padding and brought to the same loudness before the line
 silence (at most 1.5 s). `pace` is `"slower"`, `"normal"`, `"faster"` or a factor 0.5-2; `emotion` (at most 20
 characters) is passed to the voice as an instruction.
 
-`providers.tts`: `provider` `"openrouter"`, `model` (default `qwen/qwen-audio-3.0-tts-plus`), `voice` (default:
-`longanlufeng`, the default model's Mandarin voice, for a Chinese locale only; any other locale must name a voice of
-its model that speaks it, and `speak` says so instead of reading the script in a Chinese voice), `instructions` (a
-standing style instruction), `speed_scale` 1.0, `usd_per_1k_chars` 0.02 (the estimate when the provider reports no
-cost), `line_lufs` -12. The words `speak` adds for pace and emotion are Chinese for a Chinese locale and English
-otherwise (a non-Chinese locale is part of the line cache key, so they do not mix).
+`providers.tts`:
+
+| key | default | meaning |
+|---|---|---|
+| `provider` | `openrouter` | `openrouter`: OpenRouter's `/audio/speech`; `openai`: any OpenAI-compatible `/audio/speech` (below) |
+| `model` | the provider's | `qwen/qwen-audio-3.0-tts-plus` on OpenRouter, `gpt-4o-mini-tts` on `openai` |
+| `voice` | by the locale | OpenRouter: `longanlufeng` for a Chinese or an English locale (the default model's two voices, `longanlufeng` and `longanlingxin`, speak Mandarin and English in Alibaba Cloud's Qwen-Audio TTS voice list; OpenRouter's model page lists a model's voices); any other locale must name a voice of its model that speaks it, and `speak` says so instead of reading the script in the wrong language. `openai`: `alloy` (OpenAI's voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; `tts-1` has the first nine bar `ballad`) |
+| `instructions` | `""` | a standing style instruction |
+| `speed_scale` | 1.0 | multiplies the speed a voice that takes a number gets |
+| `usd_per_1k_chars` | 0.02 | the estimate when the provider reports no cost (OpenAI's `tts-1` is $0.015, `tts-1-hd` $0.03) |
+| `line_lufs` | -12 | each line's loudness before the join |
+| `base_url`, `key_env`, `timeout_s` | `https://api.openai.com/v1`, `OPENAI_API_KEY`, 120 | `openai` only: the endpoint (OpenAI, or a local server), the name of its key in `.env` or the environment (`null` sends none) and the timeout per request |
+
+On OpenRouter the words `speak` adds for pace and emotion are Chinese for a Chinese locale and English otherwise (a
+non-Chinese locale is part of the line cache key, so they do not mix); Qwen takes its pace as words. The `openai`
+provider posts `{model, input, voice, response_format: "mp3"}` with `speed` (the line's pace relative to normal,
+times `speed_scale`, 0.25-4) when it is not 1 and `instructions` (the standing ones and the emotion, in English) to
+models other than `tts-1` and `tts-1-hd`; a request is retried on 408, 409, 425, 429, 5xx and dropped connections.
+It reports no cost and has no balance: lines are booked at the estimate against the project budget (section 9.6).
 
 Any narration works: a `voice.json` with `lines` (`t0`, `t1` in seconds) next to its audio file is all the
 project needs.
@@ -527,7 +540,8 @@ box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` se
 
 ### 9.6 Costs: the ledger, the budget and the balance floor
 
-`speak`, `animate` and `transcribe` (with an endpoint) spend money; `draw` spends tries. Every paid call goes
+`speak`, `animate` and `transcribe` (with an endpoint) spend money; `draw` spends tries. A provider with no balance
+to read (`speak` on an `openai` endpoint, `transcribe`) is held to the project budget only. Every paid call goes
 through `ledger.jsonl` (in the workspace, or in the project folder outside one):
 
 1. Estimate the cost.
@@ -986,7 +1000,7 @@ profile by `check`).
 | `DSH_HOME` | DeepSeek Harness's home, where `reelsmith setup dsh --user` writes (default `~/.dsh`); the dsh engine sets its own, `<workspace>/.cache/dsh` |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
 | `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, `--backend deepseek` on the agent-sdk engine, or the dsh engine) |
-| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`); `transcribe` with the default endpoint (`providers.transcribe.key_env` names another) |
+| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`); `transcribe` with the default endpoint (`providers.transcribe.key_env` names another); `speak` with the `openai` TTS provider (`providers.tts.key_env`) |
 | the name in `runner.key_env` | the runner on a `custom` provider |
 | `TAVILY_API_KEY` | the api engine's `web_search` through Tavily (when ddgs is not installed, or `web.search` is `tavily`) |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic (agent-sdk engine) |
