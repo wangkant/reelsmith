@@ -55,9 +55,15 @@ let mock
 try {
   step('install the plugin into the headless profile (dsh plugin add)')
   console.log(run(process.execPath, [DSH_BIN, 'plugin', '--profile', 'headless', 'add', PKG]).trim().split('\n').filter(line => /dsh-plugin-reelsmith|Done/.test(line)).join('\n'))
-  // The plugin's one setting here; the title model would take a scripted reply, so it is off.
-  writeFileSync(join(home, 'profiles', 'headless', 'cordis.patch.yml'),
-    `- id: reelsmith\n  config:\n    python: ${JSON.stringify(python)}\n- id: session-title-llm\n  disabled: true\n`)
+  // A stand-in Agent Skill proves the skill row; the title model would take a scripted reply, so it is off.
+  const skills = join(scratch, 'skills')
+  mkdirSync(join(skills, 'reelsmith'), { recursive: true })
+  writeFileSync(join(skills, 'reelsmith', 'SKILL.md'),
+    '---\nname: reelsmith\ndescription: E2E stand-in skill for editing films with reelsmith.\n---\n\nRead the manual first.\n')
+  writeFileSync(join(home, 'profiles', 'headless', 'cordis.patch.yml'), [
+    '- id: reelsmith', '  config:', `    python: ${JSON.stringify(python)}`, `    skillDir: ${JSON.stringify(skills)}`,
+    '- id: session-title-llm', '  disabled: true', '',
+  ].join('\n'))
 
   step('make a reelsmith project with one text clip')
   run(python, ['-m', 'reelsmith.cli', 'new', 'demo'], { cwd: work })
@@ -103,6 +109,8 @@ try {
   const system = JSON.stringify(first.system ?? '')
   if (!system.includes('Video editing with reelsmith')) throw new Error('the Video editor section is missing from the system prompt')
   console.log('request 1: system prompt carries "# Video editing with reelsmith"')
+  if (!JSON.stringify(first).includes('E2E stand-in skill for editing films')) throw new Error('the reelsmith skill is not in the catalog')
+  console.log('request 1: the reelsmith skill is in the skill catalog')
   const results = messages[1].body.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
     .filter(block => block.type === 'tool_result')
   const parts = results.flatMap(block => Array.isArray(block.content) ? block.content : [])

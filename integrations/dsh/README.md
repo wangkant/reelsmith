@@ -120,8 +120,8 @@ npm test             # builds, then node:test: the plugin in a Cordis context wi
                      # and a fake reelsmith server, the image and file-route rules, the client bundle
 npm run e2e -- --python <python with reelsmith>
                      # a throwaway dsh home: dsh plugin add, a reelsmith project, dsh --profile headless driven by
-                     # DSH's scripted mock model (no key, no network); passes when the next model request carries
-                     # the contact sheet as an image
+                     # DSH's scripted mock model (no key, no network); passes when the model is offered the tools,
+                     # the prompt section and the skill, and its next request carries the contact sheet as an image
 ```
 
 ## Known limits
