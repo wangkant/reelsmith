@@ -514,11 +514,16 @@ paying again, and a finished clip whose download failed is collected again from 
 
 ### 9.5 import_asset and assets
 
-`import_asset(project, id, source, kind?)` copies a local file, or downloads an http(s) image, video or audio file,
-into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video and audio probed) whatever the name or the server
-says; a download goes only to public hosts, every redirect included; the size is capped by
-`providers.import.max_mb` (200). `kind` `evidence` takes a page screenshot you already have (PNG, JPEG or WebP); its
-box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` set, local files must live inside it.
+`import_asset(project, id, source, kind?)` brings a local file, or downloads an http(s) image, video or audio file,
+into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video
+and audio probed) whatever the name or the server says. A local file has no size limit: on the project's volume it
+is hard-linked into `assets/` (one file on disk under two names, so a multi-GB recording is not stored twice; no
+tool writes into an asset file, they only replace it, so the original is never changed), elsewhere it is copied
+once the disk is found to have room for it (with 256 MB to spare); the reply says which. A download goes only to
+public hosts, every redirect included, and is capped by `providers.import.max_mb` (200). `kind` `evidence` takes a
+page screenshot you already have (PNG, JPEG or WebP); its box is the whole picture until `update_asset` sets one.
+A video with an HDR transfer gets the note `probe` gives (section 9.7). With `REELSMITH_ROOT` set, local files must
+live inside it.
 
 `assets(project)` lists the project's assets with kinds, sizes, durations and spend.
 
@@ -545,9 +550,13 @@ nothing in project.json. Times are **source seconds**; `"src:<clip>@<seconds>"` 
 timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 
 - `probe(project, source)`: container, duration, size and bit rate; the first picture stream's codec, width,
-  height, rotation (the display matrix, with the size it shows at), fps, pixel format and frame count (`still` for
-  a picture); the first sound stream's codec, channels, layout and sample rate, with its integrated loudness
-  (LUFS), loudness range and true peak (ffmpeg `ebur128`).
+  height, rotation (the display matrix, with the size it shows at), fps, pixel format, frame count (`still` for a
+  picture) and colour (`color`: `primaries`, `transfer`, `space`, `range` as ffprobe names them) with `hdr`:
+  `"PQ"` (transfer `smpte2084`), `"HLG"` (`arib-std-b67`), `"Dolby Vision"` (a DOVI configuration record, with its
+  fallback transfer), else null; the first sound stream's codec, channels, layout and sample rate, with its
+  integrated loudness (LUFS), loudness range and true peak (ffmpeg `ebur128`). The film is SDR (BT.709) and an HDR
+  source is not tone-mapped: its highlights clip and its colours differ from SDR shots, so the text says so, and
+  `render` warns for every HDR video the film shows.
 - `frames(project, asset, times?, every?, n?)`: stills of a video at source times: `times` (seconds or `m:ss`, at
   most 24), else one every `every` seconds from 0 (at most 24), else `n` evenly spaced (default 12; at the middle
   of each n-th). A time at the very end shows the last frame. Stills are scaled to at most 960 px on their long

@@ -1419,12 +1419,14 @@ def test_import_refuses_what_is_not_media(env):
     assert not list((env.project / "assets").glob("*"))             # no part file left
 
 
-def test_import_enforces_the_size_cap(env):
+def test_import_caps_downloads_not_local_files(env):
     env.config(providers={"import": {"max_mb": 1}})
     big = env.tmp / "big.png"
-    big.write_bytes(png_bytes() + b"\0" * (1 << 20))
-    text, err = P.import_asset(env.project, id="a", source=str(big))
-    assert err and "over the 1 MB import limit" in text
+    big.write_bytes(png_bytes() + b"\0" * (2 << 20))
+    text, err = P.import_asset(env.project, id="big", source=str(big))          # a local recording of any size
+    assert not err, text
+    (env.project / "assets" / "big.png").unlink()
+    env.set_project(assets={})
     declared_big = FakeResponse(png_bytes())
     declared_big.headers["Content-Length"] = str(5 << 20)
     text, err = P.import_asset(env.project, id="a", source="https://cdn.example.com/a.png",

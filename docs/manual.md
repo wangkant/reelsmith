@@ -261,7 +261,9 @@ The footage tools speak **source seconds**; `"src:a@41.2"` is the moment clip `a
 (its `trim_in` and `rate` applied), so you cut straight from what you found. Narration is optional: a film of
 footage needs no `speak`, and without a voice it lasts until its last clip ends (or `duration`).
 
-1. `import_asset` the file, then `probe` it: length, resolution, fps, rotation, sound and its loudness.
+1. `import_asset` the file (any size: on the project's drive it is hard-linked, not copied), then `probe` it:
+   length, resolution, fps, rotation, colour, sound and its loudness. An HDR recording (a phone's HLG or Dolby
+   Vision, PQ) is flagged: the film is SDR and is not tone-mapped, so it looks different next to SDR shots.
 2. Look before you cut. `frames(p, "talk", n=12)` (or `times`, or `every`) gives stills at source times and a
    contact sheet with each time burned in: Read it. `scenes` lists the shot cuts with each shot's first frame,
    `silences` the quiet ranges and the sound between them, and `transcribe` writes every word with its time

@@ -591,7 +591,8 @@ def animate(project: str, id: str, image_asset: str, motion: str, seconds: float
 
 @tool
 def import_asset(project: str, id: str, source: str, kind: str = "") -> str:
-    """Copy a local file, or download an http(s) image/video/audio (size-capped), into assets/ and register it as
+    """Bring a local file into assets/ (any size; hard-linked when it is on the project's drive, so a big recording
+    is not stored twice, else copied), or download an http(s) image/video/audio (size-capped), and register it as
     asset `id` (an existing id of the same kind is replaced). `kind` image, video, audio or evidence (a page
     screenshot you have: its box is the whole picture until you set one with the update_asset edit op); empty
     detects it from the file. This is also how music gets in: import a file you are allowed to use."""
@@ -615,9 +616,10 @@ def _source_arg(value, what: str) -> str:
 
 @tool
 def probe(project: str, source: str) -> str:
-    """What a media file holds: container, duration, size; the picture's codec, resolution, fps and rotation; the
-    sound's codec, channels, sample rate and loudness (LUFS, range, true peak). `source` is an asset id or a file
-    inside the project folder. Text, then the same facts as JSON."""
+    """What a media file holds: container, duration, size; the picture's codec, resolution, fps, rotation and colour
+    (primaries, transfer, matrix; an HDR source, PQ, HLG or Dolby Vision, is flagged: the film is SDR and not
+    tone-mapped); the sound's codec, channels, sample rate and loudness (LUFS, range, true peak). `source` is an
+    asset id or a file inside the project folder. Text, then the same facts as JSON."""
     return _provider("probe", _project(project), source=_source_arg(source, "source"))
 
 
