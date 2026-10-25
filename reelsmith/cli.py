@@ -27,7 +27,8 @@ def _lines_arg(value: str):
 
 
 def _parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="reelsmith", description="A video editor for AI agents (and their operators).")
+    ap = argparse.ArgumentParser(prog="reelsmith",
+                                 description="A video editing harness for AI coding agents (and the people who run them).")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command")
 
     def cmd(name: str, fn, *aliases: str):
