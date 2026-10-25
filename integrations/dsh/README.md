@@ -96,7 +96,7 @@ idle working directory's server, default 30), `skillDir` (where `reelsmith/SKILL
 |---|---|
 | `reelsmith` row: settings, servers, panel routes | a host plugin providing the `reelsmith` service; `.volatile()` Config fields are the Plugins page form |
 | Tools | `dsh-plugin-reelsmith/tools` registers each server tool through `createMcpToolDefinition` from `@deepseek-ai/dsh-mcp-client`, so results, errors and images follow DSH's MCP contract (images become durable attachments when the model takes images) |
-| Images | reelsmith answers with PNG paths; the plugin adds the named contact sheets (and few stills) to the MCP result as image content |
+| Images | reelsmith answers with PNG paths; for `preview`, `review`, `frames` and `scenes` the plugin adds the named contact sheets (and few stills) to the MCP result as image content, files inside the called project's `build/` only |
 | Video editor mode | a `@deepseek-ai/dsh-agent-preset` row (persona, tools, skill provider, DSH's standard tool set) |
 | Skill | a `@deepseek-ai/dsh-skill-filesystem` row reading `skills/reelsmith` from the packaged copy or the reelsmith checkout |
 | Panel and rows | the browser half (`lib/client.js`): a `sidebarRightTabs` tab type, `tool.call.toolview` rows, a `plugins.row.config` page |
