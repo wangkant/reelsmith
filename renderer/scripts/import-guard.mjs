@@ -2,6 +2,7 @@
 // packages and the workspace's component library, and that holds library components to contract section 6:
 // they import only react, remotion, installed @remotion/* packages, @reelsmith/kit and relative files inside the
 // library folder. Built-in presets get the same check as warnings (they are ours, not the agent's).
+import fs from "node:fs";
 import path from "node:path";
 
 const NAME = "reelsmith-import-guard";
@@ -16,7 +17,18 @@ const norm = (p) => {
 };
 const within = (p, dir) => {
   const n = norm(p);
-  return n === dir || n.startsWith(dir + path.sep);
+  return [].concat(dir).some((d) => n === d || n.startsWith(d + path.sep));
+};
+// a folder as named and, when it is a link or junction (a shared node_modules), where it really is: webpack
+// reports real paths
+const places = (p) => {
+  const named = norm(p);
+  try {
+    const real = norm(fs.realpathSync.native(p));
+    return real === named ? named : [named, real];
+  } catch {
+    return named;
+  }
 };
 
 /**
@@ -27,9 +39,9 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
   const src = norm(path.join(root, "src"));
   const kit = norm(path.join(root, "src", "kit"));
   const presets = norm(path.join(root, "src", "presets"));
-  const modules = norm(path.join(root, "node_modules"));
+  const modules = places(path.join(root, "node_modules"));
   const lib = norm(library);
-  const loaders = LOADER_PACKAGES.map((p) => norm(path.join(root, "node_modules", p)));
+  const loaders = LOADER_PACKAGES.map((p) => places(path.join(root, "node_modules", p)));
   const warned = new Set();
 
   const fail = (msg) => {
