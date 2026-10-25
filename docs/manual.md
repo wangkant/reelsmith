@@ -383,8 +383,9 @@ transcript. No narration: the film lasts until `a_2` ends.
   any other language needs the owner to choose a voice, which `speak` says.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
-- `speak`, `draw`, `animate` and `transcribe` may cost money: they estimate first and refuse when the project
-  budget or the account floor would be crossed.
+- `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
+  limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
+  crossed. Transcribe a recording once; re-speak only the lines that changed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
