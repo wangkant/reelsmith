@@ -309,6 +309,22 @@ def test_check_project_full(monkeypatch, tmp_path):
     assert ("advice", "bg @ 1.0s") in wheres
 
 
+@pytest.mark.parametrize("profile, rules, warned", [
+    ("landscape", {}, False), ("youtube", {}, False), ("douyin", {}, True),
+    ("landscape", {"advice": {"hook_seconds": 2}}, True)])
+def test_cover_warnings_only_where_a_cover_matters(monkeypatch, tmp_path, profile, rules, warned):
+    (tmp_path / "workspace.json").write_text(json.dumps({"profile": profile}), encoding="utf-8")
+    (tmp_path / "rules.json").write_text(json.dumps(rules), encoding="utf-8")
+    project = tmp_path / "projects" / "p"
+    project.mkdir(parents=True)
+    fake_doc(monkeypatch)
+    title = clip("title", "text", 0, 60, content={"runs": [{"text": "A trip", "accent": False}]},
+                 enter={"preset": "fade", "dur": 12})
+    fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "video", 0, 900), title], 30))
+    covers = {i.where for i in C.check_project(project) if i.level == "warning"} & {"cover", "title @ 0.0s"}
+    assert covers == ({"cover", "title @ 0.0s"} if warned else set())
+
+
 def test_check_project_resolve_failure_is_an_error(monkeypatch, project):
     fake_doc(monkeypatch)
 
