@@ -44,8 +44,8 @@ layout measurement, loudness and the delivery rules.
 - **Spend control**: paid calls go through a ledger with a per-project budget and an account balance floor.
 - **Three ways in**: an MCP server, a CLI, and a self-hosted runner that works with any OpenAI-compatible model
   API (a Claude Agent SDK session is an optional engine).
-- **Output profiles** `douyin` (the default), `douyin-long` (60-300 s explainers), `tiktok` and `shorts`: 1080×1920 at 30 fps, each with its own safe
-  area, length limits, size cap and loudness target.
+- **Output profiles** `douyin` (the default), `douyin-long` (60-300 s explainers), `tiktok` and `shorts`:
+  1080×1920 at 30 fps, each with its own safe area, length limits, size cap and loudness target.
 
 The defaults are tuned for Chinese short video: Simplified Chinese fonts, CJK-aware line breaking, a Mandarin
 narration voice and Chinese browser locale for captures. English works as well; set `profile` and the TTS `voice`

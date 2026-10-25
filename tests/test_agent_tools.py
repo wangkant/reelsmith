@@ -562,9 +562,9 @@ def test_ddgs_adapter(monkeypatch):
             return [{"title": "T", "href": "https://a.example/", "body": "B"}]
     monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=DDGS))
     monkeypatch.setitem(sys.modules, "ddgs.exceptions", types.SimpleNamespace(DDGSException=DDGSException))
-    search = W.ddgs_search(proxy="http://127.0.0.1:7890")
+    search = W.ddgs_search(proxy="http://127.0.0.1:3128")
     assert search("油价", 5, "week") == [{"title": "T", "url": "https://a.example/", "snippet": "B"}]
-    assert made[0]["proxy"] == "http://127.0.0.1:7890"
+    assert made[0]["proxy"] == "http://127.0.0.1:3128"
     assert made[1] == {"region": "cn-zh", "max_results": 5, "timelimit": "w"}
     search("oil prices", 3, "")
     assert made[-1] == {"region": "us-en", "max_results": 3}

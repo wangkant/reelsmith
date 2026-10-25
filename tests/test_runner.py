@@ -835,11 +835,11 @@ def test_api_client_and_keys(api_ws, monkeypatch):
     c = runner.api_client(local, runner.settings_for(local))
     assert c.url == "http://127.0.0.1:8000/v1/chat/completions" and "Authorization" not in c._headers
     keyed = configure(w, {"provider": "custom", "base_url": "https://gw.example.com/v1", "key_env": "GW_KEY",
-                          "model": "glm", "proxy": "http://proxy.example.com:7890"}, "GW_KEY=gw-1\n", engine=None)
+                          "model": "glm", "proxy": "http://proxy.example.com:3128"}, "GW_KEY=gw-1\n", engine=None)
     c = runner.api_client(keyed, runner.settings_for(keyed))
     assert c._headers["Authorization"] == "Bearer gw-1" and c.model == "glm"
     proxies = [h.proxies for h in c._opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
-    assert proxies == [{"http": "http://proxy.example.com:7890", "https": "http://proxy.example.com:7890"}]
+    assert proxies == [{"http": "http://proxy.example.com:3128", "https": "http://proxy.example.com:3128"}]
     with pytest.raises(runner.WorkspaceError, match="GW_KEY is missing"):
         runner.api_client(configure(w, {"provider": "custom", "base_url": "https://gw.example.com/v1",
                                         "key_env": "GW_KEY", "model": "glm"}, "", engine=None),
@@ -1034,7 +1034,7 @@ def test_api_resume_needs_the_same_engine_provider_and_model(api_ws, no_checks):
 
 def test_api_web_settings_reach_the_toolbox(api_ws, no_checks):
     w, project = api_ws
-    configure(w, {"budget_usd": 3, "proxy": "http://proxy.example.com:7890", "web": {"search": "none"}}, None,
+    configure(w, {"budget_usd": 3, "proxy": "http://proxy.example.com:3128", "web": {"search": "none"}}, None,
               engine=None)
     seen = {}
 
@@ -1043,7 +1043,7 @@ def test_api_web_settings_reach_the_toolbox(api_ws, no_checks):
         return type("Box", (list,), {"notes": ["web_search is left out: turned off"]})(made)
     out = io.StringIO()
     rep = go_api(project, FakeClient(reply(None, [("render", {})]), reply("done")), tools, out=out, brief="b")
-    assert rep["delivered"] and seen["web"] == {"search": "none", "proxy": "http://proxy.example.com:7890"}
+    assert rep["delivered"] and seen["web"] == {"search": "none", "proxy": "http://proxy.example.com:3128"}
     assert seen["ws"].root == w.root and "note: web_search is left out" in out.getvalue()
 
 
