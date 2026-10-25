@@ -1,4 +1,5 @@
-"""reelsmith <command> ...: the agent tools for scripts and people, plus `run` (the self-hosted agent) and `mcp`."""
+"""reelsmith <command> ...: the agent tools for scripts and people, plus `run` (the self-hosted agent) and `mcp` (the
+MCP server: stdio, or streamable HTTP)."""
 import argparse
 import inspect
 import re
@@ -80,7 +81,7 @@ def _parser() -> argparse.ArgumentParser:
     proj(cmd("typecheck", tools.typecheck))
     sub.add_parser("run", help="run the self-hosted agent on a project (reelsmith run <project> --brief ...)",
                    add_help=False)
-    sub.add_parser("mcp", help="serve the tools over MCP on stdio")
+    sub.add_parser("mcp", help="serve the tools over MCP: stdio, or streamable HTTP with --http", add_help=False)
     return ap
 
 
@@ -141,11 +142,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["run"]:
         return _run_agent(argv[1:])
-    args = _parser().parse_args(argv)
-    if args.cmd == "mcp":
+    if argv[:1] == ["mcp"]:
         from .mcp_server import main as serve
-        serve()
-        return 0
+        return int(serve(argv[1:]) or 0)
+    args = _parser().parse_args(argv)
     try:
         result = _call(args)
     except OSError as exc:                      # an @file that cannot be read
