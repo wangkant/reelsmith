@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import media as M
-from .config import Context, ProviderError, context, exe, number, probe as ffprobe, read_project, run_tree, \
-    safe_tool, tail
+from ..workspace import project_file
+from .config import Context, ProviderError, check_id, context, exe, number, probe as ffprobe, read_project, \
+    run_tree, safe_tool, tail
 
 MAX_STILLS = 24
 DEFAULT_STILLS = 12
@@ -32,6 +33,21 @@ class Media:
     asset: str | None           # asset id when one was named
 
 
+def _name(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", text)[:64] or "file"
+
+
+def asset_file(ctx: Context, asset_id: str, entry: dict) -> Path:
+    """The file of a project.json asset: inside the project folder (as check requires) and present."""
+    path = project_file(ctx.project, entry.get("path"))
+    if path is None:
+        raise ProviderError(f"asset {asset_id!r} points at {entry.get('path')!r}, outside the project folder: "
+                            "import_asset copies a file in")
+    if not path.is_file():
+        raise ProviderError(f"asset {asset_id!r} points at {entry.get('path')}, which is missing")
+    return path
+
+
 def _resolve(ctx: Context, source) -> Media:
     """An asset id, or a file inside the project folder."""
     text = str(source or "").strip()
@@ -41,20 +57,22 @@ def _resolve(ctx: Context, source) -> Media:
     assets = assets if isinstance(assets, dict) else {}
     entry = assets.get(text)
     if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-        path = (ctx.project / entry["path"]).resolve()
-        if not path.is_file():
-            raise ProviderError(f"asset {text!r} points at {entry['path']}, which is missing")
-        return Media(path, entry["path"], text, text)
-    p = Path(text)
-    path = (p if p.is_absolute() else ctx.project / p).resolve()
+        check_id(text, "asset id")
+        return Media(asset_file(ctx, text, entry), entry["path"], _name(text), text)
     root = ctx.project.resolve()
-    if path != root and root not in path.parents:
+    rel = Path(text)
+    if rel.is_absolute():               # by name first: nothing outside is opened
+        try:
+            rel = rel.relative_to(root)
+        except ValueError:
+            rel = None
+    path = project_file(root, rel) if rel is not None else None
+    if path is None:
         raise ProviderError(f"{text} is outside the project folder: import_asset it first")
     if not path.is_file():
         known = ", ".join(sorted(assets)) or "none yet"
         raise ProviderError(f"no asset or file {text!r} (assets: {known})")
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem)[:64] or "file"
-    return Media(path, path.relative_to(root).as_posix(), name, None)
+    return Media(path, path.relative_to(root).as_posix(), _name(path.stem), None)
 
 
 def _rate(text) -> float:
@@ -187,7 +205,9 @@ def _when(value, what: str) -> float:
 
 
 def _folder(ctx: Context, m: Media, sub: str) -> Path:
-    out = ctx.project / "build" / "footage" / m.name / sub
+    out = project_file(ctx.project, Path("build", "footage", m.name, sub))
+    if out is None:                     # a link under build/ would make the rmtree below delete someone else's files
+        raise ProviderError("build/footage leads outside the project folder (a link?): delete it, then call again")
     if out.exists():
         shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)

@@ -53,23 +53,59 @@ def stop(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
-def test_loopback_and_remote_rules():
-    for host in ("127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"):
+def test_loopback_and_remote_rules(tmp_path):
+    for host in ("127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2", "LOCALHOST", "0:0:0:0:0:0:0:1"):
         assert mcp_server.loopback(host) and mcp_server.check_http(host, False, "") == ""
     for host in ("0.0.0.0", "192.168.1.20", "example.com", "::"):
         assert not mcp_server.loopback(host)
         assert "not a loopback address" in mcp_server.check_http(host, False, TOKEN)
-        assert "bearer token" in mcp_server.check_http(host, True, "short")
-        assert mcp_server.check_http(host, True, TOKEN) == ""
+        assert "bearer token" in mcp_server.check_http(host, True, "short", root=str(tmp_path))
+        assert "--root" in mcp_server.check_http(host, True, TOKEN)            # a remote caller needs a fence
+        assert "--root" in mcp_server.check_http(host, True, TOKEN, root=str(tmp_path / "missing"))
+        assert mcp_server.check_http(host, True, TOKEN, root=str(tmp_path)) == ""
 
 
-def test_cli_refuses_before_serving(monkeypatch, capsys):
+def test_cli_refuses_before_serving(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv(mcp_server.TOKEN_ENV, raising=False)
+    monkeypatch.setenv("REELSMITH_ROOT", "")
+    monkeypatch.delenv("REELSMITH_ROOT")
     assert cli.main(["mcp", "--http", "--host", "0.0.0.0"]) == 2
     assert cli.main(["mcp", "--http", "--host", "0.0.0.0", "--allow-remote"]) == 2
     assert cli.main(["mcp", "--port", "9000"]) == 2                   # --port without --http
+    monkeypatch.setenv(mcp_server.TOKEN_ENV, TOKEN)
+    assert cli.main(["mcp", "--http", "--host", "0.0.0.0", "--allow-remote"]) == 2
+    assert cli.main(["mcp", "--http", "--root", str(tmp_path / "missing")]) == 2
     err = capsys.readouterr().err
     assert "not a loopback address" in err and "bearer token" in err and "go with --http" in err
+    assert "needs --root (or REELSMITH_ROOT)" in err and "is not a folder" in err
+
+
+def test_a_remote_bind_is_fenced_and_warned(monkeypatch, capsys, tmp_path):
+    import uvicorn
+    served = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.append(kw))
+    monkeypatch.setenv("REELSMITH_ROOT", "")                # recorded, so the value --root sets is undone
+    monkeypatch.delenv("REELSMITH_ROOT")
+    monkeypatch.setenv(mcp_server.TOKEN_ENV, TOKEN)
+    assert cli.main(["mcp", "--http", "--host", "0.0.0.0", "--allow-remote", "--root", str(tmp_path)]) == 0
+    assert served == [{"host": "0.0.0.0", "port": mcp_server.DEFAULT_PORT, "log_level": "warning"}]
+    assert os.environ["REELSMITH_ROOT"] == str(tmp_path.resolve())
+    assert "plain HTTP" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("host,good", [("127.0.0.1", "127.0.0.1:8765"), ("127.0.0.2", "127.0.0.2:8765"),
+                                       ("LOCALHOST", "localhost:8765"), ("0:0:0:0:0:0:0:1", "[::1]:8765")])
+def test_every_loopback_spelling_checks_host_and_origin(host, good):
+    from starlette.testclient import TestClient
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}
+    accept = {"Accept": "application/json, text/event-stream"}
+    with TestClient(mcp_server.http_app(host)) as c:
+        evil = c.post("/mcp", json=init, headers={**accept, "Host": "evil.example:8765",
+                                                   "Origin": "http://evil.example:8765"})
+        foreign_page = c.post("/mcp", json=init, headers={**accept, "Host": good, "Origin": "http://evil.example"})
+        ok = c.post("/mcp", json=init, headers={**accept, "Host": good, "Origin": f"http://{good}"})
+    assert (evil.status_code, foreign_page.status_code, ok.status_code) == (421, 403, 200)
 
 
 def test_bearer_wrapper():

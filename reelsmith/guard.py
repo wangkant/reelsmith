@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import timeexpr
+
 MCP_PREFIX = "mcp__reelsmith__"
 
 # Never read, never written, in any folder: keys, credentials, tool configs, the spend ledger.
@@ -38,7 +40,7 @@ SESSION_TOOLS = {"WebSearch", "TodoWrite", "ToolSearch"}
 SHELL_TOOLS = {"Bash", "PowerShell", "BashOutput", "KillShell", "KillBash", "TaskOutput", "TaskStop", "Monitor"}
 ASK_TOOLS = {"AskUserQuestion", "ExitPlanMode", "EnterPlanMode"}
 # MCP argument keys whose string values may name files or URLs (asset ids, Times and dotted paths have no slash)
-_PATH_KEYS = {"path", "file", "file_path", "source", "src", "dir", "folder", "out", "output", "out_dir"}
+_PATH_KEYS = {"path", "file", "file_path", "source", "src", "dir", "folder", "out", "output", "out_dir", "asset"}
 _URL_KEYS = {"url", "href"}
 
 NO_SHELL = ("There is no shell in this run. Render, preview, check and type-check with the reelsmith tools; "
@@ -411,6 +413,15 @@ def _same_project(value, scope: Scope) -> bool:
     return path is not None and (_norm(path) == _norm(scope.project) or _real(path) == _real(scope.project))
 
 
+def _reference(text: str) -> bool:
+    """A Time ("src:c1@12.5", "mark:hit") or a captions source ("clip:a"): project grammar, not a path or a URL."""
+    try:
+        timeexpr.parse(text)
+    except timeexpr.TimeError:
+        return False
+    return True
+
+
 def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     k, v = key.lower(), value.strip()
     if not v:                           # an empty optional field (an evidence asset's url); the tool validates it
@@ -418,6 +429,8 @@ def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     if k in _URL_KEYS:
         return check_url(v)
     if k not in _PATH_KEYS:
+        return ""
+    if _reference(v):
         return ""
     scheme = re.match(r"^([A-Za-z][A-Za-z0-9+.-]+):", v)     # one letter before ':' is a drive, not a scheme
     if scheme:
@@ -429,10 +442,44 @@ def _check_mcp_value(key: str, value: str, scope: Scope) -> str:
     return ""
 
 
+def nearest_workspace(path) -> Path | None:
+    """The folder find_workspace loads for path (the nearest at or above it holding workspace.json); nothing is read."""
+    start = Path(os.path.abspath(path))
+    for d in (start, *start.parents):
+        if (d / _OWNER_FILES[0]).is_file():
+            return d
+    return None
+
+
+def shadowed_workspace(project) -> Path | None:
+    """The workspace above the project that a workspace.json in the project folder itself hides, or None."""
+    p = Path(os.path.abspath(project))
+    return nearest_workspace(p.parent) if (p / _OWNER_FILES[0]).is_file() else None
+
+
+def check_workspace(scope: Scope) -> str:
+    """'' while the project's workspace is the one the run started with. The codex and dsh sandboxes let the agent
+    write the project folder, where a workspace.json would replace the owner's rules, budget, ledger, keys and
+    providers for every later tool call."""
+    found, pinned = nearest_workspace(scope.project), scope.workspace
+    if found is None and pinned is None or (found and pinned and _real(found) == _real(pinned)):
+        return ""
+    if found is not None and (pinned is None or inside(_real(found), [_real(pinned)], strict=True)):
+        return (f"{found / _OWNER_FILES[0]} appeared during this run: it would replace the owner's workspace "
+                f"({pinned or 'none'}), its rules, keys and budget. No reelsmith tool runs until it is deleted (with "
+                "any rules.json, .env or ledger.jsonl next to it).")
+    return (f"The project's workspace changed during this run (it started in {pinned or 'no workspace'}, now "
+            f"{found or 'none'}): stop and report this.")
+
+
 def check_mcp(inp: dict, scope: Scope) -> str:
-    """reelsmith tools take paths and URLs too: the same limits apply, and every call works on this run's project."""
+    """reelsmith tools take paths and URLs too: the same limits apply, and every call works on this run's project
+    and workspace."""
     if "project" in inp and not _same_project(inp.get("project"), scope):
         return f"This run works on one project: pass project={scope.project}"
+    why = check_workspace(scope)
+    if why:
+        return why
     for key, value in _strings({k: v for k, v in inp.items() if k != "project"}):
         why = _check_mcp_value(key, value, scope)
         if why:

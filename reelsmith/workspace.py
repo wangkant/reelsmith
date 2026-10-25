@@ -286,11 +286,14 @@ def workspace_fonts(root: Path, folder: Path, mapping=None) -> dict[str, list[di
     that is not a usable family name is skipped), then the `fonts` map {family: path | {src, weight?, style?} |
     [...]} over them."""
     out: dict[str, list[dict]] = {}
+    base = Path(root).resolve()
     if folder.is_dir():
         for f in sorted(folder.iterdir()):
             if f.is_file() and f.suffix.lower() in FONT_EXTS and FONT_FAMILY.match(f.stem) \
                     and f.stem not in BUILTIN_FONTS:
-                out.setdefault(f.stem, []).append({"path": f.resolve(), "weight": None, "style": None})
+                path = f.resolve()
+                if base in path.parents:        # a link out of the workspace would be served from build/fonts
+                    out.setdefault(f.stem, []).append({"path": path, "weight": None, "style": None})
     if mapping is None:
         return out
     if not isinstance(mapping, dict):
@@ -330,6 +333,18 @@ class ProjectPaths:
 
     def to_json(self) -> dict:
         return {k: str(v) for k, v in asdict(self).items()}
+
+
+def project_file(root: str | Path, rel) -> Path | None:
+    """The real path of `rel` (a path from project.json) when it stays inside the project folder `root`, else None.
+    Absolute, drive and UNC paths are refused before anything is opened (a UNC path would reach the network)."""
+    text = str(rel or "")
+    p = Path(text)
+    if not text.strip() or p.is_absolute() or p.drive or p.root or text.startswith(("/", "\\")):
+        return None
+    base = Path(root).resolve()
+    full = (base / p).resolve()
+    return full if base in full.parents else None
 
 
 def project_paths(project: str | Path) -> ProjectPaths:

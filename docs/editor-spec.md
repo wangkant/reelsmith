@@ -80,7 +80,7 @@ looked up in the process environment.
 | `profile` | output profile (section 15): a name or an inline profile (section 15.1); a project's own `profile` wins; default `landscape` |
 | `locale` | the films' language, a BCP-47 tag (`en`, `en-GB`, `zh-CN`, `ja`); a project's own `locale` wins; default `en`. It sets how captions are phrased and how long a caption may be (section 3), capture's browser language (9.2), the runner's web language (11) and whether the TTS has a default voice (9.1) |
 | `profiles` | custom profiles by name, each `{"base": name, field: value, ...}` (section 15.1); a name may not be a built-in one |
-| `fonts` | font families for TextStyle `font` and components: `{family: path | {"src", "weight"?, "style"?} | [...]}`, paths inside the workspace (`weight` like `"400"`, or `"100 900"` for a variable font; `style` `normal`, `italic` or `oblique`). Every `library/fonts/*.woff2`, `.woff`, `.ttf` and `.otf` is a family named after its file stem without being listed (a stem other than letters, digits, spaces, `_` and `-`, or one of the built-in names, is skipped); the map adds families and wins over a stem of the same name |
+| `fonts` | font families for TextStyle `font` and components: `{family: path | {"src", "weight"?, "style"?} | [...]}`, paths inside the workspace (`weight` like `"400"`, or `"100 900"` for a variable font; `style` `normal`, `italic` or `oblique`). Every `library/fonts/*.woff2`, `.woff`, `.ttf` and `.otf` is a family named after its file stem without being listed (a stem other than letters, digits, spaces, `_` and `-`, or one of the built-in names, is skipped, as is a file a link leads to outside the workspace); the map adds families and wins over a stem of the same name |
 | `theme` | `name` (`paper` or `night`) and token overrides; a project's `theme` is laid over it |
 | `providers` | per-tool provider settings (section 9); each section is merged over the defaults |
 | `budget` | `per_project_usd` (default 1.0) and `min_balance_usd` (default 5.0), section 9.6 |
@@ -560,7 +560,9 @@ two budget values for one process.
 ### 9.7 Footage tools: probe, frames, scenes, silences
 
 They look at a source (an asset id, or a file inside the project folder; anything else is refused) and change
-nothing in project.json. Times are **source seconds**; `"src:<clip>@<seconds>"` (section 3.1) puts one on the
+nothing in project.json. An asset id must be a valid id, and an asset whose `path` is absolute or leads out of the
+project folder (`..`, a link) is refused before anything is opened, as is a `build/footage` that leads out (`transcribe`,
+`assets` and `describe` hold asset paths to the same rule). Times are **source seconds**; `"src:<clip>@<seconds>"` (section 3.1) puts one on the
 timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 
 - `probe(project, source)`: container, duration, size and bit rate; the first picture stream's codec, width,
@@ -641,19 +643,26 @@ DeepSeek Harness gets them, with contact sheets as images, a Video editor mode a
 ### 10.1 Transports
 
 ```
-reelsmith mcp [--http [--host 127.0.0.1] [--port 8765] [--allow-remote] [--token-env REELSMITH_MCP_TOKEN]]
+reelsmith mcp [--root DIR] [--http [--host 127.0.0.1] [--port 8765] [--allow-remote] [--token-env REELSMITH_MCP_TOKEN]]
 ```
 
-`reelsmith-mcp` and `python -m reelsmith.mcp_server` take the same flags. Without `--http` the server speaks stdio.
-`--http` serves streamable HTTP at `http://HOST:PORT/mcp` (the `mcp` package's app under uvicorn). The host must be a
-loopback address (`127.0.0.0/8`, `::1`, `localhost`), where the SDK's DNS-rebinding protection checks the Host and
-Origin headers; any other host needs `--allow-remote` and a bearer token of at least 16 characters in the token
-variable, or the command exits with status 2 before binding. While the token variable is set, every request needs
-`Authorization: Bearer <token>` and is answered 401 without it, loopback included.
+`reelsmith-mcp` and `python -m reelsmith.mcp_server` take the same flags. `--root` sets `REELSMITH_ROOT` (an existing
+folder: projects and imports stay inside it). Without `--http` the server speaks stdio. `--http` serves streamable
+HTTP at `http://HOST:PORT/mcp` (the `mcp` package's app under uvicorn). The host must be a loopback address
+(`127.0.0.0/8`, `::1`, `localhost`, in any spelling), where the SDK's DNS-rebinding protection checks the Host and
+Origin headers against that host, `127.0.0.1`, `localhost` and `[::1]` (any port): a foreign Host is answered 421 and
+a foreign Origin 403. Any other host needs `--allow-remote`, a bearer token of at least 16 characters in the token
+variable and a root (`--root` or `REELSMITH_ROOT`), or the command exits with status 2 before binding; it serves plain
+HTTP and says so, so a remote bind belongs behind TLS (a reverse proxy) on a trusted network. While the token
+variable is set, every request needs `Authorization: Bearer <token>` and is answered 401 without it, loopback included.
 
 With `REELSMITH_GUARD_PROJECT` set to a project folder, the server checks every call with the runner guard's MCP
-rules (section 11) before it runs: one project, paths the session may read, public http(s) URLs. A refused call
-returns an error result that starts with `Refused by the run's guard`. The codex and dsh engines set it.
+rules (section 11) before it runs: one project, its workspace, paths the session may read, public http(s) URLs. The
+workspace is the one at `REELSMITH_ROOT` when that folder holds `workspace.json` (the runner sets it to the run's
+workspace), else the project's when the server starts; while the nearest `workspace.json` at or above the project is
+another one (say one the agent wrote into the project, which the codex and dsh sandboxes let it write), every call is
+refused, so no tool runs on settings, rules, keys or a budget the agent chose. A refused call returns an error result
+that starts with `Refused by the run's guard`. The codex and dsh engines set it.
 
 ### 10.2 Setup: attaching a coding agent
 
@@ -825,10 +834,17 @@ carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `output
   or `ledger.jsonl` under any name, never scripts, executables or package files. Reads stay in the workspace, the
   manual and the renderer source. Keys, credentials, tool configs, `.git`, the ledger and `.cache/` are
   unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
-  redirects included, as `capture` does); reelsmith tool arguments that name files or URLs are held to the same
-  rules. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
-  project and the library; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP
-  server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
+  redirects included, as `capture` does); reelsmith tool arguments that name files or URLs (keys such as `path`,
+  `source`, `src` and `asset`, at any depth, edit ops included) are held to the same rules, except values in the Time
+  grammar (section 3.1), which covers a captions track's `"clip:<id>"`. Every reelsmith tool call is refused while
+  the project's workspace (the nearest `workspace.json`) is not the one the run started with. On the codex and dsh
+  engines the agent's own sandbox fences its shell and file tools instead (writes to the project and the library;
+  reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP server applies the rules for
+  tool arguments and the workspace itself (`REELSMITH_GUARD_PROJECT`, section 10.1). Because those sandboxes write
+  the project folder, a session that leaves a `workspace.json` there ends the run (no fix-up runs on it), and
+  `reelsmith run` refuses to start on a project whose own `workspace.json` hides the workspace above it. A project
+  outside any workspace, or one that is its own workspace, keeps its ledger (and the owner's files) inside that
+  sandbox: give these engines a project under a workspace's `projects/`.
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
   it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`
@@ -991,12 +1007,12 @@ profile by `check`).
 
 | variable | effect |
 |---|---|
-| `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace) |
+| `REELSMITH_ROOT` | tools refuse projects outside this folder, and `import_asset` local files outside it (the runner sets it to the workspace; `reelsmith mcp --root` sets it, and `--allow-remote` needs it) |
 | `REELSMITH_RENDERER` | the renderer folder (default: `renderer/` next to the package) |
 | `REELSMITH_LIBRARY` | set by reelsmith for render.mjs: the workspace's component folder |
 | `REELSMITH_BUDGET_USD`, `REELSMITH_MIN_BALANCE_USD` | override `budget.per_project_usd` and `budget.min_balance_usd` |
 | `REELSMITH_PROXY` | an upstream proxy for `capture` and the runner (both also honour `HTTPS_PROXY` / `HTTP_PROXY`) |
-| `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
+| `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project, its workspace and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
 | `REELSMITH_MCP_TOKEN` | the bearer token `reelsmith mcp --http` requires of every request when set, and needs for `--allow-remote` (`--token-env` names another variable) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw` and the codex engine, and Codex's home folder (default `~/.codex`; `reelsmith setup codex --user` writes its `config.toml`) |
 | `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`) |

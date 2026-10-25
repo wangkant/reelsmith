@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
 
 from . import __version__, tools
@@ -31,20 +32,29 @@ TOKEN_ENV = "REELSMITH_MCP_TOKEN"
 GUARD_ENV = "REELSMITH_GUARD_PROJECT"
 DEFAULT_PORT = 8765
 MIN_TOKEN = 16
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 mcp = MCPServer("reelsmith", instructions=INSTRUCTIONS, version=__version__)
 
 
 def guard_scope():
-    """With REELSMITH_GUARD_PROJECT set (the runner's codex and dsh engines), every call is held to that project and
-    the runner guard's rules for paths and URLs, as on the other engines."""
+    """With REELSMITH_GUARD_PROJECT set (the runner's codex and dsh engines), every call is held to that project, its
+    workspace and the runner guard's rules for paths and URLs, as on the other engines."""
     project = os.environ.get(GUARD_ENV)
     if not project:
         return None
     from . import guard
-    from .workspace import find_workspace, project_root
+    from .workspace import WORKSPACE_FILE, Workspace, find_workspace, project_root
     root = project_root(project)
-    return guard.scope_for(root, find_workspace(root), extra_read=[ROOT / "docs", ROOT / "renderer" / "src"])
+    # the runner sets REELSMITH_ROOT to the workspace it started with: a workspace.json the agent wrote into the
+    # project since then (its sandbox may write there) must not become a later session's workspace
+    fence = os.environ.get("REELSMITH_ROOT")
+    home = Path(fence).expanduser().resolve() if fence else None
+    if home is not None and (home == root or home in root.parents) and (home / WORKSPACE_FILE).is_file():
+        ws = Workspace.load(home)
+    else:
+        ws = find_workspace(root)
+    return guard.scope_for(root, ws, extra_read=[ROOT / "docs", ROOT / "renderer" / "src"])
 
 
 GUARD = guard_scope()
@@ -107,29 +117,53 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
+def _host_header(host: str) -> str:
+    """host as a browser writes it in a Host header: lower case, an IPv6 address compressed and in brackets."""
+    name = str(host).strip().strip("[]").lower()
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return name
+    return f"[{ip.compressed}]" if ip.version == 6 else ip.compressed
+
+
+def rebinding_guard(host: str) -> TransportSecuritySettings | None:
+    """Host and Origin checks for a loopback bind. The SDK applies its own only to the exact strings 127.0.0.1,
+    localhost and ::1, which would leave 127.0.0.2 or LOCALHOST open to a DNS-rebinding page."""
+    if not loopback(host):
+        return None
+    names = list(dict.fromkeys([_host_header(host), *LOOPBACK_HOSTS]))
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                     allowed_hosts=[n + port for n in names for port in ("", ":*")],
+                                     allowed_origins=[f"http://{n}{port}" for n in names for port in ("", ":*")])
+
+
 def http_app(host: str, token: str = ""):
-    """The streamable HTTP app at /mcp; the SDK turns DNS-rebinding protection on for loopback hosts."""
-    app = mcp.streamable_http_app(host=host)
+    """The streamable HTTP app at /mcp, with DNS-rebinding protection on any loopback host."""
+    app = mcp.streamable_http_app(host=host, transport_security=rebinding_guard(host))
     return BearerAuth(app, token) if token else app
 
 
-def check_http(host: str, allow_remote: bool, token: str, token_env: str = TOKEN_ENV) -> str:
-    """'' when serving on host is allowed, else why not."""
+def check_http(host: str, allow_remote: bool, token: str, token_env: str = TOKEN_ENV, root: str | None = None) -> str:
+    """'' when serving on host is allowed, else why not. A remote bind needs a token and a root folder."""
     if loopback(host):
         return ""
     if not allow_remote:
         return (f"{host} is not a loopback address: the tools read and write files on this machine, so bind "
-                "127.0.0.1 (the default), or pass --allow-remote with a bearer token")
+                "127.0.0.1 (the default), or pass --allow-remote with a bearer token and --root")
     if len(token) < MIN_TOKEN:
         return (f"--allow-remote needs a bearer token of at least {MIN_TOKEN} characters in ${token_env}; clients "
                 "send it as `Authorization: Bearer <token>`")
+    if not root or not Path(root).expanduser().is_dir():
+        return ("--allow-remote needs --root (or REELSMITH_ROOT), an existing folder: remote callers may only reach "
+                "projects and imports inside it")
     return ""
 
 
 def serve_http(host: str = "127.0.0.1", port: int = DEFAULT_PORT, allow_remote: bool = False,
                token_env: str = TOKEN_ENV) -> int:
     token = os.environ.get(token_env) or ""
-    why = check_http(host, allow_remote, token, token_env)
+    why = check_http(host, allow_remote, token, token_env, os.environ.get("REELSMITH_ROOT"))
     if why:
         print(f"reelsmith mcp: {why}", file=sys.stderr)
         return 2
@@ -137,6 +171,9 @@ def serve_http(host: str = "127.0.0.1", port: int = DEFAULT_PORT, allow_remote: 
     shown = f"[{host}]" if ":" in host else host
     print(f"reelsmith MCP server: http://{shown}:{port}/mcp" + (" (bearer token required)" if token else ""),
           file=sys.stderr, flush=True)
+    if not loopback(host):
+        print("reelsmith mcp: this is plain HTTP: the token and every call cross the network in the clear. Serve it "
+              "behind TLS (a reverse proxy) on a network you trust.", file=sys.stderr, flush=True)
     uvicorn.run(http_app(host, token), host=host, port=port, log_level="warning")
     return 0
 
@@ -148,10 +185,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", default="127.0.0.1", help="the address to bind (default 127.0.0.1)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"the port (default {DEFAULT_PORT})")
     ap.add_argument("--allow-remote", action="store_true",
-                    help=f"allow a non-loopback --host; requires a bearer token in ${TOKEN_ENV} (or --token-env)")
+                    help=f"allow a non-loopback --host; requires a bearer token in ${TOKEN_ENV} (or --token-env) "
+                         "and --root")
     ap.add_argument("--token-env", default=TOKEN_ENV,
                     help="the environment variable holding the bearer token; when it is set, every request needs it")
+    ap.add_argument("--root", help="set REELSMITH_ROOT: the tools refuse projects and imports outside this folder")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.root:
+        root = Path(args.root).expanduser().resolve()
+        if not root.is_dir():
+            print(f"reelsmith mcp: --root {root} is not a folder", file=sys.stderr)
+            return 2
+        os.environ["REELSMITH_ROOT"] = str(root)
     if not args.http:
         if args.allow_remote or args.host != "127.0.0.1" or args.port != DEFAULT_PORT:
             print("reelsmith mcp: --host, --port and --allow-remote go with --http", file=sys.stderr)

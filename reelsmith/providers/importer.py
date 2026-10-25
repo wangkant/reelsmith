@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 from .. import netcheck
+from ..workspace import project_file
 from .config import (Context, ProviderError, check_id, check_replaceable, context, header_size, number, probe,
                      read_project, register_asset, rel, safe_tool)
 
@@ -311,9 +312,11 @@ def _uses(tracks, asset_id: str) -> int:
 
 
 def _describe(ctx: Context, asset_id: str, entry: dict, tracks) -> str:
-    path = (ctx.project / str(entry.get("path") or "")).resolve()
+    path = project_file(ctx.project, entry.get("path"))
     kind = entry.get("kind", "?")
     head = f"{asset_id}  {kind}  {entry.get('path')}"
+    if path is None:
+        return head + "  OUTSIDE the project folder (import_asset copies a file in, then point the asset at it)"
     if not path.is_file():
         return head + "  MISSING (the file is gone: re-make it or remove_asset)"
     facts = []

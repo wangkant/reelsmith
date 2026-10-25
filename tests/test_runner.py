@@ -580,6 +580,20 @@ def test_denials_reach_the_report(ws, no_checks):
     ("Write", {"file_path": "ledger.jsonl"}, False),
     ("Read", {"file_path": "../../.cache/draw.log"}, False),
     ("Grep", {"pattern": "x", "path": "../../.cache"}, False),
+    # Times and a transcript's captions source are project grammar, not paths
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "update_track", "id": "capb",
+                                                       "set": {"source": "clip:a"}}]}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": json.dumps([{"op": "add_track", "id": "capb", "kind": "captions",
+                                                                  "source": "clip:a"}])}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "set", "path": "markers", "value": {
+        "src": "src:c1@12.5+0.2", "source": "mark:hit-1", "out": "line:3.end"}}]}, True),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "update_track", "id": "capb",
+                                                       "set": {"source": "file:///C:/x"}}]}, False),
+    ("mcp__reelsmith__edit", {"project": ".", "ops": [{"op": "add_asset", "id": "a",
+                                                       "path": "../../../victim/x.mp4"}]}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "../../../../victim"}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "C:/Users/x/Videos"}, False),
+    ("mcp__reelsmith__frames", {"project": ".", "asset": "a1"}, True),
 ])
 def test_guard_table(ws, tool, inp, allowed):
     w, project = ws
@@ -616,6 +630,30 @@ def test_grep_over_the_workspace_skips_the_cache(ws):
     (w.root / ".cache").mkdir(exist_ok=True)
     ok, why = guard.decide("Grep", {"pattern": "x", "path": "../.."}, guard.scope_for(project, w))
     assert not ok and ".cache" in why
+
+
+def test_tools_stop_once_a_workspace_appears_in_the_project(ws):
+    w, project = ws
+    scope = guard.scope_for(project, w)
+    assert guard.decide("mcp__reelsmith__check", {"project": "."}, scope)[0]
+    (project / "workspace.json").write_text(json.dumps({"budget": {"per_project_usd": 1000}}), encoding="utf-8")
+    ok, why = guard.decide("mcp__reelsmith__check", {"project": "."}, scope)
+    assert not ok and "appeared during this run" in why
+    (project / "workspace.json").unlink()
+    assert guard.decide("mcp__reelsmith__check", {"project": "."}, scope)[0]
+
+
+def test_a_workspace_written_into_the_project_stops_the_run(ws, no_checks):
+    _, project = ws
+
+    def plant(p: Path):
+        (p / "workspace.json").write_text(json.dumps({"budget": {"per_project_usd": 1000}}), encoding="utf-8")
+    calls = []
+    q = fake_query([init(), plant, result(0.5, 5)], [deliver, result(0.2, 2)], calls=calls)
+    rep = go(project, q, brief="b")
+    assert not rep["delivered"] and len(calls) == 1 and "appeared during this run" in rep["problems"][0]
+    with pytest.raises(runner.WorkspaceError, match="hides the workspace"):     # nor does the next run trust it
+        go(project, fake_query(), brief="b")
 
 
 # ------------------------------------------------------------------ the api engine
