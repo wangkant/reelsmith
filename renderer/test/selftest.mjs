@@ -1,7 +1,8 @@
 // Renderer self-test: stills + inspect on test/basic.resolved.json, word-aware text layout and evidence crops
-// (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, a film with
-// looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes, transient
-// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// (layout.resolved.json), transitions between clips (cuts.resolved.json), sound curves and ducking, what a clip does
+// to its picture and time (focus keyframes, flips, filters, an animated GIF, hold, a speed curve, an NTSC rate), a
+// film with looping video and audio (video.resolved.json), the import guard, context narrowing, component crashes,
+// transient failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
@@ -403,6 +404,74 @@ console.log("sound curves: video volume keyframes and a ducked bed (film)");
   const db = (xs) => xs.map((x) => x.toFixed(1)).join(", ");
   check(talk[0] - talk[1] > 20 && Math.abs(talk[0] - talk[2]) < 4, `video volume keyframes: quiet 1-2 s, loud again after (${db(talk)} dB)`);
   check(bed[0] - bed[1] > 20 && Math.abs(bed[0] - bed[2]) < 4, `the bed ducks 2.1-3 s and comes back (${db(bed)} dB)`);
+}
+
+console.log("picture and time: focus keyframes, flips, filters, an animated GIF, hold, a speed curve (29.97 fps)");
+{
+  const dir = path.join(OUT, "picture");
+  fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
+  const gen = (args, name) => spawnSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args, path.join(dir, "assets", name)]);
+  const bar = (c) => ["-f", "lavfi", "-i", `color=${c}:s=160x360:d=2:r=30`];
+  // landscape stripes red | green | blue | yellow; a counter whose frame n is grey 4n; red, blue, green for 1 s each
+  gen([...bar("red"), ...bar("lime"), ...bar("blue"), ...bar("yellow"), "-filter_complex", "[0][1][2][3]hstack=inputs=4",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p"], "stripes.mp4");
+  gen(["-f", "lavfi", "-i", "color=black:s=64x64:r=30:d=2,format=gray,geq=lum=N*4", "-c:v", "libx264", "-crf", "8", "-g", "30",
+    "-pix_fmt", "yuv420p"], "counter.mp4");
+  gen(["-f", "lavfi", "-i", "color=red:s=40x40:d=1:r=10", "-f", "lavfi", "-i", "color=blue:s=40x40:d=1:r=10", "-f", "lavfi", "-i",
+    "color=lime:s=40x40:d=1:r=10", "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0,split[a][b];[a]palettegen[p];[b][p]paletteuse",
+    "-loop", "0"], "anim.gif");
+  gen(["-f", "lavfi", "-i", "color=red:s=50x50", "-f", "lavfi", "-i", "color=blue:s=50x50", "-filter_complex", "[0][1]hstack",
+    "-frames:v", "1"], "halves.png");
+  const el = (id, type, box, content, style = {}, keyframes = {}) => ({
+    id, type, track: "v", from: 0, dur: 90, box, style, keyframes, enter: null, exit: null, transition: null, transitionOut: null, content,
+  });
+  const vid = (src, extra = {}) => ({ src, duration: 2, trimIn: 0, rate: 1, loop: false, fit: "cover", focus: null, volume: 0, ...extra });
+  const red = { shape: "rect", fill: "#FF0000" };
+  const film = {
+    version: 2, fps: 30000 / 1001, width: 640, height: 360, durationInFrames: 90, safe: { x: 20, y: 20, w: 600, h: 320 }, theme: basic.theme,
+    tracks: [{ id: "v", kind: "visual", clips: [
+      el("ground", "shape", { x: 0, y: 0, w: 640, h: 360 }, { shape: "rect", fill: "#808080" }),
+      // a 100 x 180 window on 320 x 180 of cover-fitted stripes, following focus_x from the left edge to the right
+      el("follow", "video", { x: 0, y: 0, w: 100, h: 180 }, vid("assets/stripes.mp4", { loop: true }), {},
+        { focus_x: [{ f: 0, v: 0 }, { f: 60, v: 1 }] }),
+      el("flipped", "image", { x: 120, y: 0, w: 100, h: 50 }, { src: "assets/halves.png", size: [100, 50], fit: "cover", focus: null }, { flipX: true }),
+      el("hue", "shape", { x: 240, y: 0, w: 40, h: 40 }, red, { filter: { hue_rotate: 120 } }),
+      el("inv", "shape", { x: 290, y: 0, w: 40, h: 40 }, red, { filter: { invert: 1 } }),
+      el("sep", "shape", { x: 340, y: 0, w: 40, h: 40 }, { shape: "rect", fill: "#0000FF" }, { filter: { sepia: 1 } }),
+      el("con", "shape", { x: 390, y: 0, w: 40, h: 40 }, red, {}, { contrast: [{ f: 0, v: 0 }, { f: 60, v: 1 }] }),
+      el("gif", "image", { x: 440, y: 0, w: 60, h: 60 }, { src: "assets/anim.gif", size: [40, 40], fit: "cover", focus: null, animated: true }),
+      el("held", "video", { x: 120, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { hold: 30 })),
+      el("ramp", "video", { x: 200, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { rateKeys: [{ f: 0, v: 1 }, { f: 20, v: 3, ease: "step" }] })),
+    ] }],
+    audio: [], inspect: false,
+  };
+  const file = path.join(dir, "resolved.json");
+  fs.writeFileSync(file, JSON.stringify(film));
+  const r = run(["stills", file, dir, path.join(dir, "out"), "0", "15", "30", "45", "60", "75"]);
+  console.log(`  (${r.s} s)`);
+  check(r.result?.ok === true && Math.abs((r.result?.fps ?? 0) - 29.97) < 0.001,
+    `stills ok, at 30000/1001 fps (${r.result?.fps}) ${r.result?.error ?? ""}`);
+  const at = (f, x, y) => mean(pixels(path.join(dir, "out", `still_${String(f).padStart(5, "0")}.png`), x, y, 10, 10)).map(Math.round);
+  const near = (v, want, tol = 12) => v.every((c, i) => Math.abs(c - want[i]) <= tol);
+  const rgb = (v) => v.join(",");
+  const [left, mid, right] = [at(0, 45, 80), at(30, 20, 80), at(60, 45, 80)];
+  check(left[0] > 230 && left[2] < 20 && right[0] > 230 && right[1] > 220 && right[2] < 20 && mid[1] > 180 && mid[0] < 20,
+    `focus_x keyframes walk the window from the red left edge (frame 0) through green to the yellow right edge (frame 60) (${rgb(left)} / ${rgb(mid)} / ${rgb(right)})`);
+  const [fl, fr] = [at(0, 125, 20), at(0, 205, 20)];
+  check(fl[2] > 230 && fl[0] < 20 && fr[0] > 230 && fr[2] < 20, `flip_x mirrors red | blue into blue | red (${rgb(fl)} / ${rgb(fr)})`);
+  const [hue, inv, sep] = [at(0, 250, 10), at(0, 300, 10), at(0, 350, 10)];
+  check(near(hue, [0, 113, 0]) && near(inv, [0, 255, 255]) && near(sep, [48, 43, 33]),
+    `hue_rotate 120 turns red green, invert turns it cyan, sepia turns blue brown (${rgb(hue)} / ${rgb(inv)} / ${rgb(sep)})`);
+  const [c0, c30, c60] = [at(0, 400, 10), at(30, 400, 10), at(60, 400, 10)];
+  check(near(c0, [128, 128, 128], 4) && near(c30, [191, 64, 64], 6) && near(c60, [255, 0, 0], 4),
+    `contrast keyframes 0 -> 1: grey, halfway, red (${rgb(c0)} / ${rgb(c30)} / ${rgb(c60)})`);
+  const [g15, g45, g75] = [at(15, 460, 20), at(45, 460, 20), at(75, 460, 20)];
+  check(g15[0] > 230 && g45[2] > 230 && g75[1] > 230 && g45[0] < 20, `an animated GIF plays: red, blue, green (${rgb(g15)} / ${rgb(g45)} / ${rgb(g75)})`);
+  const held = [0, 45, 75].map((f) => at(f, 140, 120)[0]);
+  check(held.every((v) => Math.abs(v - 120) <= 6), `hold shows source frame 30 (grey 120) throughout (${held.join(", ")})`);
+  const ramp = [at(0, 220, 120)[0], at(15, 220, 120)[0], at(30, 220, 120)[0]];
+  check(ramp[0] < 8 && Math.abs(ramp[1] - 60) <= 6 && Math.abs(ramp[2] - 200) <= 6,
+    `a speed curve walks the source: 1x for 20 frames, then 3x (frames 0, 15, 30 show source 0, 15, 50: ${ramp.join(", ")})`);
 }
 
 console.log("transient failures");

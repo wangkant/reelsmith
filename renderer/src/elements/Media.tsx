@@ -2,9 +2,10 @@
 // The image/video clip types use it with no motion (their motion is zoom/pan keyframes on the clip); the kit
 // re-exports it for components.
 import React from "react";
-import { Easing, Freeze, Img, interpolate, Loop, useCurrentFrame } from "remotion";
+import { AnimatedImage, Easing, Freeze, Img, interpolate, Loop, useCurrentFrame } from "remotion";
 import { Video, type VideoObjectFit } from "@remotion/media";
 import { useClip } from "../kit/context";
+import { sample } from "../keyframes";
 import type { Keyframe, MediaRef } from "../types";
 import { audible, curveAt } from "./sound";
 import { clamp01, num, srcUrl } from "./util";
@@ -29,6 +30,10 @@ export type MediaProps = {
   volumeKeys?: Keyframe[] | null;
   fadeIn?: number;
   fadeOut?: number;
+  /** video only, silent: the source frame shown throughout (a freeze frame), or a speed curve replacing `rate` (the
+   *  source moves on by its value each frame, from `trimIn`) */
+  hold?: number | null;
+  rateKeys?: Keyframe[] | null;
   /** a dark veil 0..1 over the picture, for text on top */
   dim?: number;
   style?: React.CSSProperties;
@@ -55,14 +60,41 @@ const motionTransform = (motion: Motion | null | undefined, t: number): string |
   }
 };
 
+// source frames moved on before each clip frame, per speed curve (sums, so every frame is a lookup)
+const walked = new WeakMap<Keyframe[], { fps: number; sums: number[] }>();
+
+/** Source frames a speed curve has moved on after `f` clip frames: the sum of its value on frames 0..f-1 (resolve.py's
+ *  source_frames sums the same way). */
+export const walkedAt = (keys: Keyframe[], f: number, fps: number): number => {
+  let w = walked.get(keys);
+  if (!w || w.fps !== fps) {
+    w = { fps, sums: [0] };
+    walked.set(keys, w);
+  }
+  const n = Math.max(0, Math.floor(f));
+  for (let i = w.sums.length - 1; i < n; i++) w.sums.push(w.sums[i] + Math.max(0, sample(keys, i, fps, 1)));
+  return w.sums[n];
+};
+
 const VideoBody: React.FC<{
   m: MediaRef; style: React.CSSProperties; trimIn: number; rate: number; loop: boolean; volume: number; fps: number;
-  keys?: Keyframe[] | null; fadeIn?: number; fadeOut?: number; dur: number;
-}> = ({ m, style, trimIn, rate, loop, volume, fps, keys, fadeIn, fadeOut, dur }) => {
+  keys?: Keyframe[] | null; fadeIn?: number; fadeOut?: number; dur: number; hold: number | null; rateKeys: Keyframe[] | null;
+}> = ({ m, style, trimIn, rate, loop, volume, fps, keys, fadeIn, fadeOut, dur, hold, rateKeys }) => {
   const f = useCurrentFrame();
   const src = srcUrl(m.src);
   const { objectFit, ...css } = style;
+  const fitCss = (objectFit as VideoObjectFit | undefined) ?? "cover";
   const srcFrames = m.duration && m.duration > 0 ? Math.floor(m.duration * fps) : null;
+  if (hold !== null || (rateKeys && rateKeys.length)) {
+    // the source frame for this clip frame, through a Freeze: the element seeks to it (frame-accurate) and is muted
+    const want = hold !== null ? hold : trimIn + walkedAt(rateKeys as Keyframe[], f, fps);
+    const last = srcFrames === null ? want : Math.max(0, srcFrames - 1);
+    return (
+      <Freeze frame={Math.max(0, Math.min(want, last))}>
+        <Video src={src} muted objectFit={fitCss} style={css} />
+      </Freeze>
+    );
+  }
   // composition frames the source covers; one frame of margin: asking for the very last frame can fail
   const playable = srcFrames === null ? null : Math.floor((srcFrames - trimIn - 1) / rate);
   const heard = audible(volume, keys);
@@ -79,7 +111,7 @@ const VideoBody: React.FC<{
       playbackRate={rate}
       muted={!heard}
       volume={level}
-      objectFit={(objectFit as VideoObjectFit | undefined) ?? "cover"}
+      objectFit={fitCss}
       style={css}
     />
   );
@@ -95,7 +127,7 @@ const VideoBody: React.FC<{
 
 export const Media: React.FC<MediaProps> = ({
   media, fit = "cover", focus, motion, dur, trimIn = 0, rate = 1, loop = false, volume = 0, volumeKeys, fadeIn, fadeOut,
-  dim = 0, style,
+  hold = null, rateKeys = null, dim = 0, style,
 }) => {
   const f = useCurrentFrame();
   const clip = useClip();
@@ -109,14 +141,21 @@ export const Media: React.FC<MediaProps> = ({
     objectPosition: `${clamp01(fx) * 100}% ${clamp01(fy) * 100}%`, transform,
     transformOrigin: `${clamp01(fx) * 100}% ${clamp01(fy) * 100}%`, maxWidth: "none", ...style,
   };
-  const body = isVideo(m) ? (
-    <VideoBody
-      m={m} style={inner} trimIn={Math.max(0, trimIn)} rate={rate > 0 ? rate : 1} loop={loop} volume={volume} fps={clip.fps}
-      keys={volumeKeys} fadeIn={fadeIn} fadeOut={fadeOut} dur={clip.dur}
-    />
-  ) : (
-    <Img src={srcUrl(m.src)} style={inner} />
-  );
+  let body: React.ReactNode;
+  if (isVideo(m)) {
+    body = (
+      <VideoBody
+        m={m} style={inner} trimIn={Math.max(0, trimIn)} rate={rate > 0 ? rate : 1} loop={loop} volume={volume} fps={clip.fps}
+        keys={volumeKeys} fadeIn={fadeIn} fadeOut={fadeOut} dur={clip.dur}
+        hold={typeof hold === "number" && Number.isFinite(hold) ? hold : null} rateKeys={rateKeys}
+      />
+    );
+  } else if (m.animated) {
+    // decoded frame by frame (ImageDecoder) at the clip's time, looping; the canvas takes object-fit like an <img>
+    body = <AnimatedImage src={srcUrl(m.src)} style={inner} />;
+  } else {
+    body = <Img src={srcUrl(m.src)} style={inner} />;
+  }
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
       {body}

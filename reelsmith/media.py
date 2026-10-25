@@ -194,6 +194,55 @@ def master(src: Path, dst: Path, lufs: float, peak: float = -1.0) -> None:
         raise RuntimeError(f"mastering failed: {tail(r.stderr or '', 5, 300)}")
 
 
+REVERSE_BUDGET = 384 * 2 ** 20      # bytes of decoded frames one reverse filter may hold
+
+
+def reverse_span(src: Path, start: float, end: float, dst: Path, margin: int = 0) -> None:
+    """The source frames from second `start` to `end` (and `margin` frames before `start`, which come last) played
+    backwards, picture and sound, as an h264/aac mp4. ffmpeg's reverse filter keeps every frame it reverses in memory,
+    so the picture is reversed in pieces of at most REVERSE_BUDGET and joined."""
+    info = probe(src)
+    video = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
+    if video is None:
+        raise RuntimeError(f"{src.name} has no picture to reverse")
+    sound = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+    fps = frame_rate(video.get("avg_frame_rate")) or frame_rate(video.get("r_frame_rate")) or 30.0
+    f0 = max(0, round(start * fps) - margin)
+    total = max(1, round(end * fps) - f0)
+    pixels = max(1, int(video.get("width") or 1920) * int(video.get("height") or 1080))
+    step = max(1, min(total, int(REVERSE_BUDGET / (pixels * 1.5))))
+    work = dst.parent / f".{dst.stem}.parts"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    ff = [_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error"]
+    try:
+        parts = []
+        for first in range(f0, f0 + total, step):
+            part = work / f"{first:07d}.mp4"
+            # half a frame early: the seek lands on that frame, not one past it; trim ends the input there, or reverse
+            # would take in the rest of the file
+            at, n = max(0.0, (first - 0.5) / fps), min(step, f0 + total - first)
+            r = run(ff + ["-ss", f"{at:.6f}", "-i", str(src), "-map", "0:v:0", "-vf", f"trim=end_frame={n},reverse",
+                          "-frames:v", str(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-g",
+                          "30", "-pix_fmt", "yuv420p", str(part)], 900)
+            if r.returncode != 0 or not part.is_file():
+                raise RuntimeError(f"reversing {src.name} failed: {tail(r.stderr or '', 5, 300)}")
+            parts.append(part)
+        listing = work / "parts.txt"
+        listing.write_text("".join(f"file '{p.name}'\n" for p in reversed(parts)), encoding="utf-8")
+        cmd = ff + ["-f", "concat", "-safe", "0", "-i", str(listing)]
+        if sound:
+            cmd += ["-ss", f"{f0 / fps:.6f}", "-t", f"{total / fps:.6f}", "-i", str(src), "-map", "0:v:0", "-map",
+                    "1:a:0", "-af", "areverse", "-c:a", "aac", "-b:a", "192k"]
+        tmp = work / "joined.mp4"
+        r = run(cmd + ["-c:v", "copy", "-movflags", "+faststart", str(tmp)], 900)
+        if r.returncode != 0 or not tmp.is_file():
+            raise RuntimeError(f"joining the reversed {src.name} failed: {tail(r.stderr or '', 5, 300)}")
+        os.replace(tmp, dst)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def scan(path: Path, length: float) -> dict:
     """Seconds of near-black and the longest stretch without any change, from one decode."""
     r = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path), "-an",

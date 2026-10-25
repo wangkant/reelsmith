@@ -35,11 +35,13 @@ helpers with your default), except two kinds of key, at any depth (arrays and ne
 | key | in project.json | in the component |
 |---|---|---|
 | `at`, `*_at` | a Time: `"line:8"`, `"line:8+0.4"`, `"clip:x.end-1"`, `"end"` (film times), or a number = **seconds from the clip's start** | a number: **frames from the clip's start** (negative = before it). A Time that cannot be read arrives unchanged (a string), so `frameOr(props.at, 0)` falls back |
-| `asset`, `*_asset` | an asset id | `{src, kind, size?, box?, site?, duration?}`; an unknown id arrives as the string |
+| `asset`, `*_asset` | an asset id | `{src, kind, size?, box?, site?, duration?, animated?}`; an unknown id arrives as the string |
 
 The asset ref: `src` a project-relative path (give it to `assetSrc` or `Media`), `kind` `"image" | "video" | "audio" |
 "evidence"`, `size` `[w, h]` pixels (images and evidence), `box` `[x, y, w, h]` the proving sentence in capture
-pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the page's site (evidence), `duration` seconds (video, audio).
+pixels (evidence; phone captures are 3× the page, desktop ones 2×), `site` the page's site (evidence), `duration`
+seconds (video, audio), `animated` true for a GIF, APNG or WebP that moves (`Media` plays it; an `<Img>` would hold
+its first frame).
 
 ## useClip()
 
@@ -112,7 +114,7 @@ A number that counts: lay it out once at the width of its final text (`textWidth
 
 | export | | example |
 |---|---|---|
-| `Media` | an image or video asset filling its parent, `fit` cover/contain around a `focus`, an optional slow `motion` (`push`, `pull`, `pan_left`, `pan_right`, `rise`, `still`), `dim` 0..1 veil; video: `trimIn` (frames), `rate`, `loop`, `volume`, `volumeKeys` (a volume curve, frames from the clip start), `fadeIn`/`fadeOut` (frames) | `<Media media={props.photo_asset} motion="push" dim={0.3} />` |
+| `Media` | an image or video asset filling its parent, `fit` cover/contain around a `focus`, an optional slow `motion` (`push`, `pull`, `pan_left`, `pan_right`, `rise`, `still`), `dim` 0..1 veil; an animated image ref plays, looping; video: `trimIn` (frames), `rate`, `loop`, `volume`, `volumeKeys` (a volume curve, frames from the clip start), `fadeIn`/`fadeOut` (frames), `hold` (a source frame shown throughout) or `rateKeys` (a speed curve), both silent | `<Media media={props.photo_asset} motion="push" dim={0.3} />` |
 | `EvidenceCrop` | the evidence clip's own crop in a `w × h` window: the proving sentence scaled to the window's width (at most 2×) with up to `context` capture px of page above and below, in a panel that hugs that content (centred); where it cuts into the page it fades into `background` (white); optional `highlight` `{at, dur (frames), color}` sweep | `<EvidenceCrop ev={props.asset} w={w} h={300} highlight={{ at: 10, dur: 24 }} />` |
 | `evidenceLayout(ev, w, h, context?)` | where `EvidenceCrop` puts things, or null: `s` (capture px → window px), `mark` (the sentence), `panel` (the part of the window the content fills), `fade`, all in window px | `const { panel } = evidenceLayout(ev, w, 400, 120)!` |
 

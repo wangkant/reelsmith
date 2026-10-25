@@ -15,6 +15,7 @@ import re
 import shutil
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 from . import document as D
@@ -161,6 +162,14 @@ def value_at(frames: list[dict], f: float, fps: float) -> float | None:
     return a["v"] + (b["v"] - a["v"]) * ease_at(b.get("ease"), f - a["f"], b["f"] - a["f"], fps)
 
 
+def source_frames(rate: float, keys: list[dict] | None, frames: int, fps: float) -> float:
+    """Source frames a video clip has moved on after `frames` of its own: rate x frames, or its speed curve (rate
+    keyframes, {"f", "v", "ease"}) summed frame by frame, as Media.tsx sums it."""
+    if not keys:
+        return rate * frames
+    return sum(max(0.0, value_at(keys, f, fps) or 0.0) for f in range(int(frames)))
+
+
 def motion_keyframes(motion: str | None, seconds: float, w: float, h: float) -> dict[str, list[dict]]:
     """Ken Burns sugar as project keyframes ({"t" seconds from the clip start, "v", "ease"}); pan in box pixels."""
     end = round(max(seconds, 0.001), 3)
@@ -186,6 +195,8 @@ def motion_keyframes(motion: str | None, seconds: float, w: float, h: float) -> 
 # ------------------------------------------------------------------ media facts
 _SIZES: dict[tuple, tuple[int, int] | None] = {}
 _DURATIONS: dict[tuple, float | None] = {}
+_ANIMATED: dict[tuple, bool] = {}
+PROXY_KEEP_S = 24 * 3600            # a reversed proxy nothing has used for this long is deleted
 
 
 def _stamp(path: Path) -> tuple | None:
@@ -250,6 +261,54 @@ def _jpeg(f) -> tuple[int, int] | None:
             h, w = struct.unpack(">HH", f.read(4))
             return w, h
         f.seek(size - 2, 1)
+
+
+def image_animated(path: Path) -> bool:
+    """True for a GIF of more than one frame, an APNG or an animated WebP: they play (AnimatedImage), not hold."""
+    key = _stamp(path)
+    if key is None:
+        return False
+    if key not in _ANIMATED:
+        try:
+            with open(path, "rb") as f:
+                _ANIMATED[key] = _animated(f)
+        except (OSError, struct.error, IndexError):
+            _ANIMATED[key] = False
+    return _ANIMATED[key]
+
+
+def _animated(f) -> bool:
+    head = f.read(32)
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        f.seek(13 + (3 << ((head[10] & 7) + 1) if head[10] & 0x80 else 0))
+        images = 0
+        while (block := f.read(1)) and block != b"\x3b":
+            if block == b"\x2c":
+                desc = f.read(9)
+                images += 1
+                if images > 1:
+                    return True
+                if desc[8] & 0x80:
+                    f.seek(3 << ((desc[8] & 7) + 1), 1)
+                f.read(1)                       # LZW code size
+            elif block == b"\x21":
+                f.read(1)                       # extension label
+            else:
+                return False
+            while (size := f.read(1)) and size[0]:
+                f.seek(size[0], 1)
+        return False
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        f.seek(8)
+        while len(chunk := f.read(8)) == 8:
+            kind = chunk[4:]
+            if kind == b"acTL":
+                return True
+            if kind in (b"IDAT", b"IEND"):
+                return False
+            f.seek(struct.unpack(">I", chunk[:4])[0] + 4, 1)
+        return False
+    return head[:4] == b"RIFF" and head[8:12] == b"WEBP" and head[12:16] == b"VP8X" and bool(head[20] & 0x02)
 
 
 def media_duration(path: Path) -> float | None:
@@ -692,7 +751,7 @@ def transcript_clips(doc: D.Document, track: D.CaptionsTrack) -> tuple[list, D.A
         for c in getattr(t, "clips", None) or []:
             if c.id == cid and c.type in D.SOUNDING:
                 same = [x for x in t.clips if x.type == c.type and x.asset == c.asset and not getattr(x, "loop", False)
-                        and (x is c or sounds(x))]
+                        and not D.retimed(x) and (x is c or sounds(x))]
                 return same, doc.assets.get(c.asset)
     return [], None
 
@@ -738,10 +797,11 @@ def transcript_items(root, doc: D.Document, track: D.CaptionsTrack, sched: T.Sch
 
 # ------------------------------------------------------------------ sound: volume curves, crossfades, ducking
 def sounds(clip) -> bool:
-    """A clip that makes sound: an audio clip, or a video clip with volume or volume keyframes above 0."""
+    """A clip that makes sound: an audio clip, or a video clip with volume or volume keyframes above 0 (and no hold or
+    speed curve: those play the picture only)."""
     if clip.type == "audio":
         return True
-    if clip.type != "video":
+    if clip.type != "video" or clip.hold is not None or clip.keyframes.get("rate"):
         return False
     keys = clip.keyframes.get("volume") or []
     return clip.volume > 0 or any(k.v > 0 for k in keys)
@@ -818,6 +878,8 @@ class _Resolver:
         if a.kind in ("image", "evidence"):
             size = image_size(path)
             ref["size"] = list(size) if size else None
+        if a.kind == "image" and image_animated(path):
+            ref["animated"] = True
         if a.kind == "evidence":
             ref["box"] = list(a.box) if a.box else None
             ref["site"] = a.site
@@ -865,13 +927,13 @@ class _Resolver:
         if span is None:
             return None
         start, dur = span
-        content = self.content(c, start)
+        content = self.content(c, start, dur)
         if content is None:
             return None
         box = self.box(c.box)
-        style = {"opacity": c.opacity, "rotate": c.rotate, "scale": c.scale, "origin": c.origin, "radius": c.radius,
-                 "blend": c.blend, "filter": c.filter.model_dump(exclude_none=True) if c.filter else None,
-                 "shadow": c.shadow}
+        style = {"opacity": c.opacity, "rotate": c.rotate, "scale": c.scale, "flipX": c.flip_x, "flipY": c.flip_y,
+                 "origin": c.origin, "radius": c.radius, "blend": c.blend,
+                 "filter": c.filter.model_dump(exclude_none=True) if c.filter else None, "shadow": c.shadow}
         return {"id": c.id, "type": c.type, "track": track.id, "from": start, "dur": dur, "box": box,
                 "style": D._ints(style), "keyframes": self.keyframes(c, start, dur, box),
                 "enter": self.transition(c.enter), "exit": self.transition(c.exit), "content": D._ints(content),
@@ -895,7 +957,7 @@ class _Resolver:
                 out[prop] = [{"f": 0 if k["t"] == 0 else max(1, dur - 1), "v": k["v"], "ease": k.get("ease") or "linear"}
                              for k in frames]
         for prop, frames in c.keyframes.items():
-            if prop == "volume":                # a sound curve, not a picture property: content.volumeKeys
+            if prop in ("volume", "rate"):      # sound and source time, not picture: content.volumeKeys, rateKeys
                 continue
             rows = self.frame_keys(frames, start)
             if rows:
@@ -910,18 +972,20 @@ class _Resolver:
                 rows.append({"f": f, "v": k.v, "ease": k.ease or "linear"})
         return sorted(rows, key=lambda r: r["f"])
 
-    def content(self, c, start: int) -> dict | None:
+    def content(self, c, start: int, dur: int) -> dict | None:
         if c.type in ("image", "video", "evidence"):
             ref = self.asset_ref(c.asset)
             if ref is None:
                 return None
         if c.type == "image":
-            return {"src": ref["src"], "size": ref.get("size"), "fit": c.fit, "focus": c.focus}
+            out = {"src": ref["src"], "size": ref.get("size"), "fit": c.fit, "focus": c.focus}
+            return {**out, "animated": True} if ref.get("animated") else out
         if c.type == "video":
             out = {"src": ref["src"], "duration": ref.get("duration"), "trimIn": self.frame(c.trim_in),
                    "rate": c.rate, "loop": c.loop, "fit": c.fit, "focus": c.focus, "volume": c.volume}
             if c.keyframes.get("volume"):
                 out["volumeKeys"] = D._ints(self.frame_keys(c.keyframes["volume"], start))
+            self.retime(c, start, dur, out)
             return out
         if c.type == "text":
             reveal = {"mode": c.reveal.mode, "dur": c.reveal.dur} if c.reveal else None
@@ -937,6 +1001,20 @@ class _Resolver:
             return {"src": ref["src"], "size": ref.get("size"), "box": ref.get("box"), "site": ref.get("site", ""),
                     "highlight": hl}
         return {"name": c.name, "props": self.props(c.props, start)}
+
+    def retime(self, c, start: int, dur: int, out: dict) -> None:
+        """hold, a speed curve and reverse in a video clip's content: Media.tsx shows source frame `hold` throughout,
+        or walks the source by the curve (rateKeys); a reversed clip plays a proxy of its span forwards."""
+        if c.hold is not None:
+            out.update(hold=round(c.hold * self.fps, 3), loop=False)
+            return
+        keys = self.frame_keys(c.keyframes["rate"], start) if c.keyframes.get("rate") else None
+        if keys:
+            out.update(rateKeys=D._ints(keys), loop=False)
+        if c.reverse:
+            span = source_frames(c.rate, keys, dur, self.fps) / self.fps
+            proxy = reversed_proxy(self.root, self.doc.assets[c.asset].path, c.trim_in, span)
+            out.update(src=proxy, duration=media_duration(self.root / proxy), trimIn=0, reversed=True)
 
     def props(self, value, start: int, key: str = ""):
         if isinstance(value, dict):
@@ -1011,6 +1089,42 @@ class _Resolver:
                 sound_in["fadeIn"] = max(int(sound_in.get("fadeIn") or 0), dur)
             if sound_out is not None:
                 sound_out["fadeOut"] = max(int(sound_out.get("fadeOut") or 0), min(over, prev["dur"]))
+
+
+def reversed_proxy(root: Path, rel: str, trim_in: float, span: float) -> str:
+    """build/proxies/<name>-rev-<hash>.mp4 (project-relative): source seconds trim_in..trim_in + span backwards, with
+    two source frames before trim_in as margin at its end (asking for a video's very last frame can fail). Made once
+    per source and span; ResolveError when ffmpeg fails."""
+    from . import media
+    src = (root / rel).resolve()
+    stamp = _stamp(src)
+    if stamp is None:
+        raise ResolveError(f"cannot reverse {rel}: the file is missing")
+    a, b = trim_in, trim_in + span
+    length = media_duration(src)
+    if length and a >= length:
+        raise ResolveError(f"cannot reverse {rel}: trim_in {a:g} s is past its end ({length:.2f} s)")
+    if length:
+        b = min(b, length)
+    key = hashlib.sha1(json.dumps([stamp[1:], src.as_posix(), round(a, 4), round(b, 4), 2]).encode()).hexdigest()[:12]
+    folder = project_paths(root).build / "proxies"
+    out = folder / f"{Path(rel).stem}-rev-{key}.mp4"
+    now = time.time()
+    if out.is_file():
+        os.utime(out, (now, now))               # in use: kept by the sweep below
+    else:
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            media.reverse_span(src, a, b, out, margin=2)
+        except (RuntimeError, OSError) as exc:
+            raise ResolveError(f"cannot reverse {rel}: {exc}") from None
+    for old in folder.glob("*-rev-*.mp4"):
+        try:
+            if now - old.stat().st_mtime > PROXY_KEEP_S:
+                old.unlink()
+        except OSError:
+            pass
+    return out.relative_to(root).as_posix()
 
 
 def _style_value(v):
@@ -1158,7 +1272,8 @@ def _clip_summary(c, doc: D.Document) -> str:
     elif c.type == "video":
         bits += [c.fit] + ([f"trim {c.trim_in:g}s"] if c.trim_in else []) + (["loop"] if c.loop else []) \
             + ([f"rate {c.rate:g}"] if c.rate != 1 else []) + ([f"vol {c.volume:g}"] if c.volume else []) \
-            + ([f"motion {c.motion}"] if c.motion else [])
+            + ([f"motion {c.motion}"] if c.motion else []) + (["reversed"] if c.reverse else []) \
+            + ([f"hold {c.hold:g}s"] if c.hold is not None else [])
     elif c.type == "text":
         bits.append(f"\"{_short(c.text, 28)}\"")
         s = c.style
@@ -1192,6 +1307,9 @@ def _clip_summary(c, doc: D.Document) -> str:
     if c.type != "audio":
         if c.opacity != 1:
             bits.append(f"opacity {c.opacity:g}")
+        flips = "".join(a for a, on in (("x", c.flip_x), ("y", c.flip_y)) if on)
+        if flips:
+            bits.append(f"flip {flips}")
         if c.keyframes:
             bits.append("kf " + " ".join(f"{p}({len(v)})" for p, v in c.keyframes.items()))
         if c.enter:

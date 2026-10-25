@@ -578,10 +578,13 @@ def _split_clip(root, data, op) -> tuple[str, list]:
     second = copy.deepcopy(first)
     kf = first.get("keyframes") or {}
     halves: tuple[dict, dict] = ({}, {})
+    speed = None                                # a video clip's speed curve in frames, before the cut
     for prop, ks in kf.items():
         if not isinstance(ks, list) or not ks:
             continue
         rows = _keyframe_frames(now, ks, start_f, cid, prop)
+        if prop == "rate" and first.get("type") == "video":
+            speed = rows
         one, two = split_keyframes(rows, rel, now.fps)
         halves[0][prop], halves[1][prop] = one, two
     for half, k in zip((first, second), halves):
@@ -599,7 +602,16 @@ def _split_clip(root, data, op) -> tuple[str, list]:
         second["dur"] = round(b - cut, 3)
     for key in ("enter", "transition", "fade_in"):
         second.pop(key, None)
-    if second.get("type") in ("video", "audio"):
+    if second.get("type") == "video" and second.get("hold") is None and (second.get("reverse") or speed):
+        from .resolve import source_frames
+        rate, trim = float(second.get("rate") or 1), float(second.get("trim_in") or 0)
+        past = source_frames(rate, speed, rel, now.fps) / now.fps
+        if second.get("reverse"):               # the first half plays the end of the span, the second its start
+            whole = source_frames(rate, speed, end_f - start_f, now.fps) / now.fps
+            first["trim_in"] = _num(round(trim + whole - past, 3))
+        else:
+            second["trim_in"] = _num(round(trim + past, 3))
+    elif second.get("type") in ("video", "audio") and second.get("hold") is None:
         rate = float(second.get("rate") or 1) if second.get("type") == "video" else 1.0
         trim = float(second.get("trim_in") or 0)
         second["trim_in"] = round(trim + rel / now.fps * rate, 3)
@@ -631,7 +643,7 @@ def _split_clip(root, data, op) -> tuple[str, list]:
     moved = retarget(data, cid, new, end_only=True, skip=(first,))
     if moved:
         notes.append(f"{moved} reference(s) to clip:{cid}.end now point at {new}")
-    if second.get("type") in ("video", "audio") and not second.get("loop"):
+    if second.get("type") in ("video", "audio") and not second.get("loop") and not D.retimed(second):
         moved = _retarget_source(data, cid, new, float(second.get("trim_in") or 0))
         if moved:
             notes.append(f"{moved} src:{cid}@... reference(s) past the cut now name {new}")
@@ -998,6 +1010,9 @@ def _trim_clip(root, data, op) -> tuple[str, list]:
     if op.get("in") is None and op.get("out") is None:
         raise OpError("give in and/or out: for a video or audio clip, seconds of its source; for any other clip, "
                       "Times of its new start and end")
+    if D.retimed(clip):
+        raise OpError(f"clip {cid} {D.retimed(clip)}, so its source seconds are not in film order: change its start "
+                      "and end with move_clip (or split_clip) and its trim_in with update_clip")
     ripple = op.get("ripple", False)
     if not isinstance(ripple, bool):
         raise OpError("ripple is true (later clips on the track follow) or false")

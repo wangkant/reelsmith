@@ -31,14 +31,26 @@ const ORIGINS: Record<string, string> = {
 /** "top-left" etc. to a CSS transform-origin; anything else is passed through as CSS. */
 export const origin = (o: string | null | undefined): string => (o ? ORIGINS[o] ?? o : "50% 50%");
 
-/** The CSS filter for a clip: its filter fields, keyframed blur/brightness and a drop shadow. */
-export const filterCss = (f: FilterSpec | null | undefined, blur: number, brightness: number, dropShadow: string | null) => {
+/** A clip's filter values now: its filter fields, or their keyframes where it has them. */
+export type FilterNow = Required<FilterSpec>;
+
+/** The clip's filter fields with neutral values for the ones it does not set. */
+export const filterBase = (f: FilterSpec | null | undefined): FilterNow => ({
+  blur: num(f?.blur, 0), brightness: num(f?.brightness, 1), contrast: num(f?.contrast, 1), saturate: num(f?.saturate, 1),
+  grayscale: num(f?.grayscale, 0), sepia: num(f?.sepia, 0), invert: num(f?.invert, 0), hue_rotate: num(f?.hue_rotate, 0),
+});
+
+/** The CSS filter for a clip's filter values and a drop shadow; neutral values are left out. */
+export const filterCss = (v: FilterNow, dropShadow: string | null) => {
   const parts: string[] = [];
-  if (blur > 0) parts.push(`blur(${blur}px)`);
-  if (brightness !== 1) parts.push(`brightness(${Math.max(0, brightness)})`);
-  if (f?.contrast !== undefined && f.contrast !== null && f.contrast !== 1) parts.push(`contrast(${f.contrast})`);
-  if (f?.saturate !== undefined && f.saturate !== null && f.saturate !== 1) parts.push(`saturate(${f.saturate})`);
-  if (f?.grayscale) parts.push(`grayscale(${f.grayscale})`);
+  if (v.blur > 0) parts.push(`blur(${v.blur}px)`);
+  if (v.brightness !== 1) parts.push(`brightness(${Math.max(0, v.brightness)})`);
+  if (v.contrast !== 1) parts.push(`contrast(${Math.max(0, v.contrast)})`);
+  if (v.saturate !== 1) parts.push(`saturate(${Math.max(0, v.saturate)})`);
+  if (v.grayscale > 0) parts.push(`grayscale(${clamp01(v.grayscale)})`);
+  if (v.sepia > 0) parts.push(`sepia(${clamp01(v.sepia)})`);
+  if (v.hue_rotate !== 0) parts.push(`hue-rotate(${v.hue_rotate}deg)`);
+  if (v.invert > 0) parts.push(`invert(${clamp01(v.invert)})`);
   if (dropShadow) parts.push(`drop-shadow(${dropShadow})`);
   return parts.length ? parts.join(" ") : undefined;
 };
