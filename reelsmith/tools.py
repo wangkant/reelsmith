@@ -318,7 +318,10 @@ def edit(project: str, ops: list[dict] | str) -> str:
     """Apply a batch of edit ops atomically: all apply and validate, or nothing changes. Ops: add_track,
     update_track, remove_track, add_clip, update_clip, remove_clip, move_clip, split_clip, set_keyframes, add_asset
     (an existing id is replaced), update_asset ({"op": "update_asset", "id", "set": {...}}: deep merge, null
-    removes a key), remove_asset, set (see the manual). Every applied batch can be undone."""
+    removes a key), remove_asset, set (see the manual). Ripple edits for footage: ripple_delete ({"start", "end",
+    "tracks"?}: take a film range out and close the gap), insert_gap ({"at", "dur", "tracks"?}: open room),
+    trim_clip ({"id", "in"?, "out"?, "ripple"?}: a clip's in/out, in source seconds for video and audio). Every
+    applied batch can be undone."""
     root = _project(project)
     result = _mod("ops").apply(root, _ops_arg(ops))
     try:
