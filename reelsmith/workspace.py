@@ -286,11 +286,14 @@ def workspace_fonts(root: Path, folder: Path, mapping=None) -> dict[str, list[di
     that is not a usable family name is skipped), then the `fonts` map {family: path | {src, weight?, style?} |
     [...]} over them."""
     out: dict[str, list[dict]] = {}
+    base = Path(root).resolve()
     if folder.is_dir():
         for f in sorted(folder.iterdir()):
             if f.is_file() and f.suffix.lower() in FONT_EXTS and FONT_FAMILY.match(f.stem) \
                     and f.stem not in BUILTIN_FONTS:
-                out.setdefault(f.stem, []).append({"path": f.resolve(), "weight": None, "style": None})
+                path = f.resolve()
+                if base in path.parents:        # a link out of the workspace would be served from build/fonts
+                    out.setdefault(f.stem, []).append({"path": path, "weight": None, "style": None})
     if mapping is None:
         return out
     if not isinstance(mapping, dict):

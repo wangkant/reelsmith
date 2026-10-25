@@ -1,5 +1,6 @@
 """Any canvas, any locale: profiles (built-in and custom), the locale, workspace fonts and canvas-scaled checks."""
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import replace
@@ -388,6 +389,35 @@ def test_workspace_fonts_by_file_stem_and_map(tmp_path):
         (root / "workspace.json").write_text(json.dumps({"fonts": fonts_map}), encoding="utf-8")
         with pytest.raises(W.WorkspaceError, match=says):
             W.Workspace.load(root)
+
+
+def _link_folder(link: Path, target: Path) -> None:
+    if os.name == "nt":                                             # a junction needs no symlink privilege
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_library_fonts_that_lead_out_of_the_workspace_are_skipped(tmp_path):
+    root = make_ws(tmp_path / "ws")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "Secret.ttf").write_bytes(b"x")
+    (root / "library").mkdir()
+    shared = root / "shared"
+    shared.mkdir()
+    (shared / "House.ttf").write_bytes(b"x")
+    _link_folder(root / "library" / "fonts", outside)
+    try:
+        assert W.Workspace.load(root).fonts == {}                 # nothing outside reaches build/fonts
+    finally:
+        (root / "library" / "fonts").rmdir() if os.name == "nt" else (root / "library" / "fonts").unlink()
+    _link_folder(root / "library" / "fonts", shared)              # a link that stays inside the workspace is fine
+    try:
+        assert list(W.Workspace.load(root).fonts) == ["House"]
+    finally:
+        (root / "library" / "fonts").rmdir() if os.name == "nt" else (root / "library" / "fonts").unlink()
 
 
 def test_a_workspace_font_validates_resolves_and_is_served_from_the_project(demo):
