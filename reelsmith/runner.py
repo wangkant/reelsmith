@@ -988,7 +988,7 @@ def run(project, brief: str | None = None, model: str | None = None, budget_usd:
                            client_factory=client_factory, tools_factory=tools_factory).go())
 
 
-def main(argv: list[str] | None = None) -> int:
+def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith run", description="Let an agent make the film in a project.")
     ap.add_argument("project", help="the project folder (reelsmith new makes one)")
     ap.add_argument("--brief", help="what the film is about; needed unless an unfinished run resumes")
@@ -1011,7 +1011,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-minutes", type=float, help="wall-clock cap for this process")
     ap.add_argument("--max-turns", type=int, help="turn cap per session")
     ap.add_argument("--fresh", action="store_true", help="ignore an unfinished run and start a new session")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
     try:
         report = run(args.project, args.brief, args.model, args.budget_usd, args.max_minutes, fresh=args.fresh,
                      max_turns=args.max_turns, backend=args.backend, engine=args.engine, provider=args.provider,

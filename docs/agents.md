@@ -6,6 +6,8 @@ installs the reelsmith skill where that agent loads skills; `reelsmith run --eng
 film headless. The full contract of the tools is [manual.md](manual.md); the platform reference is
 [editor-spec.md](editor-spec.md) (setup and transports in section 10, the runner in section 11).
 
+To have an agent install, check and attach reelsmith by itself, point it at [setup-for-agents.md](setup-for-agents.md).
+
 ## reelsmith setup
 
 ```sh

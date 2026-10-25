@@ -1,5 +1,5 @@
 """reelsmith <command> ...: the agent tools for scripts and people, plus `run` (the self-hosted agent), `mcp` (the
-MCP server) and `setup` (attach the server and skill to a coding agent)."""
+MCP server), `setup` (attach the server and skill to a coding agent) and `doctor` (check this machine)."""
 import argparse
 import inspect
 import re
@@ -113,7 +113,24 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("mcp", help="serve the tools over MCP: stdio, or streamable HTTP with --http", add_help=False)
     sub.add_parser("setup", help="attach the MCP server and skill to claude-code, codex, dsh, cursor or generic",
                    add_help=False)
+    sub.add_parser("doctor", help="check what reelsmith and its optional tools need on this machine (local, free)",
+                   add_help=False)
     return ap
+
+
+def command_parser(name: str) -> argparse.ArgumentParser:
+    """The parser that reads `reelsmith <name> ...`: run, mcp, setup and doctor have their own."""
+    if name == "run":
+        from .runner import parser
+    elif name == "mcp":
+        from .mcp_server import parser
+    elif name == "setup":
+        from .agentconf import parser
+    elif name == "doctor":
+        from .doctor import parser
+    else:
+        return _parser()
+    return parser()
 
 
 def _call(args) -> tools.ToolResult:
@@ -193,6 +210,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["setup"]:
         from .agentconf import main as setup
         return setup(argv[1:])
+    if argv[:1] == ["doctor"]:
+        from .doctor import main as doctor
+        return doctor(argv[1:])
     args = _parser().parse_args(argv)
     try:
         result = _call(args)

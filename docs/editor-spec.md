@@ -801,6 +801,23 @@ the agent's user-level config. `--print` shows every file and command it would w
   repository root (`/plugin marketplace add wangkant/reelsmith`, `/plugin install reelsmith@reelsmith`). Its copy of
   the skill is written by `integrations/sync_skills.py`; a test fails when it drifts.
 
+### 10.3 Doctor: checking a machine
+
+```
+reelsmith doctor [--json] [--workspace DIR]
+```
+
+Local checks only (no network, no model calls, nothing installed or downloaded). Required: Python 3.10+, the package
+in an editable checkout (`docs/`, `skills/` and the renderer beside it), Node.js 20+, the renderer's packages
+(`remotion` at the version `package.json` pins), `ffmpeg` and `ffprobe` on `PATH`, and the workspace when `--workspace`
+names one. Optional, each with what it enables: Remotion's headless browser already downloaded, the `capture` extra
+and a Chromium (Edge, Chrome or Playwright's), the Codex CLI (`draw`), faster-whisper, the provider keys (present in
+the workspace `.env`, in the environment, or absent; never their values), the agents set up in the current folder
+and `reelsmith-mcp` on `PATH`. Every failed check carries the command that fixes it on this OS (PowerShell on
+Windows). `--json` prints one object, `{ok, reelsmith, system, python, checkout, renderer, workspace, cwd, checks:
+[{name, ok, required, detail, fix, enables}]}`; exit status 0 when every required check passes, else 1.
+[setup-for-agents.md](setup-for-agents.md) walks a coding agent through installing and attaching reelsmith with it.
+
 ## 11. Runner (self-hosted)
 
 ```

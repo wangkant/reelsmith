@@ -513,7 +513,7 @@ def show(p: Plan) -> list[str]:
     return lines + p.idle() + p.notes
 
 
-def main(argv: list[str] | None = None) -> int:
+def parser():
     import argparse
     ap = argparse.ArgumentParser(prog="reelsmith setup", description=(
         "Attach the reelsmith MCP server and skill to a coding agent. Project-level config in the current folder by "
@@ -523,7 +523,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--print", action="store_true", dest="dry", help="show what would be written; write nothing")
     ap.add_argument("--uninstall", action="store_true", help="remove what setup added")
     ap.add_argument("--root", help="set REELSMITH_ROOT: the tools refuse projects outside this folder")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
     try:
         p = plan(args.target, user=args.user, uninstall=args.uninstall, root=args.root)
         lines = show(p) if args.dry else apply(p)

@@ -180,7 +180,7 @@ def serve_http(host: str = "127.0.0.1", port: int = DEFAULT_PORT, allow_remote: 
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith mcp", description="Serve the reelsmith tools over MCP: stdio by "
                                  "default, or streamable HTTP with --http.")
     ap.add_argument("--http", action="store_true", help="serve streamable HTTP at http://HOST:PORT/mcp")
@@ -192,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--token-env", default=TOKEN_ENV,
                     help="the environment variable holding the bearer token; when it is set, every request needs it")
     ap.add_argument("--root", help="set REELSMITH_ROOT: the tools refuse projects and imports outside this folder")
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(sys.argv[1:] if argv is None else argv)
     if args.root:
         root = Path(args.root).expanduser().resolve()
         if not root.is_dir():

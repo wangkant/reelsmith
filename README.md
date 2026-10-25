@@ -40,8 +40,19 @@ reelsmith setup claude-code      # or: codex, dsh, cursor, generic (--print show
 Then ask: *"Cut my talk in ~/videos/talk.mp4 to its best 90 seconds, remove the pauses, add English captions and a
 title card."* or *"Make a 60-second vertical explainer on why tea leaves curl."*
 
-Needs Python 3.10+, Node.js 20+ and ffmpeg on `PATH`. reelsmith reads its manual and renderer from the checkout,
-so keep the editable install.
+Needs Python 3.10+, Node.js 20+ and ffmpeg on `PATH`; `reelsmith doctor` checks all of it, and what each optional
+tool needs. reelsmith reads its manual and renderer from the checkout, so keep the editable install.
+
+## Let your coding agent set it up
+
+Paste this into Claude Code, Codex, Cursor or any coding agent:
+
+```text
+Read https://raw.githubusercontent.com/wangkant/reelsmith/main/docs/setup-for-agents.md and set up reelsmith for me.
+```
+
+It asks where to install and before installing any system tool, checks the machine with `reelsmith doctor`,
+attaches itself with `reelsmith setup <agent>` and renders a test film without a paid call.
 
 ## What the agent can do
 
