@@ -684,6 +684,8 @@ def test_mcp_exposes_every_tool_with_descriptions():
     listed, bad = asyncio.run(go())
     assert SPEC_TOOLS <= set(listed)
     assert all(len(t.description) > 30 for t in listed.values())
+    from reelsmith.ops import OPS
+    assert [op for op in OPS if op not in listed["edit"].description] == []        # clients see only this text
     assert listed["preview"].input_schema["properties"]["times"]["type"] == "array"
     assert bad.is_error and "new_project" in bad.content[0].text
 

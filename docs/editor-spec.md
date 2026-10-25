@@ -138,22 +138,28 @@ clip an audio or video asset.
 
 - visual / audio: `"clips": [Clip, ...]`. Clips on one track must not overlap in time: layer with more tracks. The
   one exception is a clip with a `transition` (section 3.2): it may overlap the clip just before it on its track by
-  at most the transition's `dur`.
-- captions: `{"id": "cap", "kind": "captions", "source": "voice" | "clip:<id>", "box"?, "style"?: TextStyle,
-  "emphasis": [words in the accent colour], "max_chars"?: 4-60, "overrides": [{"line": 5, "text": "..."}],
-  "items"?: [{"start": Time, "end": Time, "text": "..."}]}`. `max_chars` defaults by the locale: 14 for Chinese,
-  Japanese and Korean, 32 otherwise. Without `items`, captions come from the `source`:
+  at most the transition's `dur` (ending with it at the latest).
+- captions: `{"id": "cap", "kind": "captions", "source": "voice" | "clip:<id>", "mode": "phrase" | "words" |
+  "build", "box"?, "style"?: TextStyle, "emphasis": [words in the accent colour], "max_chars"?: 4-60,
+  "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start": Time, "end": Time, "text": "..."}]}`.
+  `max_chars` defaults by the locale: 14 for Chinese, Japanese and Korean, 32 otherwise. `mode` (default
+  `"phrase"`: each item whole): `"words"` paints the word being said in the accent colour (emphasis is not shown),
+  `"build"` shows the words as they are said, the item laid out whole so nothing moves. Word times come from the
+  transcript; voice lines and given `items` are timed by characters (voice lines between the locale's words).
+  Without `items`, captions come from the `source`:
   - `"voice"`: the voice lines, phrase-split between the words of the locale (`Intl.Segmenter`; never inside a word
     or a number, and in English not right after an article, preposition or conjunction when another cut fits) and
     timed by characters.
   - `"clip:<id>"`: the transcript of that video or audio clip's asset (section 9.8). Each word is placed where the
-    clip plays it (its start, `trim_in` and `rate`; a word whose middle the trim cuts away is dropped), through the
-    named clip and every other clip on its track that plays the same asset with sound (the pieces a split or a
-    ripple edit made of it). Phrases are cut by the words' timing: a pause of 0.5 s, the end of a sentence, a
-    clause end past half of `max_chars`, or `max_chars` itself (words are joined with spaces, except around CJK,
-    kana, Thai and similar scripts and before closing punctuation); a phrase stays up until the next one across a
-    gap under 1 s, else 0.3 s after its last word, and never past its clip. A looping clip cannot be followed;
-    `overrides` apply to voice captions only.
+    clip plays it (its start, `trim_in` and `rate`; a word whose middle the trim cuts away is dropped, and a word
+    goes to the one piece whose frames play its middle), through the named clip and every other clip on its track
+    that plays the same asset with sound (the pieces a split or a ripple edit made of it). A pause of 0.5 s or the
+    end of a sentence ends a phrase; longer stretches are cut as voice lines are (at clause ends, halved between
+    words, not right after an article or preposition), and a phrase drops the `,` `.` `;` `:` (and CJK
+    equivalents) it ends on, keeping `?` and `!` (words are joined with spaces, except around CJK, kana, Thai and
+    similar scripts and before closing punctuation); a phrase stays up until the next one across a gap under 1 s,
+    else 0.3 s after its last word, and never past its clip. A looping clip cannot be followed; `overrides` apply
+    to voice captions only.
 
   Without `box` they sit in the profile's captions band (section 15). Without a captions track there are no
   captions.
@@ -321,7 +327,9 @@ gives `"[level] where: msg"`.
 **split_clip** on a video or audio clip moves the second half's `trim_in` on by the time cut off × `rate` (a
 looping clip continues where its loop was); the first half keeps `fade_in` and loses `fade_out`, the second keeps
 `fade_out` and loses `fade_in`, `enter` and `transition`; `src:<id>@S` Times with S in the second half are pointed
-at the new clip.
+at the new clip. The halves meet at `at` as written, unless it is a number or a Time that moves with the clip itself
+(`clip:<id>...`, `src:<id>@S`, a marker on one): then at the cut's frame in seconds (3 decimals), which the second
+half's `trim_in` and keyframes agree with.
 
 **Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, the duration,
 caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts it and
@@ -329,7 +337,11 @@ written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end
 back wherever it still lands on the same frame. Anchors survive where they stay true (a clip timed from a clip that
 moved with it); the others become numbers (a clip after the cut timed from a voice line, since the voice is not
 cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
-(`<id>_2`, `<id>_3`, ...).
+(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. Whether a Time is at,
+before or after an edit point is decided in frames. Where an edit point falls inside a transition's overlap, a piece
+that still overlaps the clip before it keeps the transition, shortened to the overlap left, and a piece that kept
+it but got shorter than it is shortened to fit. Captions from a transcript whose clip is cut away (or removed with
+`remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
 
 - `ripple_delete`: the range `start`-`end` (frames) goes from the given tracks (default: every visual and audio
   track and every captions track with `items`). Clips inside it are removed, clips crossing an edge are split
@@ -337,7 +349,8 @@ cut). A Time inside a clip keeps its place in the clip. A clip split by an edit 
   moves earlier by its length. Caption items are clipped to what is left. Clips on tracks it does not touch stay
   where they are (an anchor that would drag them becomes a number). Markers and a set `duration` move with the
   cut. The narration is never cut: a note says so when the range falls inside it. To cut several source ranges of
-  one clip (`silences`), cut from the last back: an earlier `src:<clip>@S` still names the first piece.
+  one clip (`silences`), cut from the last back: an earlier `src:<clip>@S` still names the first piece; name the
+  footage's tracks, or a music bed on its own track is cut (and skips) at every cut too.
 - `insert_gap`: everything at or after `at` on the given tracks moves later by `dur` (a clip that starts at `at`
   moves, one that ends there stays; a clip across it is split); markers at or after it and a set `duration` move.
 - `trim_clip`: for a video or audio clip, `in` and `out` are seconds of its source (its new `trim_in` and the
@@ -390,7 +403,8 @@ export default function Receipt({ props }: { props: any }) {
   "fonts": [{"family", "src" (project-relative, build/fonts/...), "weight"?, "style"?}],
   "tracks": [
     {"id", "kind": "visual", "hidden", "clips": [RClip...]},
-    {"id", "kind": "captions", "box": {..}, "style": {...}, "items": [{"from", "to", "runs": [{"text", "accent": bool}]}]},
+    {"id", "kind": "captions", "box": {..}, "mode", "style": {...},
+     "items": [{"from", "to", "runs": [{"text", "accent": bool}], "words"?: [{"from", "to", "chars": [a, b]}]}]},
     {"id", "kind": "audio", "hidden"}
   ],
   "audio": [{"id", "src", "from", "dur", "trimIn" (frames), "volume", "fadeIn", "fadeOut" (frames), "loop"}],
@@ -425,6 +439,11 @@ Volume keyframes leave `keyframes` (they are sound, not picture) for `content.vo
 transition's sound arrives as fades: the incoming item's `fadeIn` and the outgoing item's `fadeOut` are raised to
 the transition and the overlap. Clips paint in time order on a track (`from`), so the incoming clip of a
 transition is on top whatever the order in `clips`.
+
+A captions track's `mode` is `"phrase"`, `"words"` or `"build"` (section 3). In the last two each item carries
+`words`: frames like the item's (a word lasts until the next one starts, the last until the item ends) and the
+word's code-point span `[a, b)` in the item's text (the runs joined; trailing punctuation rides with its word).
+Characters outside every word (spaces, an opening quote) go with the next word.
 
 ## 8. describe
 
@@ -877,11 +896,12 @@ value.
   one), an audio transition other than `crossfade`, volume keyframes on a clip without sound or below 0, a `duck`
   under an unknown track, its own track, a captions track or a missing voice, captions from a clip that is unknown,
   not video or audio, looping, or whose asset has no readable transcript; a marker name that is not an id.
-- Warnings: an empty title where rules.json has a title rule; frame 0 (the cover) without whole words on it
-  (mid-reveal, mid-enter, fading in, or no words at all); evidence whose proving sentence will read under 40 px; a
-  component Time that falls outside its clip; motion and keyframes on the same property. Footage: a `src:` second
-  past its clip's end, an asset whose transcript is missing, both `enter` and `transition` on a clip, `overrides` on
-  captions from a transcript.
+- Warnings: an empty title where rules.json has a title rule; on a profile with platform UI (`ui`, section 15.1)
+  or when rules.json sets `hook_seconds`, frame 0 (the cover) without whole words on it (mid-reveal, mid-enter,
+  fading in, or no words at all); evidence whose proving sentence will read under 40 px; a component Time that
+  falls outside its clip (by more than half a frame); motion and keyframes on the same property. Footage: a `src:`
+  second past its clip's end, an asset whose transcript is missing, both `enter` and `transition` on a clip,
+  `overrides` on captions from a transcript.
 - Advice (only what rules.json `advice` sets): nothing on screen at 0 s or no words within `hook_seconds`; a still
   image or evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
 
@@ -959,7 +979,7 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | `lufs`, `peak_db` | the mastering target (−70 to −1) and true peak (−12 to 0) |
 | `max_black_ratio` | 0-1 |
 | `require_audio` | false: a silent film is delivered |
-| `ui` | true: outside the safe area is the platform's UI (only the wording of the layout message changes) |
+| `ui` | true: outside the safe area is the platform's UI (the layout message says so), and frame 0 is checked as the feed's cover (section 14) |
 
 A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
 new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.

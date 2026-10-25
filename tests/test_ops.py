@@ -323,8 +323,8 @@ def test_split_dur_clip_and_self_relative_cut(demo):
        {"op": "split_clip", "id": "ring", "at": "clip:ring+0.3", "new_id": "ring2"})
     data = raw(demo)
     a, b = clip(data, "arrow"), clip(data, "arrow2")
-    assert a["end"] == 13.42 and "dur" not in a                    # a cut relative to itself is baked to seconds
-    assert b["start"] == 13.42 and b["dur"] == 0.7
+    assert a["end"] == 13.433 and "dur" not in a                   # baked to seconds, on its frame (403)
+    assert b["start"] == 13.433 and b["dur"] == 0.687
     assert b["draw"] is False                                         # its 0.6 s draw-on already happened
     assert clip(data, "ring2")["draw"] is True                        # driven by progress keyframes: kept
 

@@ -239,6 +239,11 @@ def _cover_problem(clip: dict) -> str:
     return ""
 
 
+def cover_matters(profile: Profile, rules: dict) -> bool:
+    """Frame 0 as a cover (a feed's thumbnail) is a short-video platform's concern, or the owner's (hook_seconds)."""
+    return bool(profile.ui or (rules.get("advice") or {}).get("hook_seconds"))
+
+
 def cover_issues(resolved: dict) -> list[Issue]:
     """Frame 0 is the cover: words on it should be whole, not mid-animation."""
     clips = [c for c in _visual_clips(resolved) if (c.get("from") or 0) <= 0 < (c.get("from") or 0) + (c.get("dur") or 0)]
@@ -406,7 +411,7 @@ def check_project(project: str | Path) -> list[Issue]:
     except Exception as exc:  # noqa: BLE001 - a render would stop at the same place
         return sort_issues(issues + [Issue("error", "resolve", f"the project does not resolve: {exc}")])
     issues += duration_issues(resolved, profile) + advice_issues(resolved, rules, profile)
-    issues += cover_issues(resolved) + evidence_issues(resolved, root)
+    issues += (cover_issues(resolved) if cover_matters(profile, rules) else []) + evidence_issues(resolved, root)
     return sort_issues(issues)
 
 

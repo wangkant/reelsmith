@@ -50,6 +50,9 @@ export type ClipStyle = {
 
 export type Run = { text: string; accent?: boolean };
 
+/** A run as the text elements draw it: `o` is an opacity (captions in "build" mode hide words not said yet). */
+export type DrawnRun = Run & { o?: number };
+
 export type TextStyle = {
   font: string;
   size: number | "fit";
@@ -144,13 +147,20 @@ export type RClip = {
 
 export type VisualTrack = { id: string; kind: "visual"; hidden?: boolean; clips: RClip[] };
 
-export type CaptionItem = { from: number; to: number; runs: Run[] };
+/** A word of a caption item: frames (absolute, like the item's) and its code-point span in the item's text. */
+export type CaptionWord = { from: number; to: number; chars: [number, number] };
+
+export type CaptionItem = { from: number; to: number; runs: Run[]; words?: CaptionWord[] };
+
+/** phrase: each item whole; words: the word being said takes the accent colour; build: words appear as said. */
+export type CaptionMode = "phrase" | "words" | "build";
 
 export type CaptionTrack = {
   id: string;
   kind: "captions";
   hidden?: boolean;
   box?: Box | null;
+  mode?: CaptionMode;
   style?: Partial<TextStyle> | null;
   items: CaptionItem[];
 };

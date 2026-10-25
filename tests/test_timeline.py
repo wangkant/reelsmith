@@ -414,7 +414,7 @@ WORDS = [("cut", 1.0, 1.4), ("Hello", 2.5, 2.9), ("there,", 3.0, 3.4), ("my", 3.
 
 def caption_track(p, **extra):
     data = raw(p)
-    track(data, "cap").pop("items")
+    track(data, "cap").pop("items", None)
     track(data, "cap").update({"source": "clip:c1", "max_chars": 14, **extra})
     write(p, data)
 
@@ -429,7 +429,7 @@ def test_captions_follow_the_transcript_through_the_clip(cut):
     caption_track(cut, emphasis=["friend"])
     assert errors(cut) == []
     items, texts = caption_texts(cut)
-    assert texts == ["Hello there,", "my friend.", "This is", "footage"]      # "cut" is trimmed away (trim_in 2)
+    assert texts == ["Hello there", "my friend", "This is", "footage"]        # "cut" is trimmed away (trim_in 2)
     assert (items[0]["from"], items[0]["to"]) == (15, 45)                    # 0.5 s; held until the next phrase
     assert items[2]["from"] == 120 and items[-1]["to"] <= 180                # within c1 (0-6 s)
     assert any(r["accent"] and r["text"] == "friend" for r in items[1]["runs"])
@@ -471,6 +471,136 @@ def test_transcript_phrases_break_at_pauses_sentences_and_length():
     out = R.transcript_phrases([w("one", 0, 0.2), w("two", 0.3, 0.5), w("three", 1.5, 1.8), w("four.", 1.9, 2.1),
                                 w("five", 2.2, 2.4), w("sixsix", 2.5, 2.7)], 12)
     assert [R.join_words([x["word"] for x in ph]) for ph in out] == ["one two", "three four.", "five sixsix"]
+
+
+def spoken(tokens, start=0.0, step=0.3):
+    return [{"word": t, "a": start + n * step, "b": start + n * step + step * 0.8} for n, t in enumerate(tokens)]
+
+
+def test_transcript_phrases_are_cut_the_way_voice_lines_are():
+    phrases = R.transcript_phrases(spoken("Hello and welcome to the integration test.".split()), 32)
+    assert [R.join_words([w["word"] for w in ph]) for ph in phrases] == ["Hello and welcome", "to the integration test."]
+    assert R.phrases("Hello and welcome to the integration test", 32) == ["Hello and welcome", "to the integration test"]
+    # no orphan that splits a compound: the voice keeps this one line too
+    zh = R.transcript_phrases(spoken(["大家好，", "欢迎", "来到", "这次", "集成", "测试。"]), 14)
+    assert [R.join_words([w["word"] for w in ph]) for ph in zh] == ["大家好，欢迎来到这次集成测试。"]
+
+
+# ------------------------------------------------------------------ split and ripple edge cases
+def test_split_at_a_source_second_or_a_marker_on_the_clip_itself(cut):
+    ok(cut, {"op": "split_clip", "id": "c1", "at": "src:c1@3.5", "new_id": "c1b"})
+    d = raw(cut)
+    assert clip(d, "c1")["end"] == 1.5 and clip(d, "c1b")["start"] == 1.5 and clip(d, "c1b")["trim_in"] == 3.5
+    ok(cut, {"op": "set", "path": "markers.cut", "value": "src:c1b@5.4"},
+       {"op": "split_clip", "id": "c1b", "at": "mark:cut", "new_id": "c1c"})
+    d = raw(cut)
+    assert d["markers"]["cut"] == "src:c1c@5.4" and clip(d, "c1c")["start"] == 3.4
+    assert spans(cut)["c1b"] == (1.5, 3.4) and spans(cut)["c1c"] == (3.4, 6)
+    ok(cut, {"op": "split_clip", "id": "c1c", "at": "mark:hit", "new_id": "c1d"})       # not on the clip: kept
+    assert clip(raw(cut), "c1c")["end"] == "mark:hit" and clip(raw(cut), "c1d")["start"] == "mark:hit"
+    assert errors(cut) == []
+
+
+def test_a_head_cut_keeps_the_clip_id_and_the_captions_that_follow_it(cut):
+    transcript(cut, WORDS)
+    caption_track(cut)
+    data = raw(cut)
+    data["markers"]["punch"] = "src:c1@5.15"
+    write(cut, data)
+    s = ok(cut, {"op": "ripple_delete", "start": 0, "end": "src:c1@3"})
+    d = raw(cut)
+    assert "removed" not in s and spans(cut)["c1"] == (0, 5) and clip(d, "c1")["trim_in"] == 3
+    assert spans(cut)["m1"] == (0, 8) and d["markers"]["punch"] == "src:c1@5.15"
+    assert track(d, "cap")["source"] == "clip:c1" and errors(cut) == []
+    # a cut that swallows the piece the captions name: they follow the piece of the recording left after it
+    ok(cut, {"op": "split_clip", "id": "c1", "at": 2, "new_id": "c1b"})
+    s = ok(cut, {"op": "ripple_delete", "start": 0, "end": "src:c1b@6"})
+    assert "captions cap now follow c1b" in s and track(raw(cut), "cap")["source"] == "clip:c1b"
+    assert caption_texts(cut)[1][-2:] == ["This is", "footage"] and errors(cut) == []
+    ok(cut, {"op": "split_clip", "id": "c1b", "at": 1, "new_id": "c1c"})
+    assert "now follow c1c" in ok(cut, {"op": "remove_clip", "id": "c1b"})
+    # c2 plays the same recording muted: captions do not follow it
+    assert "no clip 'c1c'" in refused(cut, {"op": "remove_clip", "id": "c1c"})
+
+
+def crossfade(p):
+    ok(p, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.5"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "crossfade", "dur": 0.5}}})
+    return spans(p)
+
+
+def test_a_ripple_cut_ending_inside_a_crossfade_keeps_what_is_left_of_it(cut):
+    assert crossfade(cut)["c2"] == (5.5, 8.5)                  # overlaps c1 (0-6) by 0.5 s
+    s = ok(cut, {"op": "ripple_delete", "start": "src:c1@6.6", "end": "src:c1@7.9", "tracks": ["v1"]})
+    d = raw(cut)
+    assert spans(cut)["c1_3"] == (4.6, 4.7) and spans(cut)["c2"] == (4.6, 7.2)
+    assert clip(d, "c2")["transition"] == {"type": "crossfade", "dur": 0.1} and "c2 keeps its crossfade" in s
+    assert errors(cut) == []
+
+
+def test_a_ripple_cut_starting_inside_a_crossfade_shortens_it(cut):
+    crossfade(cut)
+    s = ok(cut, {"op": "ripple_delete", "start": 5.7, "end": 6.5, "tracks": ["v1"]})
+    d = raw(cut)
+    assert spans(cut)["c1"] == (0, 5.7) and spans(cut)["c2"] == (5.5, 5.7) and spans(cut)["c2_3"] == (5.7, 7.7)
+    assert clip(d, "c2")["transition"]["dur"] == 0.2 and "shortened to 0.2 s" in s
+    assert errors(cut) == []                                  # c2 may end where c1 does
+
+
+def test_a_gap_inside_a_crossfade_keeps_it_on_both_sides(cut):
+    crossfade(cut)
+    ok(cut, {"op": "insert_gap", "at": 5.8, "dur": 1, "tracks": ["v1"]})
+    d = raw(cut)
+    sp = spans(cut)
+    assert sp["c1"] == (0, 5.8) and sp["c2"] == (5.5, 5.8) and sp["c1_2"] == (6.8, 7) and sp["c2_2"] == (6.8, 9.5)
+    assert clip(d, "c2")["transition"]["dur"] == 0.3 and clip(d, "c2_2")["transition"]["dur"] == 0.2
+    assert errors(cut) == []
+
+
+def test_insert_gap_off_the_millisecond_grid_still_opens_a_gap(cut):
+    ok(cut, {"op": "insert_gap", "at": 1.05, "dur": 1, "tracks": ["v1"]})       # frame 32 = 1.0667 s
+    sp = spans(cut)
+    assert sp["c1"] == (0, 1.067) and sp["c1_2"] == (2.067, 7)
+    assert clip(raw(cut), "c1_2")["trim_in"] == 3.067
+
+
+def test_a_split_off_the_frame_grid_repeats_no_word_and_warns_of_nothing(cut):
+    transcript(cut, [("Hello", 2.2, 2.5), ("and", 2.55, 2.75), ("welcome", 2.8, 3.2), ("to", 3.25, 3.4),
+                     ("the", 3.45, 3.6), ("integration", 3.65, 4.1), ("test.", 4.15, 4.5)])
+    caption_track(cut, max_chars=32)
+    ok(cut, {"op": "set_keyframes", "id": "c1", "prop": "volume", "frames": [{"t": 0, "v": 1}, {"t": 6, "v": 0.5}]})
+    ok(cut, {"op": "split_clip", "id": "c1", "at": 1.0, "new_id": "c1b"},        # "welcome" is centred on 1.0 s
+       {"op": "split_clip", "id": "c1b", "at": 1.875, "new_id": "c1c"})          # "integration" on 1.875 s
+    assert caption_texts(cut)[1] == ["Hello and welcome", "to the integration test"]
+    assert clip(raw(cut), "c1b")["end"] == 1.867 and clip(raw(cut), "c1c")["dur"] == 4.133
+    assert [str(i) for i in D.check_data(cut, raw(cut))[1] if "after it ends" in i.msg] == []
+
+
+# ------------------------------------------------------------------ word-by-word captions
+def test_word_captions_carry_each_word_s_time_from_the_transcript(cut):
+    transcript(cut, WORDS)
+    caption_track(cut, mode="words")
+    r = R.resolve(cut)
+    cap = next(t for t in r["tracks"] if t["id"] == "cap")
+    assert cap["mode"] == "words"
+    first = cap["items"][0]
+    assert "".join(x["text"] for x in first["runs"]) == "Hello there"
+    assert first["words"] == [{"from": 15, "to": 30, "chars": [0, 5]}, {"from": 30, "to": 45, "chars": [6, 11]}]
+    assert all(it["words"][-1]["to"] == it["to"] for it in cap["items"])
+    assert "mode words (the word said lights up)" in R.describe(cut)
+    caption_track(cut, mode="phrase")
+    assert all("words" not in it for it in caption_texts(cut)[0])
+    data = raw(cut)
+    track(data, "cap")["mode"] = "karaoke"
+    assert any("cap.mode" in str(i) for i in D.check_data(cut, data)[1])
+
+
+def test_word_captions_on_given_items_spread_by_characters(cut):
+    data = raw(cut)
+    track(data, "cap").update({"mode": "build", "items": [{"start": 1, "end": 2, "text": "one two"}]})
+    write(cut, data)
+    items = caption_texts(cut)[0]
+    assert items[0]["words"] == [{"from": 30, "to": 47, "chars": [0, 3]}, {"from": 47, "to": 60, "chars": [4, 7]}]
 
 
 # ------------------------------------------------------------------ describe

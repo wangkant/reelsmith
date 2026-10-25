@@ -1,10 +1,45 @@
 // The captions track: already phrase-split and timed items, each shown in the track's box with its style over
 // caption defaults (white, heavy, fitted to one line, on a dark plate; a phrase too long for one line at the floor
-// size wraps between words). Sizes are written for a 1080 px short side and follow the canvas.
+// size wraps between words). Sizes are written for a 1080 px short side and follow the canvas. With word times, mode
+// "words" paints the word being said in the accent colour and "build" shows words as they are said (the phrase is
+// laid out whole, so nothing moves).
 import React from "react";
 import { Sequence, spring, useCurrentFrame, useVideoConfig } from "remotion";
-import type { Box, CaptionItem, CaptionTrack, TextStyle, Theme } from "../types";
+import type { Box, CaptionItem, CaptionMode, CaptionTrack, DrawnRun, TextStyle, Theme } from "../types";
 import { TEXT_DEFAULTS, TextBlock } from "./Text";
+import { clamp01 } from "./util";
+
+const BUILD_FADE = 3;   // frames a word takes to appear in "build" mode
+
+/** The item's runs at absolute frame `frame`, painted by its word times. Characters outside every word (spaces,
+ *  leading quotes) go with the next word, or the last one. */
+export const paintWords = (item: CaptionItem, mode: CaptionMode | undefined, frame: number): DrawnRun[] => {
+  const runs = (item.runs ?? []).filter((r) => r && typeof r.text === "string");
+  const words = (item.words ?? []).filter((w) => w && Array.isArray(w.chars));
+  if (!words.length || (mode !== "words" && mode !== "build")) return runs;
+  const chars: Array<{ c: string; accent: boolean }> = [];
+  for (const r of runs) for (const c of [...r.text]) chars.push({ c, accent: !!r.accent });
+  const owner = new Array<number>(chars.length).fill(-1);
+  words.forEach((w, i) => {
+    for (let k = Math.max(0, w.chars[0]); k < Math.min(chars.length, w.chars[1]); k++) owner[k] = i;
+  });
+  let next = words.length - 1;
+  for (let k = chars.length - 1; k >= 0; k--) {
+    if (owner[k] >= 0) next = owner[k];
+    else owner[k] = next;
+  }
+  const out: DrawnRun[] = [];
+  chars.forEach(({ c, accent }, k) => {
+    const w = words[owner[k]];
+    const run: DrawnRun = mode === "words"
+      ? { text: c, accent: frame >= w.from && frame < w.to }
+      : { text: c, accent, o: clamp01((frame - w.from + 1) / BUILD_FADE) };
+    const last = out[out.length - 1];
+    if (last && last.accent === run.accent && last.o === run.o) last.text += c;
+    else out.push(run);
+  });
+  return out;
+};
 
 export const CAPTION_DEFAULTS: TextStyle = {
   ...TEXT_DEFAULTS, size: "fit", max_size: 66, min_size: 36, weight: 900, color: "#FFFFFF", accent: "gold",
@@ -45,8 +80,8 @@ const Item: React.FC<{ item: CaptionItem; track: CaptionTrack; box: Box; theme: 
       }}
     >
       <TextBlock
-        runs={item.runs ?? []} style={track.style} base={captionDefaults(canvasScale(width, height))} w={box.w} h={box.h}
-        theme={theme} fps={fps} maxLines={1}
+        runs={paintWords(item, track.mode, Math.round(item.from) + f)} style={track.style} base={captionDefaults(canvasScale(width, height))}
+        w={box.w} h={box.h} theme={theme} fps={fps} maxLines={1}
       />
     </div>
   );
