@@ -36,9 +36,10 @@ own guide is [manual.md](manual.md); the component kit is documented in [kit.md]
     script.md                     free-form: research, sources, draft script
     voice/voice.wav               narration audio (from speak, or brought in)
     voice/voice.json              narration timing {file, duration_s, lines: [{i, text, t0, t1}], ...}
-    assets/                       images, clips, evidence captures, audio
-    build/                        regenerable: resolved*.json, stills/, inspect/, review/, report.json (latest
-                                  render attempt), run_state.json, agent_messages.json and logs of the runner
+    assets/                       images, clips, evidence captures, audio; <id>.transcript.json (transcribe)
+    build/                        regenerable: resolved*.json, stills/, inspect/, review/, footage/<name>/ (stills of
+                                  sources from frames and scenes), report.json (latest render attempt),
+                                  run_state.json, agent_messages.json and logs of the runner
     out/film.mp4                  the delivered film; out/meta.json (meta + duration, profile, render time);
                                   out/report.json (the delivered film's report); out/run_report.json (runner)
     .history/NNNN.json            a snapshot of project.json before each applied edit batch (undo); log.jsonl,
@@ -60,7 +61,8 @@ looked up in the process environment.
   "providers": {
     "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "longanlufeng"},
     "image": {"provider": "codex"},
-    "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"}
+    "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"},
+    "transcribe": {"provider": "openai", "base_url": "https://api.openai.com/v1", "model": "whisper-1"}
   },
   "budget": {"per_project_usd": 1.0, "min_balance_usd": 5.0},
   "runner": {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "budget_usd": 5.0, "max_minutes": 120}
@@ -98,28 +100,45 @@ or topic. Advice never blocks: words on screen within `hook_seconds`, no still i
   "meta": {"title": "", "desc": "", "topic": "", "shape": "", "sources": [{"title": "", "url": "https://..."}]},
   "voice": "voice/voice.json",         optional narration timing file; its audio plays at volume 1 automatically
   "duration": null,                    seconds or a Time; default: end of the voice + 0.6 s, else the last clip end
+  "markers": {"<name>": Time},         optional named points of the film ("mark:NAME", section 3.1)
   "assets": {"<id>": Asset},
   "tracks": [Track, ...]               bottom to top
 }
 ```
 
-Unknown keys are refused everywhere. Ids (assets, tracks, clips) are 1-64 letters, digits, `_` or `-`; clip ids
-are unique in the project. Paths are relative to the project folder.
+Unknown keys are refused everywhere. Ids (assets, tracks, clips) and marker names are 1-64 letters, digits, `_` or
+`-`; clip ids are unique in the project. Paths are relative to the project folder.
 
 **Asset**: `{"path": "assets/x.png", "kind": "image"|"video"|"audio"|"evidence", "box": [x, y, w, h], "site": "",
-"url": "", "note": ""}`. `box` (pixels in the image: the proving sentence), `site` and `url` belong to evidence.
+"url": "", "note": "", "transcript": "assets/x.transcript.json"}`. `box` (pixels in the image: the proving
+sentence), `site` and `url` belong to evidence. `transcript` (video and audio; written by `transcribe`, section 9.8)
+names the asset's word timing: `{"version": 1, "asset", "source", "duration_s", "language", "provider", "text",
+"words": [{"word", "start", "end"}], "segments": [{"start", "end", "text"}]}`, times in source seconds. A missing
+or unreadable transcript is a warning (an error when captions follow it).
 Accepted files: image `.png .jpg .jpeg .webp .gif`; evidence `.png .jpg .jpeg .webp`; video `.mp4 .m4v .mov .webm
 .mkv`; audio `.wav .mp3 .m4a .aac .ogg .oga .opus .flac`. An image clip takes an image or evidence asset, an audio
 clip an audio or video asset.
 
 **Track**: `{"id": "v1", "kind": "visual"|"audio"|"captions", "hidden": false, ...}`
 
-- visual / audio: `"clips": [Clip, ...]`. Clips on one track must not overlap in time: layer with more tracks.
-- captions: `{"id": "cap", "kind": "captions", "source": "voice", "box"?, "style"?: TextStyle, "emphasis": [words
-  in the accent colour], "max_chars": 14 (4-40), "overrides": [{"line": 5, "text": "..."}], "items"?: [{"start":
-  Time, "end": Time, "text": "..."}]}`. Without `items`, captions come from the voice lines: phrase-split (never
-  inside a word or a number) and timed by characters. Without `box` they sit in the profile's captions band
-  (section 15). Without a captions track there are no captions.
+- visual / audio: `"clips": [Clip, ...]`. Clips on one track must not overlap in time: layer with more tracks. The
+  one exception is a clip with a `transition` (section 3.2): it may overlap the clip just before it on its track by
+  at most the transition's `dur`.
+- captions: `{"id": "cap", "kind": "captions", "source": "voice" | "clip:<id>", "box"?, "style"?: TextStyle,
+  "emphasis": [words in the accent colour], "max_chars": 14 (4-40), "overrides": [{"line": 5, "text": "..."}],
+  "items"?: [{"start": Time, "end": Time, "text": "..."}]}`. Without `items`, captions come from the `source`:
+  - `"voice"`: the voice lines, phrase-split (never inside a word or a number) and timed by characters.
+  - `"clip:<id>"`: the transcript of that video or audio clip's asset (section 9.8). Each word is placed where the
+    clip plays it (its start, `trim_in` and `rate`; a word whose middle the trim cuts away is dropped), through the
+    named clip and every other clip on its track that plays the same asset with sound (the pieces a split or a
+    ripple edit made of it). Phrases are cut by the words' timing: a pause of 0.5 s, the end of a sentence, a
+    clause end past half of `max_chars`, or `max_chars` itself (words are joined with spaces, except around CJK,
+    kana, Thai and similar scripts and before closing punctuation); a phrase stays up until the next one across a
+    gap under 1 s, else 0.3 s after its last word, and never past its clip. A looping clip cannot be followed;
+    `overrides` apply to voice captions only.
+
+  Without `box` they sit in the profile's captions band (section 15). Without a captions track there are no
+  captions.
 
 ### 3.1 Time
 
@@ -127,16 +146,22 @@ A Time is a number (seconds from the start of the film) or a string:
 
 - `"line:N"` start of voice line N (1-based); `"line:N.end"` its end
 - `"clip:ID"` start of clip ID; `"clip:ID.end"` its end
+- `"mark:NAME"` the project marker NAME (`markers`, section 3; a marker is itself a Time)
+- `"src:ID@S"` the film time at which source second S of video or audio clip ID plays: start + (S − trim_in) ÷
+  rate. A looping clip (a source second plays more than once) and a second before its `trim_in` are errors; a
+  second past the clip's end resolves but is a warning (that moment is not in the film). This is how source times
+  from `scenes`, `silences` and transcripts become cut points.
 - `"end"` end of the film
-- any of these `+` or `-` seconds: `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"end-2"`
+- any of these `+` or `-` seconds: `"line:5+0.3"`, `"clip:c2.end-0.5"`, `"mark:hit-1"`, `"src:c1@12.5+0.2"`,
+  `"end-2"`
 
 Inside a clip (keyframe `t`, `highlight.at`, component props `at` / `*_at`) a plain number is seconds from the
 clip's start; a Time string stays absolute. A clip's own `start` / `end`, `duration` and caption `items` are film
 Times.
 
-Seconds become frames as `round(s × fps)`, halves up (`timeexpr.to_frame`). Cycles in `clip:` references are an
-error. `resolve.time_of(project, value)` turns a Time into seconds outside the renderer. In `preview` and
-`describe(at=...)`, `"clip:ID.end"` means the clip's last frame.
+Seconds become frames as `round(s × fps)`, halves up (`timeexpr.to_frame`). Cycles in `clip:`, `mark:` and `src:`
+references (`src:ID` depends on ID's start) are an error. `resolve.time_of(project, value)` turns a Time into
+seconds outside the renderer. In `preview` and `describe(at=...)`, `"clip:ID.end"` means the clip's last frame.
 
 ### 3.2 Clip (visual)
 
@@ -149,9 +174,12 @@ blend "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|... (CSS mix-ble
 filter: {blur, brightness, contrast, saturate, grayscale}   (CSS filter units)
 shadow: bool | css string
 enter: {"preset": "fade"|"rise"|"drop"|"pop"|"wipe_left"|"wipe_up"|"zoom", "dur": 0.4}   exit: the same presets
+transition: {"type": "crossfade"|"dip_black"|"dip_white"|"wipe_left"|"wipe_right"|"wipe_up"|"slide_left"|"zoom",
+     "dur": 0.5}   in from the previous clip on the SAME track (below)
 keyframes: {"<prop>": [{"t": number | Time, "v": number, "ease": "linear"|"in"|"out"|"inOut"|"spring"|"step"}]}
-     props: x, y, w, h, opacity, rotate, scale, blur, brightness, zoom, pan_x, pan_y, progress
-     zoom/pan_x/pan_y move the CONTENT inside the box (Ken Burns); progress (0..1) drives shapes and components
+     props: x, y, w, h, opacity, rotate, scale, blur, brightness, zoom, pan_x, pan_y, progress, volume
+     zoom/pan_x/pan_y move the CONTENT inside the box (Ken Burns); progress (0..1) drives shapes and components;
+     volume (>= 0) is a video clip's sound curve, replacing its volume (an error on other visual clips)
 motion: "push"|"pull"|"pan_left"|"pan_right"|"rise"|"still"   (image/video shorthand for zoom/pan keyframes;
      keyframes on the same property win)
 ```
@@ -159,7 +187,9 @@ motion: "push"|"pull"|"pan_left"|"pan_right"|"rise"|"still"   (image/video short
 Types and their fields:
 
 - `image`: `asset`, `fit` `"cover"|"contain"` (default cover), `focus` `[fx, fy]` 0..1, `motion`
-- `video`: `asset`, `trim_in` s, `rate` 1, `loop` false, `fit`, `focus`, `motion`, `volume` 0 (muted)
+- `video`: `asset`, `trim_in` s (source seconds skipped), `rate` 1 (source seconds per film second), `loop` false,
+  `fit`, `focus`, `motion`, `volume` 0 (muted); film second t of the clip shows source second trim_in + (t − start)
+  × rate
 - `text`: `text` (markup `**x**` = accent colour), `style`: TextStyle, `reveal`: `{"mode": "chars"|"words"|"lines"|
   "none", "dur": s}` (`lines` reveals the lines as laid out)
 - `shape`: `shape` `"rect"|"ellipse"|"line"|"arrow"|"path"`, `fill`, `stroke`, `stroke_width`, `d` (SVG path in box
@@ -179,7 +209,30 @@ it takes), `max_size` 160, `min_size` 28, `weight` 100-900, `color` (default `sn
 
 Colours (text, shapes, highlights, component colour props) take a theme token (section 15) or any CSS colour.
 
-Audio clip: `{id, type: "audio", asset, start, end | dur, trim_in 0, volume 1, fade_in 0, fade_out 0, loop false}`.
+Audio clip: `{id, type: "audio", asset, start, end | dur, trim_in 0, volume 1, fade_in 0, fade_out 0, loop false,
+keyframes?: {"volume": [Keyframe]}, transition?: {"type": "crossfade", "dur"}, duck?: {"under": "<track id>" |
+"voice", "to": 0.25, "fade": 0.3}}`.
+
+- `keyframes.volume` (audio and video clips): the volume over time, keyframed like any property (numbers count
+  from the clip's start); it replaces `volume`. Volumes above 1 are capped at 1 (mastering sets the loudness).
+- `duck`: the clip's gain drops to `to` while the named track (an audio track, or a visual track's video clips
+  with sound) or the narration (`"voice"`) has sound, easing over `fade` seconds before each stretch and after it.
+  The stretches are approximated from the timeline, not measured from the audio: the voice lines' `t0`-`t1`, or
+  the extents of the track's sounding clips (volume or volume keyframes above 0), with gaps up to 2 × `fade`
+  bridged so a bed does not pump between phrases. A clip cannot duck under its own track.
+
+**Transitions.** A clip's `transition` happens over its first `dur` seconds, from the clip just before it on the
+same track (the one that starts last before it), which it paints over. That clip may overlap it by at most `dur`;
+overlap them by exactly `dur` for a full two-sided transition, e.g. `"start": "clip:a.end-0.5"` with `"dur": 0.5`.
+Where the previous clip has already ended (less overlap, a gap, or the first clip of a track), the clip
+transitions in over whatever is beneath it. `crossfade` fades it in over the previous clip; `dip_black` /
+`dip_white` fade the previous clip to the colour over the first half and this one out of it over the second;
+`wipe_left` / `wipe_right` / `wipe_up` reveal it behind a moving edge (`wipe_left`: the edge travels leftward);
+`slide_left` pushes it in from the right while the previous clip slides out to the left; `zoom` fades it in from
+1.2× while the previous clip grows. Wipes, slides and zooms ease in and out; fades and dips are linear. A clip
+with sound fades its sound in over `dur`, and a previous clip with sound fades out over the overlap (audio clips
+take only `crossfade`, which crossfades their volume the same way). A transition longer than either clip, an
+overlap longer than the transition, and an overlap with any clip other than the previous one are errors.
 
 ### 3.3 Component props and Times
 
@@ -202,7 +255,7 @@ gives `"[level] where: msg"`.
   "preset"|"library", path, ...)`; `validate_props(component, props) -> list[str]` (JSON Schema).
 - `document.py`: pydantic models for section 3; `load(project) -> Document`; `save(project, doc)`;
   `validate(project, doc) -> list[Issue]` (unique ids, references to assets, clips, components and voice lines,
-  Time resolution, cycles, overlaps per track, files present).
+  Time resolution, cycles, overlaps per track and transitions, files present); `load_transcript(project, asset)`.
 - `ops.py`: `apply(project, ops) -> (ok, issues, summary)`; `undo(project, steps=1) -> (ok, text)` (section 5).
 - `resolve.py`: `resolve(project) -> dict` (section 7); `describe(project, at=None) -> str` (section 8);
   `time_of(project, value) -> seconds`.
@@ -210,7 +263,7 @@ gives `"[level] where: msg"`.
   list[Issue]`; `check_film(path, profile) -> dict` (section 14).
 - `render.py`: `preview(project, times, sweep=False) -> dict`, `render(project) -> dict`, `review(project, n=12)
   -> dict`.
-- `providers/`: the asset tools (section 9).
+- `providers/`: the asset tools and the footage tools (section 9).
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
   the runner call these.
 - `mcp_server.py` (stdio), `cli.py`, `runner.py` and its file guard `guard.py` (section 11).
@@ -236,7 +289,39 @@ gives `"[level] where: msg"`.
 {"op": "remove_asset", "id"}                                    refused while a clip uses it (the file stays)
 {"op": "set", "path": "meta.title", "value": ...}              dotted path into project.json (not tracks/assets);
                                                                 null removes
+{"op": "ripple_delete", "start": Time, "end": Time, "tracks": [id]?}   remove a film range and close the gap
+{"op": "insert_gap", "at": Time, "dur": s, "tracks": [id]?}            open a gap of dur seconds at a point
+{"op": "trim_clip", "id", "in"?, "out"?, "ripple": false}              a clip's in/out points
 ```
+
+**split_clip** on a video or audio clip moves the second half's `trim_in` on by the time cut off × `rate` (a
+looping clip continues where its loop was); the first half keeps `fade_in` and loses `fade_out`, the second keeps
+`fade_out` and loses `fade_in`, `enter` and `transition`; `src:<id>@S` Times with S in the second half are pointed
+at the new clip.
+
+**Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, the duration,
+caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts it and
+written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end"`, `"mark:x"`, `"src:c@3"`) is put
+back wherever it still lands on the same frame. Anchors survive where they stay true (a clip timed from a clip that
+moved with it); the others become numbers (a clip after the cut timed from a voice line, since the voice is not
+cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
+(`<id>_2`, `<id>_3`, ...).
+
+- `ripple_delete`: the range `start`-`end` (frames) goes from the given tracks (default: every visual and audio
+  track and every captions track with `items`). Clips inside it are removed, clips crossing an edge are split
+  there (video and audio move their `trim_in` by the time cut × rate), and everything after it on those tracks
+  moves earlier by its length. Caption items are clipped to what is left. Clips on tracks it does not touch stay
+  where they are (an anchor that would drag them becomes a number). Markers and a set `duration` move with the
+  cut. The narration is never cut: a note says so when the range falls inside it. To cut several source ranges of
+  one clip (`silences`), cut from the last back: an earlier `src:<clip>@S` still names the first piece.
+- `insert_gap`: everything at or after `at` on the given tracks moves later by `dur` (a clip that starts at `at`
+  moves, one that ends there stays; a clip across it is split); markers at or after it and a set `duration` move.
+- `trim_clip`: for a video or audio clip, `in` and `out` are seconds of its source (its new `trim_in` and the
+  source second where it ends); for any other clip, Times of its new start and end. Without `ripple` the picture
+  stays where it is on the timeline and only the clip's edges move (extending past a neighbour is refused as an
+  overlap); with `ripple` the clip keeps its start, and the clips after it on its track move by the change in its
+  length. Other clips anchored on it follow their anchors. An out point past the end of a non-looping source, or
+  an in point that would start the clip before 0 s without ripple, is refused.
 
 A batch is refused, and project.json left untouched, when an op fails or when the result has validation errors the
 project did not have before: errors that were already there do not block edits that leave them alone. Before each
@@ -290,10 +375,13 @@ RClip = {"id", "type", "track", "from", "dur" (frames), "box": {x,y,w,h},
          "style": {opacity, rotate, scale, origin, radius, blend, filter, shadow},
          "keyframes": {prop: [{"f": frames from clip start, "v", "ease"}]},
          "enter": {"preset", "dur" (frames)} | null, "exit": {...} | null,
+         "transition": {"type", "dur" (frames), "from": id of the clip it comes from | null} | null,
+         "transitionOut": {"type", "dur" (frames), "at": frames into this clip, "to": id} | null,
          "content": {...}}
 content by type:
   image     {"src", "size": [w,h], "fit", "focus"}
-  video     {"src", "duration": s, "trimIn": frames, "rate", "loop", "fit", "focus", "volume"}
+  video     {"src", "duration": s, "trimIn": frames, "rate", "loop", "fit", "focus", "volume",
+             "volumeKeys"?: [Keyframe], "fadeIn"?, "fadeOut"? (frames: crossfades)}
   text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
   shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
   evidence  {"src", "size", "box", "site", "highlight": {"at" frames, "dur" frames, "color"} | null}
@@ -303,12 +391,22 @@ The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is 
 `zoom`/`pan_x`/`pan_y` keyframes, and captions are already phrase-split and timed. `renderer/src/types.ts` is the
 TypeScript side of this format.
 
+Footage additions: an audio entry may carry `"volumeKeys": [{"f", "v", "ease"}]` (frames from its start; replaces
+`volume`) and `"duck": [{"start", "end" (frames from its start), "level", "fade" (frames)}]` (merged ranges; the
+gain is `level` inside, eased linearly over `fade` frames before and after; overlapping ramps take the lowest).
+Volume keyframes leave `keyframes` (they are sound, not picture) for `content.volumeKeys` / `volumeKeys`. A
+transition's sound arrives as fades: the incoming item's `fadeIn` and the outgoing item's `fadeOut` are raised to
+the transition and the overlap. Clips paint in time order on a track (`from`), so the incoming clip of a
+transition is on top whatever the order in `clips`.
+
 ## 8. describe
 
 `describe(project, at=None)` returns text an agent reads like the editor's window: canvas, safe area, theme,
-duration, voice lines (`[n] t0-t1 text`), tracks bottom to top with their clips (`id type start-end (as written)
-box summary`) and every caption phrase, assets, and the current validation issues. With `at`, only what is on
-screen then, bottom to top.
+duration, markers (`name seconds (as written)`), voice lines (`[n] t0-t1 text`), tracks bottom to top with their
+clips (`id type start-end (as written) box summary`; the summary names transitions, trims, volume keyframes and
+ducking) and every caption phrase (a transcript track says which clips it follows), assets (with their transcript's
+word count, or `transcript MISSING`), and the current validation issues. With `at`, only what is on screen then,
+bottom to top (an audio clip with volume keyframes shows its volume then).
 
 ## 9. Providers (asset tools)
 
@@ -323,6 +421,8 @@ like a key are scrubbed from every message.
 | `draw` | Codex CLI image generation | the Codex CLI installed and signed in |
 | `animate` | OpenRouter image-to-video | `OPENROUTER_API_KEY`; ffmpeg |
 | `import_asset` | local copy or http(s) download | ffmpeg (ffprobe) for video and audio |
+| `probe`, `frames`, `scenes`, `silences` | ffprobe and ffmpeg (they only read; section 9.7) | ffmpeg |
+| `transcribe` | an OpenAI-compatible `/audio/transcriptions` endpoint, or faster-whisper (section 9.8) | the endpoint's key, or the `transcribe` extra; ffmpeg |
 
 ### 9.1 speak
 
@@ -387,8 +487,8 @@ box is the whole picture until `update_asset` sets one. With `REELSMITH_ROOT` se
 
 ### 9.6 Costs: the ledger, the budget and the balance floor
 
-`speak` and `animate` spend money; `draw` spends tries. Every paid call goes through `ledger.jsonl` (in the
-workspace, or in the project folder outside one):
+`speak`, `animate` and `transcribe` (with an endpoint) spend money; `draw` spends tries. Every paid call goes
+through `ledger.jsonl` (in the workspace, or in the project folder outside one):
 
 1. Estimate the cost.
 2. Under the ledger lock, refuse if the project's spend plus this estimate would exceed `budget.per_project_usd`, or
@@ -400,6 +500,59 @@ workspace, or in the project folder outside one):
 A call without a final row counts at its estimate, so a call killed half-way still counts against the project and
 parallel calls see each other's reservations. `REELSMITH_BUDGET_USD` and `REELSMITH_MIN_BALANCE_USD` override the
 two budget values for one process.
+
+### 9.7 Footage tools: probe, frames, scenes, silences
+
+They look at a source (an asset id, or a file inside the project folder; anything else is refused) and change
+nothing in project.json. Times are **source seconds**; `"src:<clip>@<seconds>"` (section 3.1) puts one on the
+timeline. Text comes first, then the same facts as one `JSON: {...}` line.
+
+- `probe(project, source)`: container, duration, size and bit rate; the first picture stream's codec, width,
+  height, rotation (the display matrix, with the size it shows at), fps, pixel format and frame count (`still` for
+  a picture); the first sound stream's codec, channels, layout and sample rate, with its integrated loudness
+  (LUFS), loudness range and true peak (ffmpeg `ebur128`).
+- `frames(project, asset, times?, every?, n?)`: stills of a video at source times: `times` (seconds or `m:ss`, at
+  most 24), else one every `every` seconds from 0 (at most 24), else `n` evenly spaced (default 12; at the middle
+  of each n-th). A time at the very end shows the last frame. Stills are scaled to at most 960 px on their long
+  edge and written to `build/footage/<name>/frames/` (replaced on each call) with `contact.png`, a sheet of all of
+  them with each source time burned in.
+- `scenes(project, asset, threshold=0.3)`: shot cuts where ffmpeg's scene score (on a 240 px wide copy) passes
+  `threshold` (0.01-0.99); cuts closer than 0.1 s together or to an end are one shot. Lists every shot (`#n
+  start-end (length)`) and writes the first frame of each (the first 48) and their sheet to
+  `build/footage/<name>/scenes/`.
+- `silences(project, asset, min_s=0.5, noise_db=-35)`: ranges quieter than `noise_db` dB for at least `min_s`
+  seconds (ffmpeg `silencedetect`; a silence running to the end ends there) and the sound ranges between them: the
+  cut list for jump cuts.
+
+### 9.8 transcribe
+
+`transcribe(project, asset, language?, prompt?)` → `assets/<id>.transcript.json` (section 3) and the asset's
+`transcript` set through the edit ops. The asset must be video or audio with sound. ffmpeg takes its sound out as
+16 kHz mono (MP3 at 32 kbit/s for an endpoint, WAV for the local model). `language` is an ISO code (empty: the
+provider detects it, or `providers.transcribe.language`); `prompt` (at most 800 characters) lists names and words
+to spell right. The result lists what is said by segment with source times.
+
+`providers.transcribe`:
+
+| key | default | meaning |
+|---|---|---|
+| `provider` | `openai` | `openai`: any OpenAI-compatible endpoint; `local`: faster-whisper in-process (the `transcribe` extra) |
+| `base_url` | `https://api.openai.com/v1` | POST `{base_url}/audio/transcriptions` (OpenAI, Groq, a local whisper server) |
+| `model` | `whisper-1` | the endpoint's model |
+| `key_env` | `OPENAI_API_KEY` | the name of its key in `.env` or the environment; `null` sends none |
+| `usd_per_min` | 0.006 | the estimate per minute of sound (endpoints report no cost) |
+| `max_mb` | 24 | the largest upload; longer sound goes in pieces |
+| `timeout_s` | 600 | per request |
+| `language` | null | the default language |
+| `local_model`, `device`, `compute_type` | `small`, `auto`, `default` | faster-whisper's model name or path and how it runs |
+
+The endpoint is asked for `response_format=verbose_json` with `timestamp_granularities[]=word` and `segment`;
+words come from the answer's `words`, or from each segment's `words` (servers differ). Sound over `max_mb` is cut
+into pieces at the middle of a silence in the last half of each piece's allowed length (else at that length), each
+piece is sent alone and its times are moved back by the piece's start. A request is retried on 408, 409, 425, 429,
+5xx and dropped connections, never on another 4xx; errors are scrubbed of the key. The `openai` provider is paid:
+the estimate (minutes × `usd_per_min`) is reserved in the ledger against the project budget (section 9.6; there is
+no balance to read) and settled at the estimate of what was sent. The local provider is free and not booked.
 
 ## 10. Agent-facing tools (tools.py → MCP, CLI, runner)
 
@@ -418,6 +571,11 @@ two budget values for one process.
 | `render(project)` | the film, mastered and checked (section 14) | `render` |
 | `review(project, n=12)` | 2-24 evenly spaced frames of the delivered film and a contact sheet | `review -n` |
 | `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture`, `draw`, `animate`, `import`, `assets` |
+| `probe(project, source)` | streams, codecs, rotation, loudness of a source (section 9.7) | `probe <source>` |
+| `frames(project, asset, times?, every?, n?)` | stills of a source at source seconds and a timed contact sheet | `frames <asset> [times...] --every -n` |
+| `scenes(project, asset, threshold?)` | shot cuts in source seconds and each shot's first frame | `scenes <asset> --threshold` |
+| `silences(project, asset, min_s?, noise_db?)` | silent ranges and the sound between them, in source seconds | `silences <asset> --min-s --noise-db` |
+| `transcribe(project, asset, language?, prompt?)` | word-level transcript of a video or audio asset (section 9.8) | `transcribe <asset> --language --prompt` |
 
 Each takes `project` (the path of the folder holding project.json, or of project.json itself) first where it
 applies and returns text; structured results are JSON inside the text. A result is flagged as an error (MCP
@@ -578,10 +736,16 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
 
 - Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
   cyclic Times, props that fail a component's schema); the hard rules (section 2.2); a length outside the profile's
-  limits.
+  limits. Footage: an unknown clip or marker in a `src:` or `mark:` Time, a `src:` on a looping or non-media clip or
+  before its in point, a transition longer than its clip or the clip it comes from, an overlap longer than the
+  transition (or with any clip but the previous one), an audio transition other than `crossfade`, volume keyframes
+  on a clip without sound or below 0, a `duck` under an unknown track, its own track, a captions track or a missing
+  voice, captions from a clip that is unknown, not video or audio, looping, or whose asset has no readable
+  transcript; a marker name that is not an id.
 - Warnings: an empty title; frame 0 (the cover) without whole words on it (mid-reveal, mid-enter, fading in, or no
   words at all); evidence whose proving sentence will read under 40 px; a component Time that falls outside its
-  clip; motion and keyframes on the same property.
+  clip; motion and keyframes on the same property. Footage: a `src:` second past its clip's end, an asset whose
+  transcript is missing, both `enter` and `transition` on a clip, `overrides` on captions from a transcript.
 - Advice (from rules.json `advice`): nothing on screen at 0 s or no words within `hook_seconds`; a still image or
   evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
 
@@ -589,10 +753,10 @@ When resolved.json has `"inspect": true`, the renderer measures each rendered fr
 
 1. **check**: any check error.
 2. **layout**: a still every second, measured (section 12): visible text outside the safe area or cut by the canvas
-   edge, text under 20 px, a component that crashes. Text during its enter/exit animation and text fainter than
-   10 % opacity are not counted. Warnings: text under 28 px, text overflowing its clip box, text of one clip over
-   text of another (captions included), and contrast under 3:1 against the background sampled from the still
-   (between 2:1 and 3:1 a clearly different hue passes).
+   edge, text under 20 px, a component that crashes. Text during its enter/exit animation or a transition between
+   clips, and text fainter than 10 % opacity, are not counted. Warnings: text under 28 px, text overflowing its clip
+   box, text of one clip over text of another (captions included), and contrast under 3:1 against the background
+   sampled from the still (between 2:1 and 3:1 a clearly different hue passes).
 3. **film**: the renderer encodes the film.
 4. **master**: the film must have sound; loudness is normalised to the profile's target (true peak −1 dBTP).
 5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
@@ -639,7 +803,7 @@ The theme is `paper` (or the one `name`d), then workspace.json `theme`, then pro
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw`, and Codex's home folder (default `~/.codex`) |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
 | `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, or `--backend deepseek` on the agent-sdk engine) |
-| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`) |
+| `OPENAI_API_KEY` | the runner on OpenAI (`--provider openai`); `transcribe` with the default endpoint (`providers.transcribe.key_env` names another) |
 | the name in `runner.key_env` | the runner on a `custom` provider |
 | `TAVILY_API_KEY` | the api engine's `web_search` through Tavily (when ddgs is not installed, or `web.search` is `tavily`) |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | the runner on Anthropic (agent-sdk engine) |

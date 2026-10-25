@@ -15,8 +15,9 @@ animate, import_asset) and edit an NLE-style project (tracks, clips, keyframes, 
 reelsmith renders, measures layout and enforces delivery. There is no fixed order and no template.
 Start with manual (once) and notes. Every tool takes `project` = the folder holding project.json (new_project
 makes one). Loop: edit -> check -> preview (look at the stills; sweep=true measures the whole film's layout as render
-would) -> fix -> render -> review. Paid tools (speak, draw, animate) estimate first and refuse over budget. Failures
-come back as text that says what to do."""
+would) -> fix -> render -> review. To edit recordings, look first (probe, frames, scenes, silences, transcribe), then
+cut with ripple_delete at "src:<clip>@<seconds>" Times. Paid tools (speak, draw, animate, transcribe) estimate first
+and refuse over budget. Failures come back as text that says what to do."""
 
 mcp = MCPServer("reelsmith", instructions=INSTRUCTIONS, version=__version__)
 

@@ -34,6 +34,9 @@ layout measurement, loudness and the delivery rules.
 - **Asset tools**: narration (text-to-speech, cached per line), original pictures (Codex image generation),
   evidence screenshots of web pages at phone width with the proving sentence boxed, short clips from a picture
   (image-to-video), and imports of local or downloaded media.
+- **Footage editing**: probe, stills at source times, shot cuts, silences and word-level transcripts of the
+  agent's own recordings; `"src:clip@seconds"` anchors and markers; ripple delete, insert gap and trim;
+  transitions between clips; volume curves and ducking; captions that follow a transcript.
 - **Components**: nine built-in React presets (receipt, count-up, bar comparison, timeline, dot grid, stamp,
   evidence card, highlighter, arrow). The agent can write its own into the workspace library, with a documented
   kit, a type checker and an import guard.
@@ -64,6 +67,7 @@ Optional, per tool:
 | `capture` (evidence screenshots) | the `capture` extra and a Chromium browser: Microsoft Edge or Google Chrome if installed, else `python -m playwright install chromium` |
 | `draw` (pictures) | the [Codex CLI](https://github.com/openai/codex), installed and signed in |
 | `speak` (narration), `animate` (video clips) | an [OpenRouter](https://openrouter.ai) API key |
+| `transcribe` (word timing of recordings) | a key for any OpenAI-compatible transcription endpoint (OpenAI, Groq, a local whisper server), or the `transcribe` extra (faster-whisper) |
 | `reelsmith run` (the self-hosted agent) | a key for the model's API: [OpenRouter](https://openrouter.ai) (the default), [DeepSeek](https://platform.deepseek.com), OpenAI, or none for a local server; the `web` extra for keyless web search |
 | `reelsmith run --engine agent-sdk` | the `runner` extra and an Anthropic or a DeepSeek API key |
 
