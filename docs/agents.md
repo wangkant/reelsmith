@@ -66,7 +66,8 @@ sends the agent to the `manual` tool for the contract.
   environment: keep provider keys in the workspace `.env`, where the tools read them.
 - The reelsmith DSH plugin package (`integrations/dsh`) is the richer option when it fits your setup.
 - **Headless:** `reelsmith run <project> --engine dsh` drives `dsh --profile headless` with its own DSH home and the
-  server attached; it needs `DEEPSEEK_API_KEY`.
+  server attached; it needs `DEEPSEEK_API_KEY`. It is tested with dsh 0.2.1-rc.3, which it runs through `npx` when
+  `dsh` is not on `PATH`.
 
 ## Cursor
 

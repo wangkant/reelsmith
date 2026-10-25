@@ -2,7 +2,8 @@
 
 FAKE_CLI_SCRIPT names a JSON file {"runs": [{"events": [...], "exit": 0, "stderr": ""}], "env_keys": [...]}; the
 n-th call plays runs[n] (the last one repeats). An event is a JSON object printed as one line, "deliver" (write a
-passing out/film.mp4 in the cwd) or {"sleep": seconds}. Each call is appended to <script>.calls.jsonl.
+passing out/film.mp4 in the cwd) or {"sleep": seconds}. Each call is appended to <script>.calls.jsonl. `--version`
+prints FAKE_CLI_VERSION (default 0.2.1-rc.3) and is not recorded.
 """
 import json
 import os
@@ -12,6 +13,9 @@ from pathlib import Path
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--version"]:
+        print(os.environ.get("FAKE_CLI_VERSION", "0.2.1-rc.3"))
+        return 0
     script = Path(os.environ["FAKE_CLI_SCRIPT"])
     spec = json.loads(script.read_text(encoding="utf-8"))
     calls = script.with_name(script.stem + ".calls.jsonl")

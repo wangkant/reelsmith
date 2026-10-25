@@ -1,6 +1,9 @@
 """The runner's codex and dsh engines, driven against a fake CLI that plays recorded event streams."""
 import io
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,7 +17,10 @@ try:
 except ImportError:                 # Python 3.10
     tomllib = None
 
+ROOT = Path(__file__).resolve().parent.parent
 FAKE = Path(__file__).parent / "fixtures" / "fake_agent_cli.py"
+MOCK_LLM = Path(__file__).parent / "fixtures" / "dsh_mock_llm.mjs"
+DSH_MODULES = ROOT / "integrations" / "dsh" / "node_modules" / "@deepseek-ai"
 DS_KEY = "sk-ds-test-abcdef123456"
 needs_toml = pytest.mark.skipif(tomllib is None, reason="tomllib needs Python 3.11+")
 
@@ -82,8 +88,11 @@ def codex_turn(sid="th-1", usage=None, text="done", deliver=True):
         {"type": "turn.completed", "usage": usage}]}
 
 
-def dsh_steps(sid="session-1", steps=2, usage=None, deliver=True, final="completed", tail=()):
+def dsh_steps(sid="session-1", steps=2, usage=None, deliver=True, reason=None, tail=()):
+    """A `dsh --profile headless --json` stream in the 0.2.1-rc.3 shapes (RC3_DONE): the turn's outcome is on the
+    turn_end status, final carries only the answer, and the exit status is 0 only for a completed turn."""
     usage = usage or {"inputTokens": 1000, "outputTokens": 500, "cacheReadTokens": 4000}
+    reason = reason or {"kind": "completed"}
     events = [{"type": "session", "sessionId": sid, "cwd": "x"}, {"type": "status", "phase": "turn_start", "turn": 1}]
     for i in range(steps):
         events += [{"type": "status", "phase": "step_start", "turn": 1, "step": i + 1},
@@ -93,10 +102,47 @@ def dsh_steps(sid="session-1", steps=2, usage=None, deliver=True, final="complet
     events += list(tail)
     if deliver:
         events.append("deliver")
-    events += [{"type": "text", "text": "film rendered"},
-               {"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": final}},
-               {"type": "final", "sessionId": sid, "reason": {"kind": final}, "text": "film rendered"}]
-    return {"events": events, "exit": 0 if final == "completed" else 1}
+    done = reason["kind"] == "completed"
+    events += [*([{"type": "text", "text": "film rendered"}] if done else []),
+               {"type": "status", "phase": "turn_end", "turn": 1, "reason": reason},
+               {"type": "final", "text": "film rendered" if done else ""}]
+    return {"events": events, "exit": 0 if done else 1}
+
+
+# captured from dsh 0.2.1-rc.3 (`--profile headless --json`) against DSH's mock model, paths shortened
+RC3_DONE = [
+    {"type": "session", "sessionId": "session-058a9a98-0c78-4076-b85d-d60fa4145306", "cwd": "C:\\ws\\projects\\p1"},
+    {"type": "status", "phase": "turn_start", "turn": 1},
+    {"type": "status", "phase": "step_start", "turn": 1, "step": 1},
+    {"type": "text", "text": "film rendered"},
+    {"type": "status", "phase": "step_end", "turn": 1, "step": 1,
+     "usage": {"inputTokens": 3, "outputTokens": 13, "totalTokens": 16}},
+    {"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": "completed"}},
+    {"type": "final", "text": "film rendered"}]
+RC3_FAILED = [
+    {"type": "session", "sessionId": "session-e9cadbc4-de4a-442b-899c-4ccd433fc9d9", "cwd": "C:\\ws\\projects\\p1"},
+    {"type": "status", "phase": "turn_start", "turn": 1},
+    {"type": "status", "phase": "step_start", "turn": 1, "step": 1},
+    {"type": "tool_call", "callId": "mock-call-1", "tool": "mcp__reelsmith__describe", "input": {"project": "."}},
+    {"type": "tool_result", "callId": "mock-call-1", "status": "completed", "result": "project p1: landscape ..."},
+    {"type": "status", "phase": "step_end", "turn": 1, "step": 1,
+     "usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}},
+    {"type": "status", "phase": "step_start", "turn": 1, "step": 2},
+    {"type": "status", "phase": "step_end", "turn": 1, "step": 2},
+    {"type": "status", "phase": "turn_end", "turn": 1,
+     "reason": {"kind": "error", "error": {"message": "mock script exhausted", "code": "SERVER", "status": 500}}},
+    {"type": "final", "text": ""}]
+
+
+class Log:
+    def __init__(self):
+        self.lines = []
+
+    def event(self, kind, **data):
+        pass
+
+    def line(self, text):
+        self.lines.append(text)
 
 
 # ------------------------------------------------------------------ settings
@@ -165,22 +211,24 @@ def test_dsh_command_and_patch(ws):
     scope = guard.scope_for(project, w)
     srv = cli_engines.server(scope)
     patch = project / "build" / "p.yml"
-    cmd = cli_engines.dsh_command(["dsh"], patch, scope, windows=False)
-    assert cmd[:6] == ["dsh", "--patch", str(patch), "--profile", "headless", "--json"]
-    assert cmd[cmd.index("--permission-mode") + 1] == "workspace-write"
-    assert cmd[cmd.index("--approval-policy") + 1] == "never" and cmd[-1] == "-"
-    assert cmd[cmd.index("--add-dir") + 1] == str(w.root / "library")
-    win = cli_engines.dsh_command(["dsh"], patch, scope, resume="session-7", windows=True)
-    assert "--add-dir" not in win and win[-3:] == ["--session-id", "session-7", "-"]
+    # dsh 0.2.1-rc.3 headless takes --json, --session-id and the task; any other flag stops it before it starts
+    assert cli_engines.dsh_command(["dsh"], patch) == ["dsh", "--patch", str(patch), "--profile", "headless",
+                                                      "--json", "-"]
+    resumed = cli_engines.dsh_command(["dsh"], patch, resume="session-7")
+    assert resumed[-3:] == ["--session-id", "session-7", "-"]
     text = cli_engines.dsh_patch(srv, "deepseek-v4-pro", "max", 600)
     assert "name: '@deepseek-ai/dsh-mcp-client'" in text and "toolCallTimeoutMs: 600000" in text
     assert 'model: "deepseek-v4-pro"' in text and 'reasoningEffort: "max"' in text
-    assert "- id: session-log-deepseek\n  disabled: true" in text
+    assert "- id: sandbox-policy\n  config:\n    mode: workspace-write\n" in text
+    assert "- id: approval\n  config:\n    policy: never\n" in text
+    assert ("- id: permission\n  config:\n    presets:\n      reelsmith-run:\n        sandbox: workspace-write\n"
+            "        approval: never\n    defaultPreset: reelsmith-run\n") in text
+    assert "- id: session-log-deepseek\n  disabled: true" in text and "- id: session-title-llm\n  disabled: true" in text
     assert json.dumps(str(project), ensure_ascii=False) in text    # REELSMITH_GUARD_PROJECT, as a JSON scalar
     assert "reasoningEffort" not in cli_engines.dsh_patch(srv, "deepseek-flash")
     env = cli_engines.dsh_env("k", w.root / ".cache" / "dsh", "http://127.0.0.1:7890", base={"PATH": "x"})
     assert env["DEEPSEEK_API_KEY"] == "k" and env["DSH_HOME"].endswith("dsh") and env["HTTPS_PROXY"]
-    assert env["DSH_TELEMETRY_MODE"] == "DISABLED"
+    assert env["DSH_TELEMETRY_MODE"] == "DISABLED" and env["DSH_TELEMETRY_DISABLED"] == "1"
 
 
 def test_find_dsh(tmp_path, monkeypatch):
@@ -189,7 +237,7 @@ def test_find_dsh(tmp_path, monkeypatch):
     assert cli_engines.find_dsh({"DSH_EXE": str(exe)}) == [str(exe)]
     assert cli_engines.find_dsh({"DSH_EXE": str(tmp_path / "missing")}) is None
     monkeypatch.setattr(cli_engines.shutil, "which", lambda name: {"npx": "/bin/npx"}.get(name))
-    assert cli_engines.find_dsh({}) == ["/bin/npx", "-y", "@deepseek-ai/dsh"]
+    assert cli_engines.find_dsh({}) == ["/bin/npx", "-y", "@deepseek-ai/dsh@0.2.1-rc.3"]    # the tested dsh
     monkeypatch.setattr(cli_engines.shutil, "which", lambda name: "/bin/" + name)
     assert cli_engines.find_dsh({}) == ["/bin/dsh"]
 
@@ -285,6 +333,7 @@ def test_dsh_run_delivers(ws, tmp_path, monkeypatch, no_checks):
     want = 2 * (1000 * flash.miss + 4000 * flash.hit + 500 * flash.out) / 1e6
     assert report["cost_known"] and report["cost_usd"] == pytest.approx(want, abs=1e-4)
     assert report["sessions"][0]["turns"] == 2 and report["usage"]["inputTokens"] == 2000
+    assert report["sessions"][0]["subtype"] == "success" and report["sessions"][0]["error"] is None
     (call,) = calls()
     assert call["env"]["DEEPSEEK_API_KEY"] == DS_KEY
     assert Path(call["env"]["DSH_HOME"]) == w.root / ".cache" / "dsh"
@@ -320,13 +369,87 @@ def test_dsh_stops_at_max_turns(ws, tmp_path, monkeypatch, no_checks):
 
 def test_dsh_error_turn_then_resume(ws, tmp_path, monkeypatch, no_checks):
     _, project = ws
-    failed = dsh_steps(steps=1, deliver=False, final="error")
-    failed["events"][-1]["reason"] = {"kind": "error", "error": {"message": "rate limited", "code": "429"}}
+    failed = dsh_steps(steps=1, deliver=False,
+                       reason={"kind": "error", "error": {"message": "rate limited", "code": "RATE_LIMIT", "status": 429}})
     calls = fake(monkeypatch, tmp_path, failed, dsh_steps(), engine="dsh")
     report, _ = go(project, brief="b", engine="dsh")
     assert report["delivered"] and report["sessions"][0]["error"] == "rate limited"
     assert report["sessions"][1]["kind"] == "resume"
     assert calls()[1]["argv"][-3:] == ["--session-id", "session-1", "-"]
+
+
+def test_dsh_stream_reads_the_real_event_shapes():
+    def fold(events):
+        stream = cli_engines.DshStream(Log())
+        for ev in events:
+            stream.feed(ev)
+        return stream.outcome
+    done = fold(RC3_DONE)
+    assert done["done"] and done["error"] is None and done["result"] == "film rendered" and done["turns"] == 1
+    assert done["session_id"] == "session-058a9a98-0c78-4076-b85d-d60fa4145306" and done["usage"]["inputTokens"] == 3
+    failed = fold(RC3_FAILED)
+    assert not failed["done"] and failed["error"] == "mock script exhausted" and failed["tool_calls"] == 1
+    # the last turn decides: a later completed turn clears an earlier turn's failure, an open one does not finish
+    again = fold(RC3_FAILED[:-1] + [{"type": "status", "phase": "turn_start", "turn": 2}, *RC3_DONE[2:]])
+    assert again["done"] and again["error"] is None
+    assert not fold(RC3_DONE[:-2] + [{"type": "status", "phase": "turn_start", "turn": 2}])["done"]
+    aborted = fold(RC3_DONE[:5] + [{"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": "aborted"}}])
+    assert not aborted["done"] and aborted["error"] == "the turn ended: aborted"
+
+
+def test_dsh_version_reaches_the_run_log(ws, tmp_path, monkeypatch, no_checks):
+    _, project = ws
+    fake(monkeypatch, tmp_path, dsh_steps(), engine="dsh")
+    assert cli_engines.dsh_version([sys.executable, str(FAKE)]) == "0.2.1-rc.3"
+    assert cli_engines.dsh_version([str(tmp_path / "missing")]) == ""
+    _, out = go(project, brief="b", engine="dsh")
+    assert f"dsh 0.2.1-rc.3: {sys.executable}" in out and "tested with" not in out
+    monkeypatch.setenv("FAKE_CLI_VERSION", "0.3.0")
+    _, out = go(project, brief="b", engine="dsh", fresh=True)
+    assert "dsh 0.3.0: " in out and "(tested with 0.2.1-rc.3)" in out
+
+
+@pytest.mark.skipif(not (shutil.which("node") and (DSH_MODULES / "dsh" / "lib" / "bin.js").is_file()
+                         and (DSH_MODULES / "dsh-llm-mock-server").is_dir()),
+                    reason="needs Node.js and `npm ci` in integrations/dsh")
+def test_the_real_dsh_runs_the_runner_command(ws):
+    """dsh 0.2.1-rc.3 boots the runner's command and overlay against DSH's scripted mock model (no key, no network)
+    and calls a reelsmith tool through the server the overlay mounts."""
+    w, project = ws
+    node = shutil.which("node")
+    exe = [node, str(DSH_MODULES / "dsh" / "lib" / "bin.js")]
+    assert cli_engines.dsh_version(exe) == cli_engines.DSH_VERSION
+    srv = cli_engines.server(guard.scope_for(project, w))
+    srv["env"]["PYTHONPATH"] = str(ROOT)                        # the server of this checkout
+    patch = project / "build" / "dsh-patch.yml"
+    patch.parent.mkdir(exist_ok=True)
+    patch.write_text(cli_engines.dsh_patch(srv, "deepseek-flash"), encoding="utf-8")
+    script = {"sequence": ["tool_call_success", "success"], "toolName": "mcp__reelsmith__describe",
+              "toolArguments": json.dumps({"project": "."}), "successText": "film rendered"}
+    mock = subprocess.Popen([node, str(MOCK_LLM), str(DSH_MODULES / "dsh-llm-mock-server"), json.dumps(script)],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
+    try:
+        base_url = json.loads(mock.stdout.readline())["baseURL"]
+        base = {k: v for k, v in os.environ.items() if "PROXY" not in k.upper()}
+        env = cli_engines.dsh_env("mock-key", w.root / ".cache" / "dsh", base=base)
+        # the overlay's preset must win over the owner's DSH_PERMISSION_MODE
+        env.update(DEEPSEEK_BASE_URL=base_url, DSH_PERMISSION_MODE="danger-full-access")
+        log = Log()
+        out = cli_engines.drive(cli_engines.dsh_command(exe, patch), project, env, "Describe the project.",
+                                cli_engines.DshStream(log), stall_s=240, wall_s=300)
+    finally:
+        mock.stdin.close()
+        line = mock.stdout.readline()
+        mock.wait(30)
+    requests = json.loads(line)["requests"]
+    assert out["exit_code"] == 0 and out["done"] and out["error"] is None, (out, log.lines)
+    assert out["session_id"].startswith("session-") and out["result"] == "film rendered" and out["tool_calls"] == 1
+    assert cli_engines.summary(out)["subtype"] == "success"
+    assert len(requests) == 2                                   # the agent's two steps; no session-title call
+    first, second = requests
+    assert "mcp__reelsmith__describe" in first["tools"]
+    assert "file policy: workspace-write" in first["messages"] and "Approval prompts are disabled" in first["messages"]
+    assert '"is_error":false' in second["messages"] and "project p1" in second["messages"]
 
 
 # ------------------------------------------------------------------ the MCP server's guard

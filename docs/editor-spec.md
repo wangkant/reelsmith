@@ -784,18 +784,24 @@ Codex reports its tokens (`input_tokens` with `cached_input_tokens` inside, `out
 are priced with `prices`, so the budget is checked between sessions, and a model without a price is reported as
 `cost_known: false` with its tokens.
 
-**The dsh session.** `dsh --patch <project>/build/dsh-patch.yml --profile headless --json --permission-mode
-workspace-write --approval-policy never [--add-dir <library>] [--session-id <id>] -` with the prompt on stdin, in the
-project folder. The binary is `DSH_EXE`, else `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`. The process gets
-`DEEPSEEK_API_KEY` (workspace `.env`, else the environment), its own `DSH_HOME` (`<workspace>/.cache/dsh`, so the
-host's DSH profiles, patches, saved keys and servers stay out) and `DSH_TELEMETRY_MODE=DISABLED`. The overlay mounts
-the reelsmith server (setup's row, plus `REELSMITH_GUARD_PROJECT`, `toolCallTimeoutMs` = `stall_minutes`), sets
-`agent-default-model` to `deepseek-official` with the model (and `reasoningEffort` when an effort is set) and turns
-the `session-log-deepseek` upload off. On Windows the library is not added (DSH's Windows sandbox refuses every shell
-call once extra roots are granted), so the session cannot write library components there. Each `status` step end
-carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, disjoint), priced with
-`prices`, else DeepSeek's table: the session stops at the budget and at `max_turns`. The `final` event's
-`reason.kind` is `completed` for a finished turn.
+**The dsh session.** `dsh --patch <project>/build/dsh-patch.yml --profile headless --json [--session-id <id>] -`
+with the prompt on stdin, in the project folder; DSH's headless app takes no other flags. The engine is tested with
+dsh 0.2.1-rc.3 (a developer preview whose flags and events change between releases): the binary is `DSH_EXE`, else
+`dsh` on `PATH`, else `npx -y @deepseek-ai/dsh@0.2.1-rc.3`, and the run log names the version `dsh --version`
+reports, flagging any other. The process gets `DEEPSEEK_API_KEY` (workspace `.env`, else the environment), its own
+`DSH_HOME` (`<workspace>/.cache/dsh`, so the host's DSH profiles, patches, saved keys and servers stay out),
+`DSH_TELEMETRY_MODE=DISABLED` and `DSH_TELEMETRY_DISABLED=1`. The overlay mounts the reelsmith server (setup's row,
+plus `REELSMITH_GUARD_PROJECT`, `toolCallTimeoutMs` = `stall_minutes`), sets `agent-default-model` to
+`deepseek-official` with the model (and `reasoningEffort` when an effort is set), pins the permission rows
+(`sandbox-policy` mode `workspace-write`, `approval` policy `never`, and `permission` with the one preset
+`reelsmith-run` of those two as `defaultPreset`, so an inherited `DSH_PERMISSION_MODE` changes nothing) and turns the
+`session-log-deepseek` upload and the `session-title-llm` call off. The sandbox is rooted at the project: headless
+DSH grants no extra writable roots, so the session cannot write library components, and a request to escalate is
+refused. Each `status` step end carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+`outputTokens`, disjoint), priced with `prices`, else DeepSeek's table: the session stops at the budget and at
+`max_turns`. The `status` `turn_end` event's `reason.kind` is `completed` for a finished turn (`error` carries
+`reason.error.message`); the last turn decides, as it does dsh's exit status (0 only for `completed`). The closing
+`final` event carries the answer text only.
 
 **Common to all engines.**
 
@@ -808,8 +814,8 @@ carries its usage (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `output
   unreadable. Web fetches take public http(s) URLs only (the api engine's `web_fetch` checks every connection,
   redirects included, as `capture` does); reelsmith tool arguments that name files or URLs are held to the same
   rules. On the codex and dsh engines the agent's own sandbox fences its shell and file tools instead (writes to the
-  project and the library; reads are not fenced, so a workspace `.env` is readable there), and the reelsmith MCP
-  server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
+  project, and on codex the library too; reads are not fenced, so a workspace `.env` is readable there), and the
+  reelsmith MCP server applies the rules for tool arguments itself (`REELSMITH_GUARD_PROJECT`, section 10.1).
 - **Delivery.** The run ends when `out/film.mp4` exists, `out/report.json` says it passed, no later render failed,
   `check` has no errors and no input of the film (project.json, voice, assets, library components) changed after
   it. The render records what the film was made of (`inputs` in its report), so an edit to project.json's `meta`
@@ -979,7 +985,7 @@ profile by `check`).
 | `REELSMITH_GUARD_PROJECT` | the MCP server holds every call to this project and the runner guard's rules for tool arguments (set by the codex and dsh engines; section 10.1) |
 | `REELSMITH_MCP_TOKEN` | the bearer token `reelsmith mcp --http` requires of every request when set, and needs for `--allow-remote` (`--token-env` names another variable) |
 | `CODEX_EXE`, `CODEX_HOME` | the Codex binary for `draw` and the codex engine, and Codex's home folder (default `~/.codex`; `reelsmith setup codex --user` writes its `config.toml`) |
-| `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh`) |
+| `DSH_EXE` | the dsh command for the dsh engine (default: `dsh` on `PATH`, else `npx -y @deepseek-ai/dsh@0.2.1-rc.3`) |
 | `DSH_HOME` | DeepSeek Harness's home, where `reelsmith setup dsh --user` writes (default `~/.dsh`); the dsh engine sets its own, `<workspace>/.cache/dsh` |
 | `OPENROUTER_API_KEY` | `speak`, `animate` and the runner on OpenRouter (workspace `.env` first, then the environment) |
 | `DEEPSEEK_API_KEY` | the runner on DeepSeek (`--provider deepseek`, `--backend deepseek` on the agent-sdk engine, or the dsh engine) |
