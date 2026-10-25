@@ -291,7 +291,8 @@ gives `"[level] where: msg"`.
 - `providers/`: the asset tools and the footage tools (section 9).
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
   the runner call these.
-- `mcp_server.py` (stdio), `cli.py`, `runner.py` and its file guard `guard.py` (section 11).
+- `mcp_server.py` (stdio or streamable HTTP, section 10.1), `cli.py`, `runner.py` and its file guard `guard.py`
+  (section 11).
 - `agent/`: the runner's api engine (section 11): `tools.toolbox(project, ws, scope, web)` (function tools),
   `client.ChatClient` (an OpenAI-compatible Chat Completions client), `loop.Agent` (the tool-calling loop) and
   `providers` (who serves the model: endpoint, key, request extras, prices).

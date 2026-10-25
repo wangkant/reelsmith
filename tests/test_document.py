@@ -415,6 +415,31 @@ def test_every_shipped_example_validates_against_its_schema():
         assert comp.path.name == f"{name}.tsx" and comp.path.is_file()
 
 
+def test_the_manuals_complete_projects_validate(tmp_path):
+    # the examples agents copy from: a narrated explainer and a footage edit, both landscape and English
+    import re
+    manual = (Path(__file__).parent.parent / "docs" / "manual.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```json\n(\{\n  \"version\": 2,.*?)\n```", manual, re.S)
+    assert len(blocks) == 2
+    for n, block in enumerate(blocks):
+        data = json.loads(block)
+        assert (data["profile"], data["locale"]) == ("landscape", "en")
+        p = tmp_path / f"p{n}"
+        (p / "assets").mkdir(parents=True)
+        (p / "project.json").write_text(block, encoding="utf-8")
+        for a in data["assets"].values():                                   # placeholders: only presence is checked
+            (p / a["path"]).write_bytes(b"x")
+            if a.get("transcript"):
+                (p / a["transcript"]).write_text('{"version": 1, "words": [], "segments": []}', encoding="utf-8")
+        if data.get("voice"):
+            (p / "voice").mkdir()
+            (p / "voice" / "voice.wav").write_bytes(b"x")
+            lines = [{"i": i, "text": f"line {i}", "t0": 3.0 * i - 3, "t1": 3.0 * i - 0.3} for i in range(1, 9)]
+            (p / "voice" / "voice.json").write_text(json.dumps({"file": "voice/voice.wav", "lines": lines}),
+                                                    encoding="utf-8")
+        assert D.validate(p, D.load(p)) == [], n
+
+
 def test_presets_take_latin_text_and_lead_with_english_examples():
     # the same strings renderer/test/presets-preview renders at these lengths
     comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
