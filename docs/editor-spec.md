@@ -96,9 +96,10 @@ A malformed `locale`, `profiles` or `fonts` entry makes every tool report the wo
 ```
 
 Every key is optional and none has a default: without rules.json (or with `{}`) there is no hard rule and no
-advice. The example above is a news explainer's set (the example workspace's). Hard rules are errors (they block
-`render`): the title's length in characters, how many numbers it may hold, how many sources with an http(s) url
-`meta.sources` needs, and words that may not appear in the title, description or topic. Advice never blocks: words
+advice. The example above is a news-explainer channel's set (`examples/news-explainer-zh`); the starter workspace
+(`examples/workspace`) has none. Hard rules are errors (they block `render`): the title's length in characters, how
+many numbers it may hold, how many sources with an http(s) url `meta.sources` needs, and words that may not appear
+in the title, description or topic. Advice never blocks: words
 on screen within `hook_seconds`, no still image or evidence held longer than `max_same_visual_s` without movement,
 the length against `target_s`: `[min, max]` seconds, or `true` for the profile's target (section 15; a profile
 without one gives no advice). An empty title is a warning only where a title rule (`max_title` or
