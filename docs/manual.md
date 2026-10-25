@@ -40,7 +40,8 @@ not cover the picture (status bar and tabs on top, like/comment buttons down the
 bottom), and there a film needs sound and nothing may stand still for more than 5 s. Backgrounds may bleed to the
 edges; **words must stay inside the safe area** — render measures every second and refuses text outside it. The
 owner may define other canvases (workspace.json `profiles`, or an inline `"profile": {"base": "douyin", "width":
-720, "height": 1280, "fps": 25}`); `new_project(p, canvas="1920x1080@25")` makes one.
+720, "height": 1280, "fps": 25}`); `new_project(p, canvas="1920x1080@25")` makes one. NTSC rates work too: `"fps":
+29.97` (or 23.976, 59.94, `"30000/1001"`) renders at exactly 30000/1001, for broadcast or to match camera footage.
 
 Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose short side is 1080 px; the checks
 scale them with your canvas.
@@ -296,7 +297,7 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 | `manual()` | this manual | `manual()` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md` with your file tools) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
+| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
 | `undo(project, steps=1)` | undo applied batches | `undo(p)` |

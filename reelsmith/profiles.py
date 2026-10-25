@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field, replace
+from fractions import Fraction
 
 REFERENCE_SIDE = 1080           # pixel thresholds (text sizes, legibility) are written for this short side
 TITLE_SAFE = 0.05               # generic canvases: words stay 5 % in from every edge
@@ -30,7 +31,7 @@ class Profile:
     name: str
     width: int
     height: int
-    fps: int
+    fps: float                      # whole (30) or an NTSC rate (30000/1001 = 29.97...)
     safe: Box                       # every glyph stays inside; backgrounds may bleed
     captions: Box                   # where a captions track without a box sits
     min_s: float | None             # delivery limits; None: no limit
@@ -113,7 +114,8 @@ DEFAULT_PROFILE = "landscape"
 FIELDS = ("width", "height", "fps", "safe", "captions", "min_s", "max_s", "target_s", "max_mb", "lufs", "peak_db",
           "max_still_s", "max_black_ratio", "require_audio", "ui")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_CANVAS = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*(?:@\s*(\d+)\s*)?$")
+_CANVAS = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*(?:@\s*(\d+(?:\.\d+)?(?:/\d+)?)\s*)?$")
+NTSC = Fraction(1000, 1001)
 
 
 class ProfileError(ValueError):
@@ -172,14 +174,47 @@ def build_profiles(specs) -> dict[str, Profile]:
 
 
 def parse_canvas(text: str) -> dict:
-    """ "1920x1080" or "1920x1080@25" as profile fields {width, height, fps?}."""
+    """ "1920x1080", "1920x1080@25" or "1920x1080@29.97" as profile fields {width, height, fps?}."""
     m = _CANVAS.match(str(text or ""))
     if not m:
         raise ProfileError(f"canvas {text!r} must look like 1920x1080 or 1920x1080@25 (width x height @ fps)")
     out = {"width": int(m.group(1)), "height": int(m.group(2))}
     if m.group(3):
-        out["fps"] = int(m.group(3))
+        fps = parse_fps(m.group(3), f"canvas {text!r} fps")
+        out["fps"] = fps if isinstance(fps, int) else fps_ratio(fps)    # exact in project.json
     return out
+
+
+def parse_fps(value, where: str = "fps") -> float:
+    """A frame rate: a whole number 1-120, a ratio "30000/1001", or a decimal; 23.976, 29.97, 59.94 (and any rate
+    within 0.002 of n x 1000/1001) mean the exact NTSC rate. Whole rates come back as ints."""
+    try:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValueError
+        text = str(value).strip()
+        num, slash, den = text.partition("/")
+        rate = Fraction(int(num), int(den)) if slash else Fraction(text)
+    except (ValueError, ZeroDivisionError):
+        rate = None
+    if rate is not None and rate.denominator != 1:
+        ntsc = round(rate / NTSC) * NTSC
+        if ntsc.denominator != 1 and abs(rate - ntsc) <= Fraction(2, 1000):
+            rate = ntsc
+    if rate is None or not FPS[0] <= rate <= FPS[1]:
+        raise ProfileError(f"{where} must be a frame rate {FPS[0]}-{FPS[1]}: a whole number (25, 30), an NTSC rate "
+                           f"(23.976, 29.97, 59.94) or a ratio such as \"30000/1001\" (got {value!r})")
+    return int(rate) if rate.denominator == 1 else float(rate)
+
+
+def fps_ratio(fps: float) -> str:
+    """ffmpeg's form of a rate: "30" or "30000/1001"."""
+    r = Fraction(fps).limit_denominator(1001)
+    return str(r.numerator) if r.denominator == 1 else f"{r.numerator}/{r.denominator}"
+
+
+def fps_label(fps: float) -> str:
+    """A rate as people write it: 30, 29.97, 23.976."""
+    return str(int(fps)) if float(fps).is_integer() else f"{fps:.3f}".rstrip("0").rstrip(".")
 
 
 def make_profile(spec, custom: dict | None = None, name: str = "custom", where: str = "project.json profile",
@@ -202,7 +237,7 @@ def make_profile(spec, custom: dict | None = None, name: str = "custom", where: 
         raise ProfileError(f"{where}.base: {exc}") from None
     w = _whole(spec, "width", base.width, SIDES, where, even=True)
     h = _whole(spec, "height", base.height, SIDES, where, even=True)
-    fps = _whole(spec, "fps", base.fps, FPS, where)
+    fps = parse_fps(spec["fps"], f"{where}.fps") if "fps" in spec else base.fps
     sized = (w, h) != (base.width, base.height)
     if "safe" in spec:
         safe = _box(spec["safe"], w, h, f"{where}.safe")

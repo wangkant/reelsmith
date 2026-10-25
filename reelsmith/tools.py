@@ -13,7 +13,7 @@ from . import locales
 from . import render as R
 from .checks import check_project
 from .media import run_tree
-from .profiles import ProfileError, choose, parse_canvas
+from .profiles import ProfileError, choose, fps_label, parse_canvas
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -261,8 +261,8 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
     Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys. profile: a profile name
     (landscape, vertical, square, portrait, youtube, douyin, douyin-long, tiktok, shorts, reels or one of the
     workspace's); empty takes the workspace's (else landscape). canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" (e.g.
-    "1920x1080@25") for a canvas of your own, starting from `profile` (or the workspace's): its safe area scales to
-    the new size. locale: the film's language as a BCP-47 tag
+    "1920x1080@25", "1920x1080@29.97") for a canvas of your own, starting from `profile` (or the workspace's): its
+    safe area scales to the new size. locale: the film's language as a BCP-47 tag
     ("en", "zh-CN", "ja"); empty takes the workspace's (else en)."""
     root = _project(project, must_exist=False)
     if (root / PROJECT_FILE).is_file():
@@ -296,8 +296,8 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
         script.write_text("# Research, sources and script\n", encoding="utf-8", newline="\n")
     where = f"in workspace {ws.root}" if ws else "outside any workspace (no library, default rules, keys from env)"
     s = made.safe
-    return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {made.fps} fps, safe area "
-            f"x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
+    return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {fps_label(made.fps)} "
+            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
 
 
 def _ops_arg(ops) -> list[dict]:

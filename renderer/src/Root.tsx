@@ -14,7 +14,8 @@ const EMPTY: Resolved = {
   tracks: [], audio: [], inspect: false,
 };
 
-const positive = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : fallback);
+const rate = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback);
+const positive = (v: unknown, fallback: number) => Math.round(rate(v, fallback));
 
 export const Root: React.FC = () => (
   <Composition
@@ -29,7 +30,8 @@ export const Root: React.FC = () => (
       const r = (props as unknown as FilmProps).resolved ?? EMPTY;
       return {
         durationInFrames: positive(r.durationInFrames, EMPTY.durationInFrames),
-        fps: positive(r.fps, EMPTY.fps),
+        // 30000/1001 stays as it is: ffmpeg reads -r 29.97002997... back as that ratio
+        fps: rate(r.fps, EMPTY.fps),
         width: positive(r.width, EMPTY.width),
         height: positive(r.height, EMPTY.height),
       };

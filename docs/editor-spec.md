@@ -952,7 +952,7 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | field | value |
 |---|---|
 | `width`, `height` | even whole numbers 64-4096 (h264 needs even sides) |
-| `fps` | a whole number 1-120 (24, 25, 30, 50 and 60 are the usual ones) |
+| `fps` | a rate 1-120: a whole number (24, 25, 30, 50 and 60 are the usual ones), an NTSC rate (23.976, 29.97, 59.94: any rate within 0.002 of n × 1000/1001 means exactly that ratio) or a ratio string such as `"30000/1001"`; the film carries it as a ratio (`r_frame_rate` 30000/1001) |
 | `safe`, `captions` | `{"x", "y", "w", "h"}` or `[x, y, w, h]` in canvas pixels, inside the canvas |
 | `min_s`, `max_s`, `max_mb`, `max_still_s` | numbers > 0, or null for no limit (no check) |
 | `target_s` | `[min, max]` seconds, or null |
@@ -963,7 +963,8 @@ or another custom one of the workspace; default `landscape`) and every other fie
 
 A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
 new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.
-`new_project(canvas="1920x1080@25")` writes such an inline profile. Unknown fields, sizes, boxes outside the canvas
+`new_project(canvas="1920x1080@25")` writes such an inline profile (`"@29.97"` writes `"fps": "30000/1001"`; `describe`
+prints the rate as 29.97). Unknown fields, sizes, boxes outside the canvas
 and loops of `base` are refused with the field named (workspace.json profiles when the workspace loads, an inline
 profile by `check`).
 

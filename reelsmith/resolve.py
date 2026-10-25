@@ -21,6 +21,7 @@ from . import document as D
 from . import library, locales
 from . import timeexpr as T
 from .issues import Issue
+from .profiles import fps_label
 from .workspace import WorkspaceError, find_workspace, project_paths, project_root
 
 PHRASE_MIN = 4
@@ -1258,8 +1259,8 @@ class _Window:
     def header(self) -> list[str]:
         p, s = self.profile, self.profile.safe
         what = "the platform's UI covers the rest" if p.ui else "a title-safe margin"
-        rows = [f"project {self.root.name}: {p.name} {p.width}x{p.height} {p.fps} fps, {p.orientation}; safe area x "
-                f"{s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h} ({what}); locale {self.locale}"]
+        rows = [f"project {self.root.name}: {p.name} {p.width}x{p.height} {fps_label(p.fps)} fps, {p.orientation}; "
+                f"safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h} ({what}); locale {self.locale}"]
         if self.end is not None:
             rows.append(f"duration {self.end:.2f} s ({T.to_frame(self.end, self.fps)} frames, "
                         f"{self.sched.film_end_source()})")
