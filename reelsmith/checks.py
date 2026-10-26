@@ -25,7 +25,8 @@ DISTINCT_DELTA_E = 50.0
 STEADY_OPACITY = 0.75          # text fading in or out is judged where it is whole
 OVERLAP_OPACITY = 0.35         # fainter text under other text is a backdrop, not a collision
 EVIDENCE_MIN_PX = 40           # the house minimum for anything a viewer must read
-EVIDENCE_SAFE_SLACK_PX = 6     # an evidence box may poke this far past the safe area (its fading margin)
+EVIDENCE_SAFE_SLACK_PX = 6     # an evidence panel may poke this far past the safe area (its fading margin)
+EVIDENCE_MAX_ZOOM = 2.0        # EvidenceCrop.tsx MAX_ZOOM
 INK_PER_EM = 0.85              # a CJK glyph's ink is about this much of its font size
 SILENT_LUFS = -45.0
 LUFS_TOLERANCE = 3.0
@@ -337,6 +338,36 @@ def _evidence_refs(value, key: str = ""):
             yield from _evidence_refs(v, key)
 
 
+def evidence_panel(size, cap, w: float, h: float) -> tuple[float, float, float, float]:
+    """(x, y, w, h) in the clip box of the panel the renderer's evidenceLayout draws for a capture of `size` cropped
+    to `cap` in a w x h box (EvidenceCrop.tsx); the whole box when the capture's size is unknown."""
+    if not (isinstance(size, (list, tuple)) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)
+            and size[0] > 0 and size[1] > 0 and w > 0 and h > 0):
+        return 0.0, 0.0, float(w), float(h)
+    W, H = float(size[0]), float(size[1])
+    raw = cap if isinstance(cap, (list, tuple)) and len(cap) == 4 else (0, 0, W, H)
+    bx = max(0.0, min(W - 1, float(raw[0])))
+    by = max(0.0, min(H - 1, float(raw[1])))
+    bw = max(1.0, min(W - bx, float(raw[2])))
+    bh = max(1.0, min(H - by, float(raw[3])))
+    margin = max(10.0, min(40.0, bh * 0.35))
+    x0, x1 = max(0.0, bx - margin), min(W, bx + bw + margin)
+    s = min(w / (x1 - x0), h / bh, EVIDENCE_MAX_ZOOM)
+    want = max(40.0, min(240.0, bh * 0.35))
+    room = max(0.0, h / s - bh)
+    above, below = min(want, by), min(want, H - by - bh)
+    if above + below > room:
+        half = room / 2
+        if above < half:
+            below = room - above
+        elif below < half:
+            above = room - below
+        else:
+            above = below = half
+    pw, ph = (x1 - x0) * s, (bh + above + below) * s
+    return (w - pw) / 2, (h - ph) / 2, pw, ph
+
+
 def evidence_issues(resolved: dict, root: Path, profile: Profile | None = None) -> list[Issue]:
     """Evidence whose proving sentence will read small (estimated from the capture and the clip box), and, with
     `profile`, an evidence clip whose box leaves the safe area (a screenshot's words are words too)."""
@@ -352,15 +383,18 @@ def evidence_issues(resolved: dict, root: Path, profile: Profile | None = None) 
         scale = float(scale) if isinstance(scale, (int, float)) and scale > 0 else 1.0
         w, h = float(box.get("w") or 0) * scale, float(box.get("h") or 0) * scale
         if profile is not None and c.get("type") == "evidence" and w > 0 and h > 0:
-            cx = float(box.get("x") or 0) + float(box.get("w") or 0) / 2       # style.scale grows from the centre
-            cy = float(box.get("y") or 0) + float(box.get("h") or 0) / 2
+            bw0, bh0 = float(box.get("w") or 0), float(box.get("h") or 0)
+            px_, py_, pw_, ph_ = evidence_panel(content.get("size"), content.get("box"), bw0, bh0)
+            cx, cy = float(box.get("x") or 0) + bw0 / 2, float(box.get("y") or 0) + bh0 / 2
+            # the panel in canvas px, grown by style.scale about the box's centre
+            panel = (cx + (px_ - bw0 / 2) * scale, cy + (py_ - bh0 / 2) * scale, pw_ * scale, ph_ * scale)
             s = profile.safe
-            px, side = _sticks_out((cx - w / 2, cy - h / 2, w, h), (s.x, s.y, s.w, s.h))
+            px, side = _sticks_out(panel, (s.x, s.y, s.w, s.h))
             if px > EVIDENCE_SAFE_SLACK_PX:
+                why = "the platform's UI covers it or the phone crops it" if profile.ui else "that is the title-safe margin"
                 out.append(Issue("error", f"{c.get('id')} @ {(c.get('from') or 0) / fps:.1f}s",
-                                 f"evidence box sits {px:.0f} px outside the safe area ({side}): its words are cut "
-                                 f"or covered there on a phone; keep the box inside x {s.x}-{s.x + s.w}, "
-                                 f"y {s.y}-{s.y + s.h}"))
+                                 f"the evidence panel sits {px:.0f} px outside the safe area ({side}): {why}; keep "
+                                 f"the clip box inside x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}"))
         for ref in refs:
             cap, size = ref.get("box"), ref.get("size")
             if not (isinstance(cap, list) and len(cap) == 4 and w > 0 and h > 0):

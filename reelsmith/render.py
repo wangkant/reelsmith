@@ -32,7 +32,7 @@ SHEET_AREA = 360 * 640              # a tile's pixels: a third of 1080x1920, abo
 SHEET_WIDTH = 2600                  # columns are added while the sheet stays about this wide (at most 6)
 WATCH_EVERY_S = 1.0                 # review watches the film a frame a second ...
 WATCH_MAX_FRAMES = 150              # ... spread out on films longer than this many seconds
-WATCH_SHEET_WIDTH = 1600            # a watch sheet stays readable when a model scales it to about 1280-1568 px
+WATCH_SHEET_WIDTH = 1600            # a watch sheet's side stays readable when a model scales it to 1280-1568 px
 STILL_DIFF = 1.5                    # mean grey-level change (0-255) of a 54x96 thumbnail under which a frame is "same"
 LAYOUT_EVERY_S = 1.0
 LAYOUT_GRID_MAX = 600               # grid stills of the layout pass; a longer film's grid is spaced out evenly
@@ -801,7 +801,7 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
         if sheet:
             sheets.append({"from_s": part[0]["t"], "to_s": part[-1]["t"], "png": sheet})
     return {"ok": bool(shots) and len(sheets) == -(-len(shots) // per), "film": str(paths.film),
-            "duration_s": round(length, 2), "every_s": round(every, 2), "frames": shots, "sheets": sheets,
+            "duration_s": round(length, 2), "every_s": every, "frames": shots, "sheets": sheets,
             "voice": bool(lines)}
 
 
@@ -834,6 +834,7 @@ def _unchanged(pngs: list[str]) -> list[bool]:
 
 
 def _watch_grid(profile: Profile) -> tuple[int, int]:
-    """Frames per watch sheet and columns: two rows of 2-4 tiles, about WATCH_SHEET_WIDTH wide."""
-    cols = max(2, min(4, WATCH_SHEET_WIDTH // sheet_tile(profile)[0]))
-    return cols * 2, cols
+    """Frames per watch sheet and columns: 2-4 columns and 2-4 rows of tiles, about WATCH_SHEET_WIDTH a side."""
+    tw, th = sheet_tile(profile)
+    cols = max(2, min(4, WATCH_SHEET_WIDTH // tw))
+    return cols * max(2, min(4, WATCH_SHEET_WIDTH // th)), cols

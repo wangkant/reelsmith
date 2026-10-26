@@ -459,6 +459,19 @@ def test_review_watches_the_film_a_second_at_a_time_with_the_voice(project, monk
 
 
 @needs_ffmpeg
+def test_frames_every_takes_the_frame_on_screen_at_each_mark(tmp_path):
+    from PIL import Image
+    film = tmp_path / "count.mp4"           # luma = 2 x the frame number, 30 fps
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "color=c=black:s=64x64:r=30:d=4,geq=lum='16+N*2':cb=128:cr=128", "-c:v", "libx264", "-qp", "0",
+                    "-pix_fmt", "yuv420p", str(film)], check=True, capture_output=True)
+    got = media.frames_every(film, 1.0, tmp_path / "out")
+    assert [t for t, _ in got] == [0, 1, 2, 3]
+    frame = [round((Image.open(p).convert("L").getpixel((32, 32)) * 219 / 255) / 2) for _, p in got]
+    assert all(abs(n - 30 * t) <= 1 for (t, _), n in zip(got, frame)), frame     # not half a step later
+
+
+@needs_ffmpeg
 def test_render_keeps_its_own_resolved_and_holds_the_lock(project, monkeypatch):
     # a preview during a render waits, and cannot change what the film renders
     order = []

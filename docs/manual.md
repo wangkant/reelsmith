@@ -514,7 +514,8 @@ with its source line.
 1. **check errors**: the project does not validate (unknown ids, missing files, overlaps on a track, bad Times, an
    unknown font...); the owner's hard rules from `rules.json`, when there are any (for example a title of at most
    24 characters with at most 2 numbers, at least 1 source with an http(s) url, no banned words in
-   title/desc/topic); the length outside the profile's limits, when it has any.
+   title/desc/topic); the length outside the profile's limits, when it has any; an evidence clip whose panel leaves
+   the safe area.
 2. **layout** (measured on a still every second, spread to 600 stills on a film over 10 minutes, plus one in each
    text and caption between them — `preview` with `sweep` runs the same pass): visible text outside the safe area
    or cut by the canvas edge, text under 20 px, a component that crashes. Text during its enter/exit animation and

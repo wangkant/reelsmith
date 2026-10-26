@@ -474,15 +474,16 @@ def render(project: str, draft: bool = False, start: float | str = "", end: floa
     return _render_text(R.render(root))
 
 
-def _runs(frames: list[dict], key) -> list[tuple[float, float, object]]:
-    """Consecutive frames with the same key(frame): [(first t, last t, value), ...]."""
+def _runs(frames: list[dict], key) -> list[tuple[float, float, object, int]]:
+    """Consecutive frames with the same key(frame): [(first t, last t, value, frames), ...]."""
     runs: list[list] = []
     for f in frames:
         v = key(f)
         if runs and runs[-1][2] == v:
             runs[-1][1] = f["t"]
+            runs[-1][3] += 1
         else:
-            runs.append([f["t"], f["t"], v])
+            runs.append([f["t"], f["t"], v, 1])
     return [tuple(r) for r in runs]
 
 
@@ -499,23 +500,26 @@ def review(project: str, n: int = 0, every: float = R.WATCH_EVERY_S) -> str:
             rows.append(f"contact sheet ({SHEET_KEY}): {res['contact']}")
         return ToolResult(_lines(rows), bool(res.get("ok")))
     frames, step = res["frames"], res["every_s"]
-    rows = [f"watched {res['film']} ({res['duration_s']} s): {len(frames)} frames, one every {step:g} s, on "
+    rows = [f"watched {res['film']} ({res['duration_s']} s): {len(frames)} frames, one every {step:.4g} s, on "
             f"{len(res['sheets'])} sheet(s) in order at phone size ({SHEET_KEY}). Read every sheet, first to last: "
             "this is the film as a viewer meets it."]
     rows += [f"- sheet {i}, {s['from_s']:g}-{s['to_s']:g} s: {s['png']}" for i, s in enumerate(res["sheets"], 1)]
+    if not frames:
+        rows.append("no frame could be taken: the film is shorter than one step or unreadable; render again")
     span = lambda a, b: f"{a:g} s" if a == b else f"{a:g}-{b:g} s"  # noqa: E731
     if res.get("voice"):
         said = {f["t"]: f["said"] for f in frames}
         rows.append("heard at each frame:")
         rows += [f"- {span(a, b)}: " + (f"[{ln}] {said[a]}" if ln else "(no voice)")
-                 for a, b, ln in _runs(frames, lambda f: f.get("line"))]
+                 for a, b, ln, _ in _runs(frames, lambda f: f.get("line"))]
     else:
-        rows.append("no voice in the project: nothing is heard")
-    still = [(a, b) for a, b, same in _runs(frames, lambda f: bool(f.get("same"))) if same and b - a >= step]
+        rows.append("no voice line to list (no voice.json): what is heard is footage or music")
+    still = [(a, b) for a, b, same, count in _runs(frames, lambda f: bool(f.get("same"))) if same and count >= 2]
     if still:
         rows.append("the picture does not change (a still screen):")
         rows += [f"- {span(max(0.0, round(a - step, 2)), b)}" for a, b in still]
-    rows.append(f"single frames: {Path(frames[0]['png']).parent if frames else '-'} (watch_NNNN.png = NNNN x {step:g} s)")
+    rows.append(f"single frames: {Path(frames[0]['png']).parent if frames else '-'} "
+                f"(watch_NNNN.png = NNNN x {step:.6g} s)")
     return ToolResult(_lines(rows, 160), bool(res.get("ok")))
 
 

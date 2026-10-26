@@ -222,7 +222,8 @@ def test_an_evidence_box_outside_the_safe_area_is_an_error(tmp_path):
     ref = {"src": "assets/none.png", "kind": "evidence", "size": [1000, 500], "box": None}
     s = DOUYIN.safe
     inside = clip("in", "evidence", 0, 90, box={"x": s.x, "y": s.y, "w": s.w, "h": 400}, content=ref)
-    left = clip("left", "evidence", 0, 90, box={"x": s.x - 30, "y": s.y, "w": s.w, "h": 400}, content=ref)
+    left = clip("left", "evidence", 0, 90, box={"x": s.x - 30, "y": s.y, "w": s.w, "h": 600},  # panel fills its width
+                content=ref)
     grown = clip("grown", "evidence", 0, 90, box={"x": s.x, "y": s.y + 100, "w": s.w, "h": 400}, content=ref,
                  style={"scale": 1.1})                                  # scale grows the box from its centre
     found = C.evidence_issues(resolved([inside, left, grown]), tmp_path, DOUYIN)
@@ -230,6 +231,11 @@ def test_an_evidence_box_outside_the_safe_area_is_an_error(tmp_path):
     assert set(by) == {"left", "grown"} and all(i.level == "error" for i in found)
     assert "30 px outside the safe area (left)" in by["left"].msg and f"x {s.x}-{s.x + s.w}" in by["left"].msg
     assert C.evidence_issues(resolved([left]), tmp_path) == []          # no profile: only legibility
+    # a short sentence in a full-canvas box: the panel the renderer draws hugs it, well inside the safe area
+    one_line = {"src": "assets/none.png", "kind": "evidence", "size": [1200, 684], "box": [42, 42, 300, 60]}
+    full = clip("full", "evidence", 0, 90, box={"x": 0, "y": 0, "w": 1080, "h": 1920}, content=one_line)
+    assert C.evidence_panel([1200, 684], [42, 42, 300, 60], 1080, 1920) == (198.0, 820.0, 684.0, 280.0)
+    assert C.evidence_issues(resolved([full]), tmp_path, DOUYIN) == []
 
 
 def test_advice_duration_target_from_rules_or_profile():

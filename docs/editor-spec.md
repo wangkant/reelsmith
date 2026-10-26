@@ -717,7 +717,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 | `typecheck(project)` | type-check the library's components | `typecheck` |
 | `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures the stills `render`'s layout pass does (section 14) | `preview [times...] --sweep` |
 | `render(project, draft?, start?, end?, scale?)` | the film, mastered and checked, with its captions files and chapters (section 14); `draft` a quick look at `scale` (0.5) to `build/draft.mp4`, optionally from `start` to `end` | `render --draft --start --end --scale` |
-| `review(project, n?, every?)` | the delivered film a frame every `every` s (default 1, at most 150 frames) on sheets of 8 in order, with the voice line heard at each frame and the stretches where the picture does not change; `n` > 0: 2-24 evenly spaced frames on one contact sheet | `review [-n N] [--every S]` |
+| `review(project, n?, every?)` | the delivered film a frame every `every` s (default 1, at most 150 frames) on sheets of 2-4 columns by 2-4 rows (8 on a 9:16 or 16:9 canvas) in order, with the voice line heard at each frame and the stretches where the picture does not change; `n` > 0: 2-24 evenly spaced frames on one contact sheet | `review [-n N] [--every S]` |
 | `export_captions(project, track?)` | every captions track (or one) as `out/captions/<track>.srt` and `.vtt`, without rendering | `captions --track` |
 | `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw`, `animate`, `import`, `assets` |
 | `probe(project, source)` | streams, codecs, rotation, loudness of a source (section 9.7) | `probe <source>` |
@@ -1031,7 +1031,8 @@ value.
 
 - Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
   cyclic Times, props that fail a component's schema, an unknown font, a malformed locale or profile); the hard
-  rules (section 2.2); a length outside the profile's limits (when it has any). Footage: an unknown clip or marker
+  rules (section 2.2); a length outside the profile's limits (when it has any); an evidence clip whose drawn panel leaves the safe area
+  (a screenshot's words are words). Footage: an unknown clip or marker
   in a `src:` or `mark:` Time, a `src:` on a looping or non-media clip or before its in point, a transition longer
   than its clip or the clip it comes from, an overlap longer than the transition (or with any clip but the previous
   one), an audio transition other than `crossfade`, volume keyframes on a clip without sound or below 0, a `duck`
