@@ -93,8 +93,10 @@ SQUARE = _generic("square", 1080, 1080)
 PORTRAIT = _generic("portrait", 1080, 1350)
 # YouTube normalises playback to about -14 LUFS; its own caps (12 h, 256 GB) are past anything rendered here.
 YOUTUBE = replace(LANDSCAPE, name="youtube", require_audio=True)
-# Douyin on a phone covers the top ~200 px, the right rail (x >= 920, y 720-1640) and the bottom bar (y >= 1480).
-DOUYIN = Profile("douyin", 1080, 1920, 30, Box(40, 220, 840, 1240), Box(40, 1260, 840, 200),
+# Douyin fills a tall phone by cropping the sides (about 50-110 px each at 1080 wide; ByteDance's own full-screen
+# spec keeps 120 px clear) and covers the top ~230 px, the right rail (x >= 880, y 720-1640) and the bottom bar
+# (y >= 1480).
+DOUYIN = Profile("douyin", 1080, 1920, 30, Box(120, 240, 760, 1220), Box(120, 1260, 760, 200),
                  20, 90, (45, 75), 80, -10.0)
 # Douyin's longer explainers (a how-to, a checklist worth saving): the same screen, more time.
 DOUYIN_LONG = replace(DOUYIN, name="douyin-long", min_s=60, max_s=300, target_s=(90, 180), max_mb=250)

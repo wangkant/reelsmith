@@ -83,7 +83,7 @@ def test_generic_and_platform_profiles():
         assert p.require_audio and p.max_still_s == 5.0 and p.ui and p.max_black_ratio == 0.10, name
     d = P.DOUYIN
     assert (d.width, d.height, d.safe, d.captions, d.min_s, d.max_s, d.target_s, d.max_mb, d.lufs) == (
-        1080, 1920, P.Box(40, 220, 840, 1240), P.Box(40, 1260, 840, 200), 20, 90, (45, 75), 80, -10.0)
+        1080, 1920, P.Box(120, 240, 760, 1220), P.Box(120, 1260, 760, 200), 20, 90, (45, 75), 80, -10.0)
     assert [P.PROFILES[n].orientation for n in ("landscape", "vertical", "square")] == ["landscape", "portrait",
                                                                                        "square"]
     assert P.LANDSCAPE.scale == 1 and P.make_profile({"width": 1280, "height": 720}).scale == pytest.approx(2 / 3)
@@ -110,7 +110,7 @@ def test_custom_profiles_from_workspace_json(tmp_path):
     write(p, {"version": 2, "profile": {"base": "brand", "width": 720, "height": 1280}})
     got = W.profile_for(p)
     assert (got.name, got.width, got.height, got.fps, got.lufs) == ("custom", 720, 1280, 25, -16.0)
-    assert got.safe == P.Box(27, 147, 560, 827)                         # douyin's, scaled by 2/3
+    assert got.safe == P.Box(80, 160, 507, 813)                         # douyin's, scaled by 2/3
     assert P.choose(None, {"width": 640, "height": 360}).width == 640   # workspace.json profile may be inline too
 
 
@@ -187,7 +187,7 @@ def test_new_project_with_a_profile_a_canvas_and_a_locale(tmp_path, monkeypatch)
     monkeypatch.delenv("REELSMITH_ROOT", raising=False)
     root = make_ws(tmp_path / "ws", {"profile": "douyin", "profiles": {"brand": {"base": "square", "fps": 24}}})
     r = T.new_project(str(root / "projects" / "a"))
-    assert r.ok and "douyin 1080x1920 30 fps, safe area x 40-880, y 220-1460" in r
+    assert r.ok and "douyin 1080x1920 30 fps, safe area x 120-880, y 240-1460" in r
     assert "profile" not in raw(root / "projects" / "a")                      # the workspace's stays in charge
     r = T.new_project(str(root / "projects" / "b"), canvas="720x1280@25", locale="ja")
     assert r.ok and "custom 720x1280 25 fps" in r

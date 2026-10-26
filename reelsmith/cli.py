@@ -59,7 +59,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--start", default="", help="draft only: where to begin (seconds or a Time)")
     p.add_argument("--end", default="", help="draft only: where to end (seconds or a Time)")
     p.add_argument("--scale", type=float, default=0.5, help="draft only: 0.1-1 of the canvas (default 0.5)")
-    proj(cmd("review", tools.review)).add_argument("-n", type=int, default=12)
+    p = proj(cmd("review", tools.review))
+    p.add_argument("-n", type=int, default=0, help="only n evenly spaced frames on one sheet (default: watch it all)")
+    p.add_argument("--every", type=float, default=1.0, help="seconds between watched frames (default 1)")
     p = proj(cmd("captions", tools.export_captions, "export_captions"))
     p.add_argument("--track", default="", help="one captions track (default: all)")
     p = proj(cmd("speak", tools.speak))
@@ -150,7 +152,7 @@ def _call(args) -> tools.ToolResult:
     if c == "preview":
         return tools.preview(args.project, args.times, args.sweep)
     if c == "review":
-        return tools.review(args.project, args.n)
+        return tools.review(args.project, args.n, args.every)
     if c == "render":
         return tools.render(args.project, args.draft, args.start, args.end, args.scale)
     if c in ("captions", "export_captions"):

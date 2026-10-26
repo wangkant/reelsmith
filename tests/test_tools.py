@@ -439,6 +439,26 @@ def test_render_delivers_and_review(project, monkeypatch):
 
 
 @needs_ffmpeg
+def test_review_watches_the_film_a_second_at_a_time_with_the_voice(project, monkeypatch):
+    line = lambda i, text, t0, t1: types.SimpleNamespace(i=i, text=text, t0=t0, t1=t1)  # noqa: E731
+    (project.path / "out").mkdir()
+    make_film(project.path / "out" / "film.mp4", seconds=10, still=True)
+    monkeypatch.setattr(R, "_voice_lines", lambda root: [line(1, "一", 0.0, 1.0), line(2, "二", 1.2, 2.4)])
+    rv = T.review(str(project.path))
+    assert rv.ok, rv
+    assert "10 frames, one every 1 s, on 2 sheet(s)" in rv
+    assert "sheet 1, 0-7 s:" in rv and "sheet 2, 8-9 s:" in rv
+    review = project.path / "build" / "review"
+    assert sorted(p.name for p in review.glob("sheet_*.png")) == ["sheet_01.png", "sheet_02.png"]
+    assert len(list(review.glob("watch_*.png"))) == 10
+    assert "- 0 s: [1] 一" in rv and "- 1 s: (no voice)" in rv and "- 2 s: [2] 二" in rv
+    assert "- 3-9 s: (no voice)" in rv
+    assert "the picture does not change" in rv and "- 0-9 s" in rv          # one colour throughout
+    quick = T.review(str(project.path), 3)                                   # n: the quick look, as before
+    assert quick.ok and "contact sheet" in quick and not list(review.glob("sheet_*.png"))
+
+
+@needs_ffmpeg
 def test_render_keeps_its_own_resolved_and_holds_the_lock(project, monkeypatch):
     # a preview during a render waits, and cannot change what the film renders
     order = []

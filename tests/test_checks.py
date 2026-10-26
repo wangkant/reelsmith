@@ -12,10 +12,12 @@ import pytest
 
 from reelsmith import checks as C
 from reelsmith.issues import Issue
-from reelsmith.profiles import DOUYIN, Box
+from reelsmith.profiles import DOUYIN as DOUYIN_NOW, Box
 from reelsmith.workspace import DEFAULT_RULES, default_rules, merge_rules
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+# the layout fixtures are drawn on the douyin screen as it was (x 40-880, y 220-1460); the checks are geometry-free
+DOUYIN = replace(DOUYIN_NOW, safe=Box(40, 220, 840, 1240), captions=Box(40, 1260, 840, 200))
 TINY = replace(DOUYIN, name="tiny", width=108, height=192, safe=Box(8, 20, 92, 150), min_s=1, max_s=30,
                target_s=(1, 10), lufs=-16.0, max_still_s=2.0)
 
@@ -214,6 +216,20 @@ def test_evidence_check_skips_what_it_cannot_measure(tmp_path):
     assert C.evidence_issues(resolved([_ev_clip("e", 840, 400, ref)]), tmp_path) == []
     ref = {"src": "assets/none.png", "kind": "evidence", "size": [1000, 500], "box": None}
     assert C.evidence_issues(resolved([_ev_clip("e", 840, 400, ref)]), tmp_path) == []
+
+
+def test_an_evidence_box_outside_the_safe_area_is_an_error(tmp_path):
+    ref = {"src": "assets/none.png", "kind": "evidence", "size": [1000, 500], "box": None}
+    s = DOUYIN.safe
+    inside = clip("in", "evidence", 0, 90, box={"x": s.x, "y": s.y, "w": s.w, "h": 400}, content=ref)
+    left = clip("left", "evidence", 0, 90, box={"x": s.x - 30, "y": s.y, "w": s.w, "h": 400}, content=ref)
+    grown = clip("grown", "evidence", 0, 90, box={"x": s.x, "y": s.y + 100, "w": s.w, "h": 400}, content=ref,
+                 style={"scale": 1.1})                                  # scale grows the box from its centre
+    found = C.evidence_issues(resolved([inside, left, grown]), tmp_path, DOUYIN)
+    by = {i.where.split(" @")[0]: i for i in found}
+    assert set(by) == {"left", "grown"} and all(i.level == "error" for i in found)
+    assert "30 px outside the safe area (left)" in by["left"].msg and f"x {s.x}-{s.x + s.w}" in by["left"].msg
+    assert C.evidence_issues(resolved([left]), tmp_path) == []          # no profile: only legibility
 
 
 def test_advice_duration_target_from_rules_or_profile():
@@ -550,5 +566,5 @@ def test_defaults_are_not_shared():
 def test_douyin_long_keeps_the_screen_and_allows_longer_films():
     from reelsmith.profiles import DOUYIN_LONG, get_profile
     assert get_profile("douyin-long") is DOUYIN_LONG
-    assert (DOUYIN_LONG.safe, DOUYIN_LONG.captions, DOUYIN_LONG.lufs) == (DOUYIN.safe, DOUYIN.captions, DOUYIN.lufs)
+    assert (DOUYIN_LONG.safe, DOUYIN_LONG.captions, DOUYIN_LONG.lufs) == (DOUYIN_NOW.safe, DOUYIN_NOW.captions, DOUYIN_NOW.lufs)
     assert DOUYIN_LONG.max_s == 300 and DOUYIN_LONG.target_s == (90, 180) and DOUYIN_LONG.max_mb == 250

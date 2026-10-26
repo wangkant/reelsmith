@@ -62,7 +62,7 @@ def test_top_level_matches_types_ts(resolved):
     assert set(resolved) == ts_fields("Resolved")
     assert resolved["version"] == 2 and resolved["fps"] == 30 and (resolved["width"], resolved["height"]) == (1080, 1920)
     assert resolved["durationInFrames"] == 654                       # (21.2 + 0.6) * 30
-    assert resolved["safe"] == {"x": 40, "y": 220, "w": 840, "h": 1240}
+    assert resolved["safe"] == {"x": 120, "y": 240, "w": 760, "h": 1220}
     assert resolved["locale"] == "zh-CN"
     assert set(resolved["theme"]) <= ts_fields("Theme") and resolved["theme"]["accent"] == "#C8372D"
     assert resolved["inspect"] is False
@@ -206,8 +206,8 @@ def test_boxes_full_safe_and_hidden_audio_tracks(demo):
     data["tracks"][-2]["hidden"] = True                                  # music
     write(demo, data)
     r = R.resolve(demo)
-    assert rclip(r, "proof")["box"] == {"x": 40, "y": 220, "w": 840, "h": 1240}
-    assert rtrack(r, "cap")["box"] == {"x": 40, "y": 220, "w": 840, "h": 1240}
+    assert rclip(r, "proof")["box"] == {"x": 120, "y": 240, "w": 760, "h": 1220}
+    assert rtrack(r, "cap")["box"] == {"x": 120, "y": 240, "w": 760, "h": 1220}
     assert [a["id"] for a in r["audio"]] == ["voice"]
 
 
@@ -479,7 +479,7 @@ def test_media_duration_tolerates_failure(tmp_path):
 # ------------------------------------------------------------------ describe
 def test_describe_window(demo):
     text = R.describe(demo)
-    assert text.startswith("project demo: douyin 1080x1920 30 fps, portrait; safe area x 40-880, y 220-1460 (the "
+    assert text.startswith("project demo: douyin 1080x1920 30 fps, portrait; safe area x 120-880, y 240-1460 (the "
                            "platform's UI covers the rest); locale zh-CN")
     assert "duration 21.80 s (654 frames, voice end + 0.6 s)" in text
     assert "  [3] 5.62-8.00 茶底加奶，大约两块五。" in text
@@ -584,7 +584,7 @@ def test_describe_shows_theme_caption_box_and_every_phrase(demo):
     text = R.describe(demo)
     assert "theme paper (a colour may name a token): paper #F3EBDD, ink #1E1A16, night #16130F" in text
     assert "accent #C8372D" in text
-    assert "box 40,1260 840x200, y 1260-1460 (default: douyin's captions band)" in text
+    assert "box 120,1260 760x200, y 1260-1460 (default: douyin's captions band)" in text
     lines = text.splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("  cap (captions)"))
     rows = lines[start + 1:start + 15]
@@ -595,7 +595,7 @@ def test_describe_shows_theme_caption_box_and_every_phrase(demo):
     data = raw(demo)
     data["tracks"][-1]["box"] = "safe"
     write(demo, data)
-    assert "box 40,220 840x1240, y 220-1460 (safe)" in R.describe(demo)
+    assert "box 120,240 760x1220, y 240-1460 (safe)" in R.describe(demo)
 
 
 def test_describe_counts_assets_used_through_component_props(demo):
@@ -616,5 +616,5 @@ def test_describe_at_uses_the_safe_size_for_safe_boxes(demo):
     close.update({"motion": "pan_left", "box": "safe"})
     write(demo, data)
     text = R.describe(demo, "line:5")
-    assert "close image" in text and "pan_x 28.6" in text                # 0.034 x 840, not x 1080
-    assert rclip(R.resolve(demo), "close")["keyframes"]["pan_x"][0]["v"] == 28.6
+    assert "close image" in text and "pan_x 25.8" in text                # 0.034 x 760, not x 1080
+    assert rclip(R.resolve(demo), "close")["keyframes"]["pan_x"][0]["v"] == 25.8

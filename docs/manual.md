@@ -19,8 +19,8 @@ There is no pipeline and no template. Call any tool at any time. A good loop:
      proof (`capture`, `draw`, `animate`, `import_asset`).
 4. `edit` the project in batches. `describe` shows the editor's window as text.
 5. `check` → `preview` key moments and **look at the stills** (Read the PNGs) → fix → repeat.
-6. `preview` with `sweep` (the layout of the whole film) → `render` → `review` the frames as a viewer would →
-   `note` what you learned.
+6. `preview` with `sweep` (the layout of the whole film) → `render` → `review`: watch the film a second at a time
+   (Read every sheet, with the line heard at each frame) as a viewer would → fix → `note` what you learned.
 
 Every tool takes `project` = the path of the project folder (the one holding `project.json`). Tools never throw:
 a failure comes back as text that says what to do.
@@ -37,7 +37,7 @@ The profile is project.json `"profile"`, else workspace.json's, else `landscape`
 | `landscape` (default) | 1920×1080 | x 96–1824, y 54–1026 | any length, sound optional |
 | `vertical` / `square` / `portrait` | 1080×1920 / 1080×1080 / 1080×1350 | 5 % in from each edge | any length, sound optional |
 | `youtube` | 1920×1080 | as landscape | sound required |
-| `douyin` | 1080×1920 | x 40–880, y 220–1460 | 20–90 s, ≤ 80 MB, −10 LUFS |
+| `douyin` | 1080×1920 | x 120–880, y 240–1460 | 20–90 s, ≤ 80 MB, −10 LUFS |
 | `douyin-long`, `tiktok`, `shorts`, `reels` | 1080×1920 | each its platform's | each its platform's limits |
 
 All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise. On the generic canvases the safe
@@ -65,7 +65,7 @@ then `preview` it. Other formats (webm, GIF, ProRes, audio only, a transparent o
 language the owner sets `providers.tts.voice`, or an `openai` TTS endpoint, and `speak` says so.
 
 **Captions** (when the project has a captions track) sit in the profile's captions band, the bottom 200 px of the
-safe area — on landscape x 96–1824, y 826–1026; on douyin x 40–880, y 1260–1460 — one line of 36–66 px, white on a
+safe area — on landscape x 96–1824, y 826–1026; on douyin x 120–880, y 1260–1460 — one line of 36–66 px, white on a
 dark plate. Keep other words above the band while captions show, or give the captions track its own `box`.
 
 ## Folders
@@ -415,7 +415,7 @@ transcript. No narration: the film lasts until `a_2` ends.
 | `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Ada Lovelace, reelsmith")` |
 | `preview(project, times?, sweep?)` | stills at chosen moments + contact sheet + layout problems; `sweep` measures the whole film | `preview(p, [0, "line:3", "clip:n1+1", "end-1"])`, `preview(p, sweep=true)` |
 | `render(project, draft?, start?, end?, scale?)` | the film to `out/film.mp4`, mastered and checked, with captions files and chapters; `draft=true` a quick small look to `build/draft.mp4` | `render(p)`, `render(p, draft=true, start="clip:b-2", end="clip:b+3")` |
-| `review(project, n=12)` | evenly spaced frames of the delivered film + contact sheet | `review(p, 12)` |
+| `review(project, n?, every?)` | the delivered film a frame a second on phone-size sheets, with the voice line heard at each frame and the still stretches; `n` only n evenly spaced frames | `review(p)`, `review(p, every=0.5)`, `review(p, n=12)` |
 | `export_captions(project, track?)` | captions as `out/captions/<track>.srt` and `.vtt`, without rendering | `export_captions(p)` |
 
 - `speak`: `pace` is a speed factor relative to normal (1.0; 0.9 a little slower, 1.1 a little faster; 0.5–2) or

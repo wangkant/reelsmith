@@ -25,6 +25,7 @@ DISTINCT_DELTA_E = 50.0
 STEADY_OPACITY = 0.75          # text fading in or out is judged where it is whole
 OVERLAP_OPACITY = 0.35         # fainter text under other text is a backdrop, not a collision
 EVIDENCE_MIN_PX = 40           # the house minimum for anything a viewer must read
+EVIDENCE_SAFE_SLACK_PX = 6     # an evidence box may poke this far past the safe area (its fading margin)
 INK_PER_EM = 0.85              # a CJK glyph's ink is about this much of its font size
 SILENT_LUFS = -45.0
 LUFS_TOLERANCE = 3.0
@@ -336,8 +337,9 @@ def _evidence_refs(value, key: str = ""):
             yield from _evidence_refs(v, key)
 
 
-def evidence_issues(resolved: dict, root: Path) -> list[Issue]:
-    """Evidence whose proving sentence will read small (estimated from the capture and the clip box)."""
+def evidence_issues(resolved: dict, root: Path, profile: Profile | None = None) -> list[Issue]:
+    """Evidence whose proving sentence will read small (estimated from the capture and the clip box), and, with
+    `profile`, an evidence clip whose box leaves the safe area (a screenshot's words are words too)."""
     fps = _fps(resolved)
     least = EVIDENCE_MIN_PX * _scale(resolved)
     out: list[Issue] = []
@@ -349,6 +351,16 @@ def evidence_issues(resolved: dict, root: Path) -> list[Issue]:
         scale = (c.get("style") or {}).get("scale", 1)
         scale = float(scale) if isinstance(scale, (int, float)) and scale > 0 else 1.0
         w, h = float(box.get("w") or 0) * scale, float(box.get("h") or 0) * scale
+        if profile is not None and c.get("type") == "evidence" and w > 0 and h > 0:
+            cx = float(box.get("x") or 0) + float(box.get("w") or 0) / 2       # style.scale grows from the centre
+            cy = float(box.get("y") or 0) + float(box.get("h") or 0) / 2
+            s = profile.safe
+            px, side = _sticks_out((cx - w / 2, cy - h / 2, w, h), (s.x, s.y, s.w, s.h))
+            if px > EVIDENCE_SAFE_SLACK_PX:
+                out.append(Issue("error", f"{c.get('id')} @ {(c.get('from') or 0) / fps:.1f}s",
+                                 f"evidence box sits {px:.0f} px outside the safe area ({side}): its words are cut "
+                                 f"or covered there on a phone; keep the box inside x {s.x}-{s.x + s.w}, "
+                                 f"y {s.y}-{s.y + s.h}"))
         for ref in refs:
             cap, size = ref.get("box"), ref.get("size")
             if not (isinstance(cap, list) and len(cap) == 4 and w > 0 and h > 0):
@@ -411,7 +423,8 @@ def check_project(project: str | Path) -> list[Issue]:
     except Exception as exc:  # noqa: BLE001 - a render would stop at the same place
         return sort_issues(issues + [Issue("error", "resolve", f"the project does not resolve: {exc}")])
     issues += duration_issues(resolved, profile) + advice_issues(resolved, rules, profile)
-    issues += (cover_issues(resolved) if cover_matters(profile, rules) else []) + evidence_issues(resolved, root)
+    issues += (cover_issues(resolved) if cover_matters(profile, rules) else []) + \
+        evidence_issues(resolved, root, profile)
     return sort_issues(issues)
 
 

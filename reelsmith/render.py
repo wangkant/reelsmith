@@ -30,6 +30,10 @@ MAX_PREVIEW_FRAMES = 24
 KEEP_STILLS = 96                    # earlier previews' stills stay readable; the oldest go past this
 SHEET_AREA = 360 * 640              # a tile's pixels: a third of 1080x1920, about a phone at arm's length
 SHEET_WIDTH = 2600                  # columns are added while the sheet stays about this wide (at most 6)
+WATCH_EVERY_S = 1.0                 # review watches the film a frame a second ...
+WATCH_MAX_FRAMES = 150              # ... spread out on films longer than this many seconds
+WATCH_SHEET_WIDTH = 1600            # a watch sheet stays readable when a model scales it to about 1280-1568 px
+STILL_DIFF = 1.5                    # mean grey-level change (0-255) of a 54x96 thumbnail under which a frame is "same"
 LAYOUT_EVERY_S = 1.0
 LAYOUT_GRID_MAX = 600               # grid stills of the layout pass; a longer film's grid is spaced out evenly
 LAYOUT_BATCH = 200                  # stills per render.mjs call (it takes 600); each batch is pruned before the next
@@ -246,14 +250,15 @@ def sheet_tile(profile: Profile) -> tuple[int, int]:
     return 2 * max(8, round(profile.width * k / 2)), 2 * max(8, round(profile.height * k / 2))
 
 
-def _sheet(pngs: list, out: Path, profile: Profile, labels: list[str] | None = None) -> str | None:
+def _sheet(pngs: list, out: Path, profile: Profile, labels: list[str] | None = None,
+           cols: int | None = None) -> str | None:
     pairs = [(p, lab) for p, lab in zip(pngs, labels or [""] * len(pngs)) if p and Path(p).is_file()]
     s = profile.safe
     tile = sheet_tile(profile)
     try:
         sheet = media.contact_sheet([p for p, _ in pairs], out, profile.outside_safe(), (profile.width, profile.height),
                                     tile, outline=(s.x, s.y, s.w, s.h), labels=[lab for _, lab in pairs],
-                                    cols=min(6, max(2, SHEET_WIDTH // tile[0])))
+                                    cols=cols or min(6, max(2, SHEET_WIDTH // tile[0])))
     except RuntimeError:
         return None
     return str(sheet) if sheet else None
@@ -754,24 +759,81 @@ def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE) -> dict:
 
 
 # ------------------------------------------------------------------ review
-def review(project: str | Path, n: int = 12) -> dict:
-    """Evenly spaced frames from the delivered film and a contact sheet with the platform's UI bands darkened."""
+def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dict:
+    """The delivered film as a viewer meets it: a frame every `every` seconds from 0 (spread out past
+    WATCH_MAX_FRAMES), on phone-size sheets in order with the platform's UI bands darkened, each frame with the
+    voice line heard then and whether the picture changed since the frame before. n > 0: n evenly spaced frames on
+    one contact sheet instead (a quick look)."""
     root = project_root(project)
     paths = project_paths(root)
     if not paths.film.is_file():
         raise RenderError("no out/film.mp4 yet: render first")
-    n = max(2, min(MAX_PREVIEW_FRAMES, int(n)))
     length = media.duration(paths.film) or 0.0
     if length <= 0:
         raise RenderError(f"{paths.film} has no readable duration: render again")
-    times = [round(length * (i + 0.5) / n, 2) for i in range(n)]
-    _clear(paths.review)
-    made = {f.name: f for f in media.frames_at(paths.film, times, paths.review)}
-    shots = [{"t": t, "png": str(made[name])} for t in times if (name := f"frame_{t:07.2f}s.png") in made]
     try:
         profile = profile_for(root)
     except ValueError:
         profile = get_profile(None)
-    return {"ok": bool(shots), "film": str(paths.film), "duration_s": round(length, 2), "frames": shots,
-            "contact": _sheet([s["png"] for s in shots], paths.review / "contact.png", profile,
-                              [f"{s['t']:.2f}s" for s in shots])}
+    _clear(paths.review)
+    if int(n or 0) > 0:
+        n = max(2, min(MAX_PREVIEW_FRAMES, int(n)))
+        times = [round(length * (i + 0.5) / n, 2) for i in range(n)]
+        made = {f.name: f for f in media.frames_at(paths.film, times, paths.review)}
+        shots = [{"t": t, "png": str(made[name])} for t in times if (name := f"frame_{t:07.2f}s.png") in made]
+        return {"ok": bool(shots), "film": str(paths.film), "duration_s": round(length, 2), "frames": shots,
+                "contact": _sheet([s["png"] for s in shots], paths.review / "contact.png", profile,
+                                  [f"{s['t']:.2f}s" for s in shots])}
+    every = max(float(every or WATCH_EVERY_S), length / WATCH_MAX_FRAMES, 0.2)
+    shots = [{"t": t, "png": str(p)} for t, p in media.frames_every(paths.film, every, paths.review)
+             if t < length]
+    lines = _voice_lines(root)
+    still = _unchanged([s["png"] for s in shots])
+    for s, same in zip(shots, still):
+        ln = next((x for x in lines if x.t0 <= s["t"] < x.t1), None)
+        s.update(line=ln.i if ln else None, said=ln.text if ln else "", same=same)
+    per, cols = _watch_grid(profile)
+    sheets = []
+    for k in range(0, len(shots), per):
+        part = shots[k:k + per]
+        sheet = _sheet([s["png"] for s in part], paths.review / f"sheet_{k // per + 1:02d}.png", profile,
+                       [f"{s['t']:.1f}s" for s in part], cols=cols)
+        if sheet:
+            sheets.append({"from_s": part[0]["t"], "to_s": part[-1]["t"], "png": sheet})
+    return {"ok": bool(shots) and len(sheets) == -(-len(shots) // per), "film": str(paths.film),
+            "duration_s": round(length, 2), "every_s": round(every, 2), "frames": shots, "sheets": sheets,
+            "voice": bool(lines)}
+
+
+def _voice_lines(root: Path) -> list:
+    try:
+        voice, _ = _mod("document").load_voice(root, _mod("document").load(root).voice)
+    except Exception:  # noqa: BLE001 - a film without a readable voice is still watched
+        return []
+    return list(voice.lines) if voice else []
+
+
+def _unchanged(pngs: list[str]) -> list[bool]:
+    """Per frame: the picture is the same as the frame before (a still stretch shows as a run of these)."""
+    try:
+        from PIL import Image, ImageChops, ImageStat
+    except ImportError:
+        return [False] * len(pngs)
+    same, prev = [], None
+    for p in pngs:
+        try:
+            with Image.open(p) as im:
+                cur = im.convert("L").resize((54, 96))
+        except OSError:
+            same.append(False)
+            prev = None
+            continue
+        same.append(prev is not None and ImageStat.Stat(ImageChops.difference(cur, prev)).mean[0] < STILL_DIFF)
+        prev = cur
+    return same
+
+
+def _watch_grid(profile: Profile) -> tuple[int, int]:
+    """Frames per watch sheet and columns: two rows of 2-4 tiles, about WATCH_SHEET_WIDTH wide."""
+    cols = max(2, min(4, WATCH_SHEET_WIDTH // sheet_tile(profile)[0]))
+    return cols * 2, cols

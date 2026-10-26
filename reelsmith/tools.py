@@ -474,16 +474,49 @@ def render(project: str, draft: bool = False, start: float | str = "", end: floa
     return _render_text(R.render(root))
 
 
+def _runs(frames: list[dict], key) -> list[tuple[float, float, object]]:
+    """Consecutive frames with the same key(frame): [(first t, last t, value), ...]."""
+    runs: list[list] = []
+    for f in frames:
+        v = key(f)
+        if runs and runs[-1][2] == v:
+            runs[-1][1] = f["t"]
+        else:
+            runs.append([f["t"], f["t"], v])
+    return [tuple(r) for r in runs]
+
+
 @tool
-def review(project: str, n: int = 12) -> str:
-    """Evenly spaced frames (2-24) from the delivered out/film.mp4 and a contact sheet, to judge the film as a viewer
-    would."""
-    res = R.review(_project(project), n)
-    rows = [f"{len(res['frames'])} frame(s) of {res['film']} ({res['duration_s']} s), look with Read:"]
-    rows += [f"- {f['t']:.2f}s: {f['png']}" for f in res["frames"]]
-    if res.get("contact"):
-        rows.append(f"contact sheet ({SHEET_KEY}): {res['contact']}")
-    return ToolResult(_lines(rows), bool(res.get("ok")))
+def review(project: str, n: int = 0, every: float = R.WATCH_EVERY_S) -> str:
+    """Watch the delivered out/film.mp4 as a viewer meets it: a frame every `every` seconds (default 1) from the
+    first, on phone-size sheets in order, with the voice line heard at each frame and the stretches where the picture
+    does not change. Read every sheet, first to last. n > 0: only n evenly spaced frames (2-24) on one sheet."""
+    res = R.review(_project(project), n, every)
+    if "sheets" not in res:
+        rows = [f"{len(res['frames'])} frame(s) of {res['film']} ({res['duration_s']} s), look with Read:"]
+        rows += [f"- {f['t']:.2f}s: {f['png']}" for f in res["frames"]]
+        if res.get("contact"):
+            rows.append(f"contact sheet ({SHEET_KEY}): {res['contact']}")
+        return ToolResult(_lines(rows), bool(res.get("ok")))
+    frames, step = res["frames"], res["every_s"]
+    rows = [f"watched {res['film']} ({res['duration_s']} s): {len(frames)} frames, one every {step:g} s, on "
+            f"{len(res['sheets'])} sheet(s) in order at phone size ({SHEET_KEY}). Read every sheet, first to last: "
+            "this is the film as a viewer meets it."]
+    rows += [f"- sheet {i}, {s['from_s']:g}-{s['to_s']:g} s: {s['png']}" for i, s in enumerate(res["sheets"], 1)]
+    span = lambda a, b: f"{a:g} s" if a == b else f"{a:g}-{b:g} s"  # noqa: E731
+    if res.get("voice"):
+        said = {f["t"]: f["said"] for f in frames}
+        rows.append("heard at each frame:")
+        rows += [f"- {span(a, b)}: " + (f"[{ln}] {said[a]}" if ln else "(no voice)")
+                 for a, b, ln in _runs(frames, lambda f: f.get("line"))]
+    else:
+        rows.append("no voice in the project: nothing is heard")
+    still = [(a, b) for a, b, same in _runs(frames, lambda f: bool(f.get("same"))) if same and b - a >= step]
+    if still:
+        rows.append("the picture does not change (a still screen):")
+        rows += [f"- {span(max(0.0, round(a - step, 2)), b)}" for a, b in still]
+    rows.append(f"single frames: {Path(frames[0]['png']).parent if frames else '-'} (watch_NNNN.png = NNNN x {step:g} s)")
+    return ToolResult(_lines(rows, 160), bool(res.get("ok")))
 
 
 @tool

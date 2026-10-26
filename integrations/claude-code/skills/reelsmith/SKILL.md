@@ -39,7 +39,8 @@ command (`reelsmith <tool> --help`) when no MCP client is attached.
 6. `check`, then `preview` the key moments and read the PNG stills. Fix what you see, repeat.
    `preview(sweep=true)` measures the whole film's layout as `render` will; `render(draft=true, start?, end?)` is a
    quick low-quality look at a join or a stretch as video.
-7. `render`, then `review` the delivered frames, then `note` what you learned. The captions also come out as
+7. `render`, then `review`: it shows the delivered film a second at a time; Read every sheet, fix what a viewer
+   would trip on, then `note` what you learned. The captions also come out as
    `.srt`/`.vtt` files (`export_captions` writes them without rendering).
 
 ## Rules that save a render

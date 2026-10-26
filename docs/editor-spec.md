@@ -344,8 +344,8 @@ gives `"[level] where: msg"`.
 - `checks.py`: `check_project(project) -> list[Issue]`; `check_layout(inspect, profile, resolved=None) ->
   list[Issue]` (`LayoutCheck` is the same fed in batches); `check_film(path, profile) -> dict` (section 14).
 - `render.py`: `preview(project, times, sweep=False) -> dict`, `render(project) -> dict`, `draft(project,
-  start=None, end=None, scale=0.5) -> dict`, `export_captions(project, track=None) -> dict`, `review(project, n=12)
-  -> dict`; `layout_frames(resolved)` (the frames the layout pass measures).
+  start=None, end=None, scale=0.5) -> dict`, `export_captions(project, track=None) -> dict`, `review(project, n=0,
+  every=1.0) -> dict`; `layout_frames(resolved)` (the frames the layout pass measures).
 - `sidecar.py`: captions as SubRip and WebVTT, chapters as YouTube lines and ffmpeg chapter metadata (section 14).
 - `providers/`: the asset tools and the footage tools (section 9).
 - `tools.py`: every agent-facing tool as a plain function returning text (section 10); the MCP server, the CLI and
@@ -717,7 +717,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 | `typecheck(project)` | type-check the library's components | `typecheck` |
 | `preview(project, times?, sweep?)` | stills (up to 24 per call), a contact sheet and layout problems; `sweep` measures the stills `render`'s layout pass does (section 14) | `preview [times...] --sweep` |
 | `render(project, draft?, start?, end?, scale?)` | the film, mastered and checked, with its captions files and chapters (section 14); `draft` a quick look at `scale` (0.5) to `build/draft.mp4`, optionally from `start` to `end` | `render --draft --start --end --scale` |
-| `review(project, n=12)` | 2-24 evenly spaced frames of the delivered film and a contact sheet | `review -n` |
+| `review(project, n?, every?)` | the delivered film a frame every `every` s (default 1, at most 150 frames) on sheets of 8 in order, with the voice line heard at each frame and the stretches where the picture does not change; `n` > 0: 2-24 evenly spaced frames on one contact sheet | `review [-n N] [--every S]` |
 | `export_captions(project, track?)` | every captions track (or one) as `out/captions/<track>.srt` and `.vtt`, without rendering | `captions --track` |
 | `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw`, `animate`, `import`, `assets` |
 | `probe(project, source)` | streams, codecs, rotation, loudness of a source (section 9.7) | `probe <source>` |
@@ -1097,7 +1097,7 @@ no layout pass, no mastering and no film checks, and leaves `out/` and both repo
 | `square` | 1080×1080, 30 fps | 54, 54, 972, 972 | 54, 826, 972, 200 | any | none | none | −14 LUFS | optional | any |
 | `portrait` | 1080×1350, 30 fps | 54, 68, 972, 1214 | 54, 1082, 972, 200 | any | none | none | −14 LUFS | optional | any |
 | `youtube` | as `landscape` | as `landscape` | as `landscape` | any | none | none | −14 LUFS | required | any |
-| `douyin` | 1080×1920, 30 fps | 40, 220, 840, 1240 | 40, 1260, 840, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS | required | ≤ 5 s |
+| `douyin` | 1080×1920, 30 fps | 120, 240, 760, 1220 | 120, 1260, 760, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS | required | ≤ 5 s |
 | `douyin-long` | as `douyin` | as `douyin` | as `douyin` | 60-300 s | 90-180 s | 250 MB | −10 LUFS | required | ≤ 5 s |
 | `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS | required | ≤ 5 s |
 | `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS | required | ≤ 5 s |
@@ -1105,7 +1105,8 @@ no layout pass, no mastering and no film checks, and leaves `out/` and both repo
 
 On the generic canvases (`landscape`, `vertical`, `square`, `portrait`) and `youtube` the safe area is a title-safe
 margin, 5 % of the width and of the height in from each edge; on the platform profiles it is where the platform's
-own UI (status bar, tabs, the button rail, title and music) does not cover the picture: on Instagram Reels Meta keeps
+own UI (status bar, tabs, the button rail, title and music) does not cover the picture and a tall phone does not crop
+it away (Douyin fills a 20:9 screen and loses 50-110 px at each side): on Instagram Reels Meta keeps
 the top 14 % and the bottom 35 % free, and the action rail takes more than its 6 % at the right. Words must stay
 inside the safe area; backgrounds may bleed to the edges. The captions band is the safe area's bottom 200 px at a
 1080 px short side (scaled with the canvas). YouTube normalises playback to about −14 LUFS and its own upload caps

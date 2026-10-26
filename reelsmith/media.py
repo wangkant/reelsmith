@@ -344,6 +344,17 @@ def contact_sheet(pngs: list[Path], out: Path, ui_boxes: list[tuple[int, int, in
     return Path(out)
 
 
+def frames_every(video: Path, every: float, out_dir: Path) -> list[tuple[float, Path]]:
+    """A frame every `every` seconds from 0 (the nearest frame to each mark), from one decode: [(t, png), ...]."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-an",
+             "-vf", f"fps={1 / every:.6f}", "-start_number", "0", str(out_dir / "watch_%04d.png")],
+            scaled_timeout(duration(video) or 0.0, 600))
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg could not take frames from {Path(video).name}: {tail(r.stderr or '', 5, 300)}")
+    return [(round(int(f.stem[6:]) * every, 2), f) for f in sorted(out_dir.glob("watch_*.png"))]
+
+
 def frames_at(video: Path, times: list[float], out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     files = []
