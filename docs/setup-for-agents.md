@@ -173,8 +173,7 @@ footage tools, imports and `capture` need none:
 
 `reelsmith run` makes films headless, without a coding agent; the last three keys serve it alone. Doctor's `key:`
 rows list every key reelsmith reads, with what each enables. `draw` (pictures) uses the Codex CLI's own sign-in, not
-a key. Write `<workspace>/.env` with your file tool,
-holding comments only, so the user can fill it in:
+a key. Write `<workspace>/.env` with your file tool, holding comments only, so the user can fill it in:
 
 ```text
 # Optional keys for reelsmith. Add the value after =, save, and never paste it into a chat.
