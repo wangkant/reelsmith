@@ -508,7 +508,6 @@ def test_validate_props_messages():
     assert rows[0] == "props: unknown prop(s) bar; allowed: header, rows, title, total"
     assert "props.rows[0]: unknown prop(s) foo; allowed: at, label, sub, tone, value" in rows
     assert "props.rows[0].label: 40 characters; at most 28" in rows
-    assert L.validate_props(receipt, []) == ["props must be an object"]
     assert L.validate_props(comps["Arrow"], {"label_pos": "middle"}) == [
         "props.label_pos: 'middle' is not one of 'start', 'end'"]
     # Times and asset ids are checked as written: strings and numbers both pass the schema

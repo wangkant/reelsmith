@@ -162,11 +162,6 @@ def get(name=None, cfg: dict | None = None) -> Provider:
 def make_client(provider: Provider, model: str, api_key: str, reasoning: str | None = None, timeout_s: float = 600,
                 proxy: str | None = None):
     """A ChatClient for this provider and model; `proxy` (runner.proxy or REELSMITH_PROXY) replaces HTTP(S)_PROXY."""
-    import urllib.request
-
-    from .client import ChatClient, _loopback
-    client = ChatClient(provider.base_url, api_key, model, headers=dict(provider.headers) or None,
-                        extra_body=provider.body(reasoning) or None, timeout_s=timeout_s)
-    if proxy and not _loopback(client.host):
-        client._opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-    return client
+    from .client import ChatClient
+    return ChatClient(provider.base_url, api_key, model, headers=dict(provider.headers) or None,
+                      extra_body=provider.body(reasoning) or None, timeout_s=timeout_s, proxy=proxy)

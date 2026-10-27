@@ -138,10 +138,6 @@ def test_arguments_are_validated_and_json_strings_opened(demo):
     assert not call(demo.box, "undo").error
     doc = json.loads((demo.project / "project.json").read_text(encoding="utf-8"))
     assert doc["meta"]["title"] == "一杯奶茶的成本"
-    r = demo.box.get("describe").run(json.dumps({"at": 1.0}))     # the whole arguments as a JSON string
-    assert not r.error
-    r = demo.box.get("describe").run(["not", "an object"])
-    assert r.error and "JSON object" in r.text
 
 
 def test_reelsmith_tools_are_held_to_the_guard(demo):
@@ -605,12 +601,6 @@ def test_extra_tools_come_last_and_never_raise(demo):
     assert call(box, "hot_topics") == AT.ToolResult("a, b")
     r = call(box, "pick_topic")
     assert r.error and "topic service down" in r.text
-    with pytest.raises(ValueError, match="two tools"):
-        AT.toolbox(demo.project, demo.ws, demo.scope, web={"search": "none"},
-                   extra=[AT.Tool("read_file", "dup", {"type": "object"}, lambda a: "")])
-    with pytest.raises(ValueError, match="letters"):
-        AT.toolbox(demo.project, demo.ws, demo.scope, web={"search": "none"},
-                   extra=[AT.Tool("bad name", "x", {"type": "object"}, lambda a: "")])
 
 
 def test_web_fetch_asks_for_the_projects_language(demo, site):

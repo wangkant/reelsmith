@@ -48,34 +48,31 @@ def _windows_job():
     global _JOB
     if _JOB is not None or os.name != "nt":
         return _JOB
-    try:
-        import ctypes
-        from ctypes import wintypes
+    import ctypes
+    from ctypes import wintypes
 
-        class Basic(ctypes.Structure):
-            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
-                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
-                        ("SchedulingClass", wintypes.DWORD)]
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
 
-        class Extended(ctypes.Structure):
-            _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_ulonglong * 6),
-                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    class Extended(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_ulonglong * 6),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.CreateJobObjectW.restype = wintypes.HANDLE
-        job = k32.CreateJobObjectW(None, None)
-        if not job:
-            return None
-        info = Extended()
-        info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
-            return None
-        _JOB = (k32, wintypes.HANDLE(job))
-    except (OSError, AttributeError, ValueError):
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
         return None
+    info = Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
+        return None
+    _JOB = (k32, wintypes.HANDLE(job))
     return _JOB
 
 
@@ -285,14 +282,8 @@ def scan(path: Path, length: float) -> dict:
 
 def _label_tiles(sheet: Path, labels: list[str], cols: int, tile: tuple[int, int]) -> None:
     """Each tile's label (its time) in its top-left corner, on a dark chip."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError:
-        return
-    try:
-        font = ImageFont.load_default(size=max(14, tile[1] // 22))
-    except TypeError:                               # Pillow before 10.1: fixed bitmap font
-        font = ImageFont.load_default()
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.load_default(size=max(14, tile[1] // 22))
     with Image.open(sheet) as im:
         im = im.convert("RGB")
         draw = ImageDraw.Draw(im)

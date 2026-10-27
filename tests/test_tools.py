@@ -94,7 +94,8 @@ def project(tmp_path, monkeypatch):
                  for t in r["tracks"] for c in t.get("clips") or []}
         sched = TE.Schedule([(0.0, 1.0), (1.2, 2.4)], clips, duration=r["durationInFrames"] / fps)
         return TE.resolve(value, sched)
-    fake_module(monkeypatch, "document", load=lambda pr: types.SimpleNamespace(meta=dict(META)),
+    meta = types.SimpleNamespace(model_dump=lambda: dict(META))
+    fake_module(monkeypatch, "document", load=lambda pr: types.SimpleNamespace(meta=meta),
                 validate=lambda pr, doc: list(state.issues))
     fake_module(monkeypatch, "resolve", resolve=lambda pr: json.loads(json.dumps(state.resolved)), time_of=time_of,
                 describe=lambda pr, at=None: f"window of {Path(pr).name} at {at}")
@@ -192,22 +193,17 @@ def test_edit_passes_ops_and_reports(project, monkeypatch):
 def test_undo_result_shapes(project, monkeypatch):
     fake_module(monkeypatch, "ops", undo=lambda pr, steps: (True, f"restored .history/000{steps}.json"))
     assert T.undo(str(project.path), 2) == "restored .history/0002.json"
-    fake_module(monkeypatch, "ops", undo=lambda pr, steps: False)
-    assert not T.undo(str(project.path)).ok
-    fake_module(monkeypatch, "ops", undo=lambda pr, steps: "undid 1 batch")
-    assert T.undo(str(project.path)) == "undid 1 batch"
     assert not T.undo(str(project.path), 0).ok
 
 
 # ------------------------------------------------------------------ library, notes, providers
 def test_library_list_and_detail(project, monkeypatch, tmp_path):
-    meta = tmp_path / "Stamp.meta.json"
-    meta.write_text(json.dumps({"name": "Stamp", "example": {"label": "涨"}}), encoding="utf-8")
     schema = {"type": "object", "required": ["label"],
               "properties": {"label": {"type": "string", "description": "the word on the stamp"},
                              "at": {"description": "Time it lands"}}}
     comp = types.SimpleNamespace(name="Stamp", description="A red stamp that lands. Use it for a verdict.",
-                                 schema=schema, source="preset", path=str(meta))
+                                 schema=schema, source="preset", path=tmp_path / "Stamp.tsx",
+                                 example={"label": "涨"}, problem="")
     fake_module(monkeypatch, "library", components=lambda pr: {"Stamp": comp})
     r = T.library(str(project.path))
     # the list stays small: one line of description and the prop names, no schemas
@@ -261,20 +257,12 @@ def test_providers_delegation(project, monkeypatch):
     r = T.draw(str(project.path), "img1", "a pump")
     assert not r.ok and "codex login" in r
     assert T.assets(str(project.path)) == "no assets"
-    r = T.animate(str(project.path), "v1", "img1", "slow push")
-    assert not r.ok and "no animate()" in r
     assert not T.capture(str(project.path), "file:///etc/passwd", "ev2").ok
     assert not T.capture(str(project.path), "https://x", "../evil").ok
     r = T.import_asset(str(project.path), "a", "x.png", "photo")              # (text, is_error=True) from the provider
     assert not r.ok and "got 'photo'" in r
     assert T.import_asset(str(project.path), "a", " x.png ").ok
     assert calls[-1] == ("import", "a", "x.png", None)
-
-
-def test_providers_missing_package(project, monkeypatch):
-    monkeypatch.setitem(sys.modules, "reelsmith.providers", None)       # import fails
-    r = T.speak(str(project.path), ["一"])
-    assert not r.ok and "unavailable" in r
 
 
 # ------------------------------------------------------------------ preview / render / review with a fake render.mjs
@@ -747,9 +735,6 @@ def test_cli_run_delegates_to_runner(monkeypatch):
     monkeypatch.setattr(reelsmith, "runner", fake, raising=False)
     assert cli.main(["run", "p", "--brief", "油价"]) == 0
     assert got == [["p", "--brief", "油价"]]
-    monkeypatch.delattr(reelsmith, "runner")
-    monkeypatch.setitem(sys.modules, "reelsmith.runner", None)
-    assert cli.main(["run", "p"]) == 2
 
 
 def test_cli_run_delegates_after_the_real_runner_was_imported(monkeypatch):

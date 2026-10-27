@@ -235,17 +235,13 @@ def fetch(url: str, max_chars: int = DEFAULT_CHARS, *, proxy: str | None = None,
     why = netcheck.public_url(url, check_resolve, trusted)
     if why:
         return f"cannot fetch {url[:200]}: {why}", True
-    try:
-        limit = int(max_chars)
-    except (TypeError, ValueError):
-        limit = DEFAULT_CHARS
-    limit = min(MAX_CHARS, max(MIN_CHARS, limit))
+    limit = min(MAX_CHARS, max(MIN_CHARS, int(max_chars)))
     try:
         status, headers, raw, final = _open(url, upstream, resolve, trusted, connect, timeout,
                                             locales.accept_language(locale))
     except FetchError as exc:
         return str(exc), True
-    ctype = str(headers.get("Content-Type") or "").lower() if headers else ""
+    ctype = str(headers.get("Content-Type") or "").lower()
     mime = ctype.split(";")[0].strip()
     m = re.search(r"charset=[\"']?([A-Za-z0-9_\-]+)", ctype)
     charset = m.group(1) if m else None
@@ -344,7 +340,7 @@ def search_backend(web: dict, keys=None) -> tuple[Search | None, str]:
 
 def format_results(rows: list, n: int) -> str:
     lines = []
-    for i, r in enumerate([r for r in rows if isinstance(r, dict)][:n], 1):
+    for i, r in enumerate(rows[:n], 1):
         title = re.sub(r"\s+", " ", str(r.get("title") or r.get("name") or "")).strip() or "(no title)"
         url = str(r.get("url") or r.get("href") or r.get("link") or "").strip()
         snippet = re.sub(r"\s+", " ", str(r.get("snippet") or r.get("body") or r.get("content") or "")).strip()

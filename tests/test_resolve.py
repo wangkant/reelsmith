@@ -1,5 +1,4 @@
 import json
-import math
 import re
 import shutil
 import struct
@@ -439,7 +438,6 @@ def test_value_at_holds_outside_and_eases_into_keys():
     assert R.value_at(ks, 15, 30) == pytest.approx(5 * 0.5 ** 3)        # into the key at 20, eased "in"
     assert R.value_at(ks, 25, 30) == pytest.approx(7.5)                 # into the key at 30: linear
     assert R.value_at([], 5, 30) is None
-    assert R.value_at([{"f": 0, "v": math.nan}], 5, 30) is None
 
 
 # ------------------------------------------------------------------ media headers

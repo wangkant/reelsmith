@@ -5,7 +5,7 @@ minutes plus downloads. Every command is given for Windows PowerShell and for ma
 
 **What reelsmith is.** A video editing harness for coding agents: a Python package with a CLI and an MCP server, a
 Remotion renderer (Node.js) and ffmpeg. The agent edits a timeline of tracks and clips with tools, looks at stills,
-and renders through checks that refuse a broken film. It is not a text-to-video model.
+and renders through checks that refuse a broken film.
 
 **The end state.**
 

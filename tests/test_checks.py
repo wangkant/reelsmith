@@ -79,7 +79,7 @@ def test_empty_title_is_only_a_warning():
 
 
 def test_sources_need_http_urls():
-    meta = dict(GOOD_META, sources=[{"title": "x", "url": "ftp://x"}, {"title": "y"}, "z"])
+    meta = dict(GOOD_META, sources=[{"title": "x", "url": "ftp://x"}, {"title": "y"}])
     found = C.rule_issues(meta, house_rules())
     assert [(i.level, i.where) for i in found] == [("error", "meta.sources")]
     rules = house_rules()
@@ -279,7 +279,7 @@ def fake_doc(monkeypatch, meta=None, issues=(), load_exc=None):
     def load(project):
         if load_exc:
             raise load_exc
-        return types.SimpleNamespace(meta=dict(meta or GOOD_META))
+        return types.SimpleNamespace(meta=types.SimpleNamespace(model_dump=lambda: dict(meta or GOOD_META)))
     return fake_module(monkeypatch, "document", load=load, validate=lambda project, doc: list(issues))
 
 

@@ -50,12 +50,8 @@ def vtt(rows: list[tuple[float, float, str]], language: str | None = None) -> st
 
 
 def _languages(root: Path) -> dict[str, str]:
-    try:
-        data = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return {}
-    return {t["id"]: t["language"] for t in data.get("tracks") or []
-            if isinstance(t, dict) and isinstance(t.get("id"), str) and isinstance(t.get("language"), str)}
+    data = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig"))
+    return {t["id"]: t["language"] for t in data.get("tracks") or [] if t.get("language")}
 
 
 def write_captions(project, resolved: dict, folder: Path, only: str | None = None) -> list[dict]:
@@ -71,10 +67,7 @@ def write_captions(project, resolved: dict, folder: Path, only: str | None = Non
         shutil.rmtree(folder, ignore_errors=True)
     if not tracks:
         return []
-    try:
-        default = locale_for(root)
-    except ValueError:
-        default = None
+    default = locale_for(root)
     langs = _languages(root)
     folder.mkdir(parents=True, exist_ok=True)
     out = []
@@ -91,8 +84,7 @@ def write_captions(project, resolved: dict, folder: Path, only: str | None = Non
 
 # ------------------------------------------------------------------ chapters
 def chapters(project, fps: float) -> list[tuple[float, str]]:
-    """(seconds on a frame, title) of project.json "chapters", in time order; ones that cannot be read are left out
-    (check reports them)."""
+    """(seconds on a frame, title) of project.json "chapters", in time order."""
     root = project_root(project)
     doc = D.load(root)
     if not doc.chapters:
@@ -101,10 +93,7 @@ def chapters(project, fps: float) -> list[tuple[float, str]]:
     sched = D.schedule(doc, voice)
     out = []
     for ch in doc.chapters:
-        try:
-            t = T.resolve(ch.at, sched)
-        except T.TimeError:
-            continue
+        t = T.resolve(ch.at, sched)
         out.append((T.to_frame(t, fps) / fps, " ".join(ch.title.split())))
     return sorted(out, key=lambda x: x[0])
 

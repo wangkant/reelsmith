@@ -42,16 +42,10 @@ def _text_of(content) -> str:
     return ""
 
 
-def _usage_row(usage) -> dict:
-    u = usage if isinstance(usage, dict) else {}
-    row = {}
-    for key in ("prompt_tokens", "completion_tokens", "cached_tokens", "reasoning_tokens"):
-        try:
-            row[key] = int(u.get(key) or 0)
-        except (TypeError, ValueError):
-            row[key] = 0
-    cost = u.get("cost_usd")
-    row["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+def _usage_row(usage: dict) -> dict:
+    row = {key: int(usage.get(key) or 0)
+           for key in ("prompt_tokens", "completion_tokens", "cached_tokens", "reasoning_tokens")}
+    row["cost_usd"] = usage.get("cost_usd")
     return row
 
 
@@ -76,7 +70,7 @@ def encode_image(path, max_edge: int = 1280) -> str:
 
 
 class Agent:
-    """One model, its tools, a system prompt and limits. run() never raises (KeyboardInterrupt aside)."""
+    """One model, its tools, a system prompt and limits. A model error ends run() with out["error"]."""
 
     def __init__(self, client, tools: list, system: str, limits: dict | None = None, log=None, price=None, *,
                  on_turn=None, clock=None, session_id: str | None = None):
@@ -103,20 +97,14 @@ class Agent:
 
     # ------------------------------------------------------------ logging
     def _event(self, kind: str, **data) -> None:
-        try:
-            if hasattr(self.log, "event"):
-                self.log.event(kind, **data)
-            elif callable(self.log):
-                self.log(kind, data)
-        except Exception:  # noqa: BLE001 - logging never stops the run
-            pass
+        if hasattr(self.log, "event"):
+            self.log.event(kind, **data)
+        elif callable(self.log):
+            self.log(kind, data)
 
     def _line(self, text: str) -> None:
-        try:
-            if hasattr(self.log, "line"):
-                self.log.line(text)
-        except Exception:  # noqa: BLE001
-            pass
+        if hasattr(self.log, "line"):
+            self.log.line(text)
 
     # ------------------------------------------------------------ the loop
     def run(self, prompt: str, history: list[dict] | None = None) -> dict:
@@ -127,95 +115,82 @@ class Agent:
                "aborted": None, "error": None, "messages": messages, "session_id": self.session_id}
         nudged = False
         no_price_warned = False
-        try:
-            # a copy: elision rewrites old messages, and the caller's history stays as it was
-            messages += copy.deepcopy([m for m in history or [] if isinstance(m, dict)])
-            if not messages or messages[0].get("role") != "system":
-                messages.insert(0, {"role": "system", "content": self.system})
-            if prompt:
-                messages.append({"role": "user", "content": prompt})
-            # some servers reuse ids like call_0 every turn; others refuse a repeated id anywhere in the history
-            self._ids = {str(c.get("id")) for m in messages for c in m.get("tool_calls") or []
-                         if isinstance(c, dict) and c.get("id")}
-            self._event("start", session_id=self.session_id, prompt=prompt, resumed=bool(history),
-                        tools=list(self.tools), limits=self.limits)
-            while True:
-                sent = len(messages)
-                try:
-                    reply = self.client.complete(messages, self.specs)
-                except Exception as exc:  # noqa: BLE001
-                    out["error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
-                    self._event("error", error=out["error"], turn=out["turns"] + 1)
-                    self._line(f"model error {out['error'][:300]}")
-                    break
-                out["turns"] += 1
-                usage = _usage_row(reply.get("usage"))
-                for key in totals:
-                    totals[key] += usage[key]
-                cost = usage["cost_usd"]
+        # a copy: elision rewrites old messages, and the caller's history stays as it was
+        messages += copy.deepcopy(history or [])
+        if not messages or messages[0].get("role") != "system":
+            messages.insert(0, {"role": "system", "content": self.system})
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        # some servers reuse ids like call_0 every turn; others refuse a repeated id anywhere in the history
+        self._ids = {str(c.get("id")) for m in messages for c in m.get("tool_calls") or [] if c.get("id")}
+        self._event("start", session_id=self.session_id, prompt=prompt, resumed=bool(history),
+                    tools=list(self.tools), limits=self.limits)
+        while True:
+            sent = len(messages)
+            try:
+                reply = self.client.complete(messages, self.specs)
+            except Exception as exc:  # noqa: BLE001
+                out["error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
+                self._event("error", error=out["error"], turn=out["turns"] + 1)
+                self._line(f"model error {out['error'][:300]}")
+                break
+            out["turns"] += 1
+            usage = _usage_row(reply.get("usage"))
+            for key in totals:
+                totals[key] += usage[key]
+            cost = usage["cost_usd"]
+            if cost is None:
+                out["cost_estimated"] = True
+                cost = self._priced(reply.get("usage"))
                 if cost is None:
-                    out["cost_estimated"] = True
-                    cost = self._priced(reply.get("usage"))
-                    if cost is None:
-                        cost = 0.0
-                        if self.limits["budget_usd"] is not None and not no_price_warned:
-                            no_price_warned = True
-                            self._line("warning: the provider reports no cost and there is no price table; "
-                                       "the budget cannot be enforced")
-                out["cost_usd"] = round(out["cost_usd"] + cost, 6)
+                    cost = 0.0
+                    if self.limits["budget_usd"] is not None and not no_price_warned:
+                        no_price_warned = True
+                        self._line("warning: the provider reports no cost and there is no price table; "
+                                   "the budget cannot be enforced")
+            out["cost_usd"] = round(out["cost_usd"] + cost, 6)
 
-                message = self._keep(reply.get("message"))
-                calls = message.get("tool_calls") or []
-                text = _text_of(message.get("content"))
-                self._event("turn", turn=out["turns"], finish_reason=reply.get("finish_reason"),
-                            model=reply.get("model"), provider=reply.get("provider"), usage=usage,
-                            cost_usd=out["cost_usd"], message=message)
-                if text.strip():
-                    self._line("say " + _flat(text)[:200])
-                if calls:
-                    nudged = False
-                    messages.append(message)
-                    names = self._run_calls(calls, messages)
-                elif text.strip():
-                    messages.append(message)
-                    out["result"] = text
-                    self._turned(out, usage, reply, [])
-                    break
-                elif not nudged:
-                    # an empty answer is not an answer: ask once, then give up
-                    nudged = True
-                    names = []
-                    messages.append({"role": "user", "content": NUDGE})
-                    self._line("empty reply: nudged")
-                else:
-                    out["aborted"] = "the model gave two empty replies"
-                    self._turned(out, usage, reply, [])
-                    break
-                self._fit(messages, usage["prompt_tokens"], sent)
-                self._turned(out, usage, reply, names)
-                out["aborted"] = self._over(out, started)
-                if out["aborted"]:
-                    self._event("abort", reason=out["aborted"], turn=out["turns"])
-                    self._line(f"abort: {out['aborted']}")
-                    break
-        except Exception as exc:  # noqa: BLE001 - the outcome says what happened
-            out["error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
-            self._event("error", error=out["error"], turn=out["turns"])
-            self._line(f"loop error {out['error'][:300]}")
+            message = self._keep(reply.get("message"))
+            calls = message.get("tool_calls") or []
+            text = _text_of(message.get("content"))
+            self._event("turn", turn=out["turns"], finish_reason=reply.get("finish_reason"),
+                        model=reply.get("model"), provider=reply.get("provider"), usage=usage,
+                        cost_usd=out["cost_usd"], message=message)
+            if text.strip():
+                self._line("say " + _flat(text)[:200])
+            if calls:
+                nudged = False
+                messages.append(message)
+                names = self._run_calls(calls, messages)
+            elif text.strip():
+                messages.append(message)
+                out["result"] = text
+                self._turned(out, usage, reply, [])
+                break
+            elif not nudged:
+                # ask once after an empty answer, then give up
+                nudged = True
+                names = []
+                messages.append({"role": "user", "content": NUDGE})
+                self._line("empty reply: nudged")
+            else:
+                out["aborted"] = "the model gave two empty replies"
+                self._turned(out, usage, reply, [])
+                break
+            self._fit(messages, usage["prompt_tokens"], sent)
+            self._turned(out, usage, reply, names)
+            out["aborted"] = self._over(out, started)
+            if out["aborted"]:
+                self._event("abort", reason=out["aborted"], turn=out["turns"])
+                self._line(f"abort: {out['aborted']}")
+                break
         out["cost_usd"] = round(out["cost_usd"], 6)
         self._event("end", turns=out["turns"], cost_usd=out["cost_usd"], usage=totals, aborted=out["aborted"],
                     error=out["error"], result=out["result"])
         return out
 
-    def _priced(self, usage) -> float | None:
-        if self.price is None:
-            return None
-        try:
-            value = self.price(usage if isinstance(usage, dict) else {})
-            return float(value) if value is not None else None
-        except Exception as exc:  # noqa: BLE001
-            self._line(f"price failed ({type(exc).__name__}: {exc})")
-            return None
+    def _priced(self, usage: dict) -> float | None:
+        return None if self.price is None else self.price(usage)
 
     def _over(self, out: dict, started: float) -> str | None:
         lim = self.limits
@@ -233,16 +208,12 @@ class Agent:
         info = {"turn": out["turns"], "session_id": self.session_id, "usage": usage, "totals": dict(out["usage"]),
                 "cost_usd": out["cost_usd"], "finish_reason": reply.get("finish_reason"), "tools": names,
                 "messages": out["messages"]}
-        try:
-            self.on_turn(info)
-        except Exception as exc:  # noqa: BLE001
-            self._line(f"on_turn failed ({type(exc).__name__}: {exc})")
+        self.on_turn(info)
 
     @staticmethod
     def _keep(message) -> dict:
         """The assistant message as returned, minus null fields a provider may refuse on the way back."""
-        msg = copy.deepcopy(message) if isinstance(message, dict) else {}
-        msg = {k: v for k, v in msg.items() if v is not None or k == "content"}
+        msg = {k: v for k, v in copy.deepcopy(message).items() if v is not None or k == "content"}
         msg["role"] = "assistant"
         msg.setdefault("content", None)
         calls = msg.get("tool_calls")
@@ -277,7 +248,7 @@ class Agent:
         return names
 
     def _call(self, name: str, raw_args) -> tuple[str, bool, list]:
-        """(text, error, images) for one tool call; nothing it does escapes as an exception."""
+        """(text, error, images) for one tool call; a tool's exception goes back to the model as text."""
         args, text, error, pics = raw_args, "", True, []
         t0 = time.monotonic()
         tool = self.tools.get(name)
@@ -311,13 +282,8 @@ class Agent:
         edge = int(self.limits.get("max_image_edge") or 0)
         shown, parts = images[:cap] if cap else images, []
         for tool, path in shown:
-            try:
-                url = encode_image(path, edge)
-            except Exception as exc:  # noqa: BLE001
-                parts.append({"type": "text", "text": f"({tool}) could not attach {path.name}: {type(exc).__name__}"})
-                continue
             parts.append({"type": "text", "text": f"({tool}) {path.name}"})
-            parts.append({"type": "image_url", "image_url": {"url": url}})
+            parts.append({"type": "image_url", "image_url": {"url": encode_image(path, edge)}})
         names = ", ".join(p.name for _, p in shown)
         head = f"(runner) Images from the tool calls above: {names}."
         if len(images) > len(shown):

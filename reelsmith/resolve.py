@@ -148,7 +148,7 @@ def ease_at(ease: str | None, t: float, length: float, fps: float) -> float:
 def value_at(frames: list[dict], f: float, fps: float) -> float | None:
     """The keyframed value at frame f ({"f", "v", "ease"} items, frames from the clip start); holds outside the
     range; the move into keyframe k is shaped by k's ease (valueAt)."""
-    k = sorted((x for x in frames if math.isfinite(x["f"]) and math.isfinite(x["v"])), key=lambda x: x["f"])
+    k = sorted(frames, key=lambda x: x["f"])
     if not k:
         return None
     if f <= k[0]["f"]:
@@ -320,7 +320,7 @@ def media_duration(path: Path) -> float | None:
         try:
             from . import media
             _DURATIONS[key] = media.duration(path)
-        except Exception:  # noqa: BLE001 - no ffprobe, odd file: the renderer copes without it
+        except Exception:  # noqa: BLE001 - no ffprobe or an odd file: the renderer copes without it
             _DURATIONS[key] = None
     return _DURATIONS[key]
 
@@ -356,11 +356,6 @@ def char_words(text: str) -> list[int]:
     return [len(m.group()) for m in _CHAR_WORD.finditer(text)]
 
 
-def _fits(text: str, lengths) -> bool:
-    return (isinstance(lengths, list) and all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in lengths)
-            and sum(lengths) == len(text))
-
-
 def _node_words(texts: list[str], locale: str = locales.DEFAULT_LOCALE) -> list[list[int]] | None:
     """Word lengths per text from renderer/scripts/segment.mjs in one node call; None when node cannot be used."""
     node = shutil.which("node")
@@ -372,15 +367,14 @@ def _node_words(texts: list[str], locale: str = locales.DEFAULT_LOCALE) -> list[
     try:
         proc = subprocess.run([node, str(script)], input=payload, capture_output=True, timeout=30,
                               creationflags=NO_WINDOW)
-        words = json.loads(proc.stdout.decode("utf-8"))["words"]
     except subprocess.TimeoutExpired:
         _NODE["hung"] = True
         return None
-    except (OSError, ValueError, KeyError, TypeError):
+    except OSError:
         return None
-    if proc.returncode != 0 or not isinstance(words, list) or len(words) != len(texts):
+    if proc.returncode != 0:
         return None
-    return words if all(_fits(t, w) for t, w in zip(texts, words)) else None
+    return json.loads(proc.stdout.decode("utf-8"))["words"]
 
 
 def _key(text: str, locale: str = locales.DEFAULT_LOCALE) -> str:
@@ -392,9 +386,7 @@ def _read_segment_cache(path: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    ok = isinstance(data, dict) and data.get("version") == SEGMENT_VERSION
-    words = data.get("words") if ok else None
-    return words if isinstance(words, dict) else {}
+    return data["words"] if data.get("version") == SEGMENT_VERSION else {}
 
 
 def word_breaks(texts, cache_dir: Path | None = None,
@@ -407,7 +399,7 @@ def word_breaks(texts, cache_dir: Path | None = None,
     path = Path(cache_dir) / SEGMENT_CACHE if cache_dir is not None else None
     disk = _read_segment_cache(path) if missing and path else {}
     for t in missing:
-        if _fits(t, disk.get(_key(t, locale))):
+        if _key(t, locale) in disk:
             out[t] = _WORDS[(locale, t)] = disk[_key(t, locale)]
     missing = [t for t in missing if t not in out]
     if not missing:
@@ -421,10 +413,7 @@ def word_breaks(texts, cache_dir: Path | None = None,
         disk.update({_key(t, locale): w for t, w in zip(missing, words)})
         if len(disk) > SEGMENT_CACHE_MAX:
             disk = {_key(t, locale): out[t] for t in want if out.get(t) is not None}
-        try:
-            D.write_json(path, {"version": SEGMENT_VERSION, "words": disk})
-        except OSError:
-            pass                                # read-only project: the memo still holds them
+        D.write_json(path, {"version": SEGMENT_VERSION, "words": disk})
     return out
 
 
@@ -510,7 +499,7 @@ def phrase_spans(text: str, max_chars: int = 14, words: list[int] | None = None)
     never inside a word, a number or a number and its unit; short ones merged forward; a closing quote or bracket
     stays with the text before it. Each phrase is one or more spans (merged parts). `words`: word lengths
     (segment.mjs); None looks them up (word_breaks)."""
-    if words is None or not _fits(text, words):
+    if words is None:
         words = word_breaks([text]).get(text) or char_words(text)
     toks, pos = [], 0
     for n in words:
@@ -661,7 +650,7 @@ def line_phrases(text: str, max_chars: int, emphasis: list[str],
     (_phrase_words)."""
     plain, flags = _plain(text)
     emph = _emphasis(plain, emphasis)
-    if words is None or not _fits(plain, words):
+    if words is None:
         words = word_breaks([plain]).get(plain) or char_words(plain)
     out = []
     for spans in phrase_spans(plain, max_chars, words):
@@ -1307,15 +1296,12 @@ def project_fonts(project) -> list[dict]:
             taken.add(name.lower())
             dst = folder / name
             if not _same_file(src, dst):
+                folder.mkdir(parents=True, exist_ok=True)
+                dst.unlink(missing_ok=True)
                 try:
-                    folder.mkdir(parents=True, exist_ok=True)
-                    dst.unlink(missing_ok=True)
-                    try:
-                        os.link(src, dst)
-                    except OSError:
-                        shutil.copy2(src, dst)
+                    os.link(src, dst)
                 except OSError:
-                    continue
+                    shutil.copy2(src, dst)
             row = {"family": family, "src": f"build/{FONTS_DIR}/{name}"}
             row.update({k: face[k] for k in ("weight", "style") if face.get(k)})
             out.append(row)
@@ -1326,11 +1312,7 @@ def resolve(project) -> dict:
     """resolved.json for the project (also written to build/resolved.json). Raises DocumentError for a project
     that does not fit the schema and ResolveError when the film has no length or an unknown profile."""
     resolved = _Resolver(project).run()
-    path = project_paths(project).resolved
-    try:
-        D.write_json(path, resolved)
-    except OSError:
-        pass                                # read-only project: the dict is what callers use
+    D.write_json(project_paths(project).resolved, resolved)
     return resolved
 
 

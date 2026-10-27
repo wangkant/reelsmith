@@ -100,10 +100,7 @@ def first_line(cmd: list[str]) -> tuple[int, str]:
 
 
 def has_module(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError):
-        return False
+    return importlib.util.find_spec(name) is not None
 
 
 def renderer_dir() -> Path:
@@ -305,11 +302,8 @@ def check_capture(os_name: str) -> Check:
 
 def check_codex(os_name: str) -> Check:
     enables = "draw: original pictures through Codex image generation, on the user's Codex sign-in"
-    try:
-        from .providers.draw import find_codex
-        path = find_codex()
-    except Exception as exc:  # noqa: BLE001 - a broken optional provider is a finding, not a crash
-        return Check("codex", False, False, f"cannot look for Codex: {type(exc).__name__}: {exc}", "", enables)
+    from .providers.draw import find_codex
+    path = find_codex()
     if path:
         return Check("codex", True, False, f"Codex CLI at {path} (the user signs in once with `codex login`)",
                      enables=enables)
@@ -408,10 +402,7 @@ def key_names(ws: Path | None) -> dict[str, str]:
 
 def check_keys(ws: Path | None, os_name: str) -> list[Check]:
     dotenv = ws / ENV_FILE if ws else None
-    try:
-        stored = parse_dotenv(dotenv.read_text(encoding="utf-8-sig")) if dotenv and dotenv.is_file() else {}
-    except OSError:
-        stored = {}
+    stored = parse_dotenv(dotenv.read_text(encoding="utf-8-sig")) if dotenv and dotenv.is_file() else {}
     rows = []
     for name, enables in key_names(ws).items():
         if stored.get(name):

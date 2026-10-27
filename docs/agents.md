@@ -36,7 +36,7 @@ cloned repository can carry one). The installed skill is a copy: run setup again
 
 `skills/reelsmith/SKILL.md` (the Agent Skills format) tells an agent what reelsmith is (an editor it drives, not a
 text-to-video model), when to use it (any request to make or edit a video), the working loop (manual, notes, new
-project, assets, edit, preview, check, render, review) and the rules that save a render. It is short on purpose and
+project, assets, edit, preview, check, render, review) and the rules that save a render. It is short and
 sends the agent to the `manual` tool for the contract.
 
 ## Claude Code

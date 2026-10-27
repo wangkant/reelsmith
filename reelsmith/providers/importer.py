@@ -31,10 +31,6 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 MEDIA_TYPES = ("image/", "video/", "audio/")
 GENERIC_TYPES = ("application/octet-stream", "binary/octet-stream", "application/mp4", "application/ogg", "")
 FORMATS = "PNG, JPEG, GIF, WebP, MP4, MOV, WebM, MKV, MP3, WAV, M4A, AAC, OGG, Opus, FLAC"
-# what project.json validation takes per kind (reelsmith.document.EXTENSIONS; this copy only when it cannot load)
-_EXTENSIONS = {"image": {".png", ".jpg", ".jpeg", ".webp", ".gif"}, "evidence": {".png", ".jpg", ".jpeg", ".webp"},
-               "video": {".mp4", ".m4v", ".mov", ".webm", ".mkv"},
-               "audio": {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac"}}
 EVIDENCE_TYPES = ("image/png", "image/jpeg", "image/jpg", "image/webp")
 _URL_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]+):")     # 2+ letters: "C:" is a drive, not a scheme
 SPARE_BYTES = 256 << 20     # a copy must leave this much of the disk free
@@ -120,11 +116,8 @@ def classify(path: Path) -> tuple[str, str, str]:
 
 def accepted(kind: str) -> set[str]:
     """File extensions an asset of `kind` may have."""
-    try:
-        table = importlib.import_module("reelsmith.document").EXTENSIONS
-    except Exception:  # noqa: BLE001 — a half-written neighbour must not take the tool down
-        table = _EXTENSIONS
-    return set(table.get(kind) or _EXTENSIONS.get(kind) or ())
+    from ..document import EXTENSIONS
+    return set(EXTENSIONS[kind])
 
 
 def _type_refusal(kind: str, ext: str) -> str:
@@ -307,10 +300,7 @@ def import_asset(project, id, source, kind=None, *, opener=None, resolve=None):
 def _hdr(path: Path) -> str | None:
     if not shutil.which("ffprobe"):
         return None
-    try:
-        return importlib.import_module(f"{__package__}.footage").hdr_of_file(path)
-    except Exception:  # noqa: BLE001 - only a note
-        return None
+    return importlib.import_module(f"{__package__}.footage").hdr_of_file(path)
 
 
 def _human(n: int) -> str:
@@ -376,13 +366,13 @@ def assets(project):
     """(text, is_error): the project's assets with kinds, sizes and durations; files not registered; spend."""
     ctx = context(project)
     data = read_project(ctx)
-    entries = data.get("assets") if isinstance(data.get("assets"), dict) else {}
+    entries = data.get("assets") or {}
     tracks = data.get("tracks") or []
-    rows = [f"Assets ({len(entries)}):"] + [f"  {_describe(ctx, k, v if isinstance(v, dict) else {}, tracks)}"
+    rows = [f"Assets ({len(entries)}):"] + [f"  {_describe(ctx, k, v, tracks)}"
                                             for k, v in sorted(entries.items())]
     if not entries:
         rows = ["Assets: none yet (speak, capture, draw, animate, import_asset add them)."]
-    known = {str((v or {}).get("path") or "").lower() for v in entries.values() if isinstance(v, dict)}
+    known = {str(v.get("path") or "").lower() for v in entries.values()}
     loose = sorted(rel(ctx, f) for f in ctx.assets_dir.glob("*")
                    if f.is_file() and not f.name.startswith(".") and rel(ctx, f).lower() not in known) \
         if ctx.assets_dir.is_dir() else []

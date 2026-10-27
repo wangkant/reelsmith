@@ -1,6 +1,6 @@
 """Function tools for the api engine: the reelsmith tools, file tools fenced by guard.py, and the web.
 
-Each Tool carries a JSON Schema for its arguments and a run(args) -> ToolResult that never raises. The reelsmith tools
+Each Tool carries a JSON Schema for its arguments and a run(args) -> ToolResult; a tool's exception comes back as text. The reelsmith tools
 get the schemas the MCP server publishes (derived from their signatures and docstrings) and the same guard checks the
 Claude engine's hook applies; the file tools are checked as Read, Write, Edit, Glob and Grep.
 """
@@ -10,7 +10,6 @@ import contextlib
 import fnmatch
 import inspect
 import itertools
-import json
 import logging
 import os
 import re
@@ -18,6 +17,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from pydantic import ValidationError
 
 from .. import guard
 from .. import tools as rtools
@@ -79,20 +80,11 @@ def _fail(text: str) -> ToolResult:
 
 
 def _safe(name: str, run: Callable[[dict], ToolResult]) -> Callable[[dict], ToolResult]:
-    """No tool raises: a crash and a non-ToolResult come back as text."""
-    def call(args) -> ToolResult:
-        if args is None:
-            args = {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args) if args.strip() else {}
-            except ValueError:
-                return _fail(f"{name}: the arguments are not valid JSON: {args[:200]}")
-        if not isinstance(args, dict):
-            return _fail(f"{name}: the arguments must be a JSON object")
+    """A tool's exception and a non-ToolResult come back as text."""
+    def call(args: dict) -> ToolResult:
         try:
             result = run(args)
-        except Exception as exc:  # noqa: BLE001 - the loop must get text, never an exception
+        except Exception as exc:  # noqa: BLE001 - a failed tool call goes back to the model
             return _fail(f"{name} failed: {type(exc).__name__}: {exc}")
         if isinstance(result, ToolResult):
             return result
@@ -156,11 +148,7 @@ def _confined(root: Path):
 
 
 def _validation_text(exc) -> str:
-    try:
-        rows = [f"{'.'.join(str(x) for x in e.get('loc') or ()) or 'arguments'}: {e.get('msg')}"
-                for e in exc.errors()]
-    except Exception:  # noqa: BLE001
-        rows = [str(exc)]
+    rows = [f"{'.'.join(str(x) for x in e.get('loc') or ()) or 'arguments'}: {e.get('msg')}" for e in exc.errors()]
     return "; ".join(rows[:8])
 
 
@@ -182,7 +170,7 @@ def reelsmith_tool(name: str, fn, project: Path, scope: guard.Scope) -> Tool:
             args["project"] = str(project)          # the guard saw the same project: "." must not mean our cwd
         try:
             kwargs = meta.fn_metadata.validate_arguments(args)
-        except Exception as exc:  # noqa: BLE001 - pydantic's ValidationError and kin
+        except ValidationError as exc:
             return _fail(f"{name}: invalid arguments: {_validation_text(exc)}")
         with _confined(scope.home):
             result = fn(**kwargs)
@@ -408,14 +396,8 @@ def glob_tool(project: Path, scope: guard.Scope) -> Tool:
                 found.setdefault(p)
                 if len(found) >= GLOB_SCAN:
                     break
-
-        def mtime(p: Path) -> float:
-            try:
-                return p.stat().st_mtime
-            except OSError:
-                return 0.0
         rows = []
-        for p in sorted(found, key=mtime, reverse=True):
+        for p in sorted(found, key=lambda q: q.stat().st_mtime, reverse=True):
             if _readable(p, scope):
                 rows.append(_show(p, project) + ("/" if p.is_dir() else ""))
                 if len(rows) >= GLOB_SHOWN:
@@ -527,10 +509,7 @@ def list_dir_tool(project: Path, scope: guard.Scope) -> Tool:
             if p.is_dir():
                 dirs.append(p.name + "/")
             else:
-                try:
-                    files.append(f"{p.name}  {_size(p.stat().st_size)}")
-                except OSError:
-                    files.append(p.name)
+                files.append(f"{p.name}  {_size(p.stat().st_size)}")
         rows = dirs + files
         if not rows:
             return ToolResult(f"{show} is empty")
@@ -611,33 +590,20 @@ def toolbox(project: Path, ws, scope: guard.Scope, web: dict | None = None,
     project = Path(project)
     web = dict(web or {})
     if not web.get("locale"):
-        try:
-            web["locale"] = locale_for(project)
-        except ValueError:
-            web["locale"] = "en"                # check reports a malformed locale
+        web["locale"] = locale_for(project)
     notes: list[str] = []
     tools = reelsmith_tools(project, scope) + file_tools(project, scope)
     if web.get("fetch", True):
         tools.append(web_fetch_tool(web))
     else:
         notes.append("web_fetch is left out: turned off (web.fetch)")
-    keys = getattr(ws, "keys", None) if ws is not None else None
-    search, why = W.search_backend(web, keys)
+    search, why = W.search_backend(web, getattr(ws, "keys", None))
     if search is not None:
         tools.append(web_search_tool(search))
     else:
         notes.append(why)
     for t in extra or []:
-        if not isinstance(t, Tool):
-            raise TypeError(f"extra tools must be agent.tools.Tool, got {type(t).__name__}")
         tools.append(Tool(t.name, t.description, t.parameters, _safe(t.name, t.run)))
-    seen = set()
-    for t in tools:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", t.name):
-            raise ValueError(f"tool name {t.name!r} must be 1-64 letters, digits, _ or -")
-        if t.name in seen:
-            raise ValueError(f"two tools are named {t.name!r}")
-        seen.add(t.name)
     for n in notes:
         log.info("toolbox: %s", n)
     return Toolbox(tools, notes)

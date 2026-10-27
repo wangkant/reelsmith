@@ -405,7 +405,6 @@ class DocumentError(ValueError):
         super().__init__("; ".join(f"{i.where}: {i.msg}" for i in issues[:5]) or "invalid project")
 
     def errors(self) -> list[dict]:
-        # the shape checks.describe_load_error reads
         return [{"loc": (i.where,), "msg": i.msg} for i in self.issues]
 
 
@@ -527,8 +526,6 @@ def read_raw(project) -> dict:
 
 def parse(data: dict) -> Document:
     """A Document from a dict; DocumentError listing every schema problem."""
-    if not isinstance(data, dict):
-        raise DocumentError([Issue("error", "(project)", "project.json must hold a JSON object {...}")])
     try:
         return Document.model_validate(data, strict=True)
     except ValidationError as exc:
@@ -563,7 +560,7 @@ def write_json(path: Path, data) -> None:
         tmp.write_bytes((json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))   # LF on every OS
         os.replace(tmp, path)
     finally:
-        tmp.unlink(missing_ok=True)             # gone after a replace; left only when the replace failed
+        tmp.unlink(missing_ok=True)
 
 
 def save(project, doc: Document | dict) -> Path:
@@ -1267,10 +1264,8 @@ class _Check:
                                                       "none (give items to write them by hand)")
 
 
-def validate(project, doc: Document | dict) -> list[Issue]:
+def validate(project, doc: Document) -> list[Issue]:
     """Every problem with the project, errors first in file order; [] when it is clean."""
-    if isinstance(doc, dict):
-        return check_data(project, doc)[1]
     issues = _Check(project, doc).run()
     order = {"error": 0, "warning": 1, "advice": 2}
     return sorted(issues, key=lambda i: order.get(i.level, 9))

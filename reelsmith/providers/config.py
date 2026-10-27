@@ -75,100 +75,32 @@ def redact(text: Any, secrets: list[str] | tuple[str, ...] = ()) -> str:
 
 
 # ------------------------------------------------------------------ workspace
-def _workspace_module():
-    try:
-        mod = importlib.import_module("reelsmith.workspace")
-    except Exception:  # noqa: BLE001 — a half-written neighbour must not take the tools down
-        return None
-    return mod if hasattr(mod, "find_workspace") else None
-
-
-@dataclass
-class _LocalWorkspace:
-    """Stand-in with Workspace's attribute names, used only when reelsmith.workspace cannot be imported."""
-    root: Path
-    config: dict
-    keys: dict
-
-    @property
-    def ledger_path(self) -> Path:
-        return self.root / "ledger.jsonl"
-
-    @property
-    def cache_dir(self) -> Path:
-        return self.root / ".cache"
-
-
-def _parse_env(path: Path) -> dict:
-    out = {}
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except OSError:
-        return out
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.removeprefix("export ").partition("=")
-        v = v.strip().strip("'\"")
-        if k.strip() and v:
-            out[k.strip()] = v
-    return out
-
-
-def _local_find(project_dir: Path):
-    for d in (project_dir, *project_dir.parents):
-        cfg = d / "workspace.json"
-        if cfg.is_file():
-            try:
-                data = json.loads(cfg.read_text(encoding="utf-8-sig"))
-            except (OSError, ValueError) as exc:
-                raise ProviderError(f"{cfg} is not valid JSON ({exc}); fix it first") from None
-            # .env only: Context.key falls back to the environment, and secrets() must not list PATH and friends
-            return _LocalWorkspace(d, data if isinstance(data, dict) else {}, _parse_env(d / ".env"))
-    return None
-
-
 def project_profile(ctx):
-    """The project's profile (workspace.profile_for); None when it cannot be read."""
-    mod = _workspace_module()
-    try:
-        return mod.profile_for(ctx.project) if mod is not None and hasattr(mod, "profile_for") else None
-    except Exception:  # noqa: BLE001 - check and render report a bad profile; a tool falls back to its default
-        return None
+    """The project's profile (workspace.profile_for)."""
+    from ..workspace import profile_for
+    return profile_for(ctx.project)
 
 
 def project_locale(ctx) -> str:
-    """The project's locale (workspace.locale_for), "en" without one; ProviderError for a malformed tag."""
-    mod = _workspace_module()
-    if mod is None or not hasattr(mod, "locale_for"):
-        return "en"
+    """The project's locale (workspace.locale_for); ProviderError for a malformed tag."""
+    from ..workspace import locale_for
     try:
-        return mod.locale_for(ctx.project)
+        return locale_for(ctx.project)
     except ValueError as exc:
         raise ProviderError(f"{exc} (project.json or workspace.json locale)") from None
 
 
 def find_workspace(project_dir: Path):
-    mod = _workspace_module()
-    if mod is None:
-        return _local_find(project_dir)
+    from .. import workspace
     try:
-        return mod.find_workspace(project_dir)
+        return workspace.find_workspace(project_dir)
     except ValueError as exc:               # WorkspaceError: a file the owner must fix
         raise ProviderError(str(exc)) from None
 
 
-def _as_dict(value) -> dict:
-    if isinstance(value, dict):
-        return value
-    dump = getattr(value, "model_dump", None)
-    return dump() if callable(dump) else {}
-
-
 def _merged(defaults: dict, found) -> dict:
     out = copy.deepcopy(defaults)
-    for name, part in _as_dict(found).items():
+    for name, part in (found or {}).items():
         if isinstance(part, dict) and isinstance(out.get(name), dict):
             out[name].update(part)
         elif isinstance(part, dict):
@@ -191,7 +123,7 @@ def _env_number(name: str) -> float | None:
 
 def _budget(found) -> dict:
     budget = dict(DEFAULT_BUDGET)
-    for k, v in _as_dict(found).items():
+    for k, v in (found or {}).items():
         if k in budget and v is not None:
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
                 raise ProviderError(f"workspace.json budget.{k} must be a number >= 0 (got {v!r})")
@@ -229,12 +161,7 @@ class Context:
 
     def key(self, name: str) -> str:
         """A provider key from Workspace.keys or the environment; '' when absent."""
-        value = None
-        if self._keys is not None:
-            try:
-                value = self._keys.get(name)
-            except Exception:  # noqa: BLE001
-                value = None
+        value = self._keys.get(name) if self._keys is not None else None
         return str(value or os.environ.get(name) or "").strip()
 
     def secrets(self) -> list[str]:
@@ -263,15 +190,11 @@ def context(project) -> Context:
     p = project_dir(project)
     ws = find_workspace(p)
     if ws is not None:
-        cfg = _as_dict(getattr(ws, "config", {}))
-        root = Path(ws.root)
-        ledger_path = Path(getattr(ws, "ledger_path", root / "ledger.jsonl"))
-        cache = Path(getattr(ws, "cache_dir", root / ".cache"))
+        cfg, ledger_path, cache, keys = ws.config, ws.ledger_path, ws.cache_dir, ws.keys
         try:
-            key = p.relative_to(root).as_posix() or p.name
+            key = p.relative_to(ws.root).as_posix() or p.name
         except ValueError:
             key = p.name
-        keys = getattr(ws, "keys", None)
     else:
         # outside a workspace the project keeps its own ledger and cache; keys from the environment
         cfg, ledger_path, cache, key, keys = {}, p / "ledger.jsonl", p / ".cache", p.name, None
@@ -292,16 +215,15 @@ def safe_tool(fn: Callable) -> Callable:
             text, is_error = f"{fn.__name__} failed: {type(exc).__name__}: {exc}", True
         try:
             ws = find_workspace(project_dir(project))
-            secrets = _dict_values(getattr(ws, "keys", None))
-        except Exception:  # noqa: BLE001
-            secrets = []
-        return redact(text, secrets), bool(is_error)
+        except ProviderError:
+            ws = None
+        return redact(text, _dict_values(ws.keys if ws else None)), bool(is_error)
     return wrapper
 
 
 def _dict_values(keys) -> list[str]:
     # dict.values: Workspace.keys falls back to os.environ on lookup, but only its .env entries are stored
-    return [str(v) for v in dict.values(keys) if v] if isinstance(keys, dict) else []
+    return [str(v) for v in dict.values(keys) if v] if keys is not None else []
 
 
 # ------------------------------------------------------------------ validation
@@ -385,22 +307,18 @@ def ensure_project(ctx: Context) -> None:
 
 
 def existing_asset(ctx: Context, asset_id: str) -> dict | None:
-    assets = read_project(ctx).get("assets")
-    entry = assets.get(asset_id) if isinstance(assets, dict) else None
-    return entry if isinstance(entry, dict) else None
+    return (read_project(ctx).get("assets") or {}).get(asset_id)
 
 
 def check_replaceable(ctx: Context, asset_id: str, kind: str) -> dict | None:
     """The existing entry for asset_id, refused before any work when it holds another kind of asset or when another
     id differs from it only by case."""
-    assets = read_project(ctx).get("assets")
-    assets = assets if isinstance(assets, dict) else {}
+    assets = read_project(ctx).get("assets") or {}
     twin = next((k for k in assets if k != asset_id and str(k).lower() == asset_id.lower()), None)
     if twin is not None:
         raise ProviderError(f"asset id {asset_id!r} differs from the existing {twin!r} only by case; the two would "
                             f"share a file. Use {twin!r} to replace it, or pick another id")
     old = assets.get(asset_id)
-    old = old if isinstance(old, dict) else None
     if old is not None and old.get("kind") != kind:
         was = str(old.get("kind"))
         raise ProviderError(f"asset id {asset_id!r} already names {'an' if was[:1] in 'aeiou' else 'a'} {was} "
@@ -408,76 +326,39 @@ def check_replaceable(ctx: Context, asset_id: str, kind: str) -> dict | None:
     return old
 
 
-def _ops_apply():
-    # importlib, not `from reelsmith import ops`: sys.modules is the one seam tests and callers can swap
-    try:
-        ops = importlib.import_module("reelsmith.ops")
-    except Exception:  # noqa: BLE001 — missing or half-written: fall back to writing project.json
-        return None
-    apply = getattr(ops, "apply", None)
-    return apply if callable(apply) else None
-
-
-def _issues_text(issues) -> str:
-    if isinstance(issues, (str, bytes)):
-        issues = [issues]
-    rows = [str(i) for i in (issues or [])][:4]
-    return "; ".join(rows)
-
-
 class EditRefused(ProviderError):
-    """reelsmith.ops refused (or failed on) a provider's change; project.json was left as it was."""
+    """reelsmith.ops refused a provider's change; project.json was left as it was."""
 
     def __init__(self, why: str):
         super().__init__(why)
         self.why = why
 
 
-def _apply_or_write(ctx: Context, ops: list[dict], direct: Callable[[dict], None], replacing: bool = False) -> str:
-    """Run the ops through reelsmith.ops (validated, undoable); a note for the agent ('' when ops took it). When ops
-    refuses, EditRefused: an unvalidated write could leave a project that no longer loads. Only when reelsmith.ops
-    cannot be imported is the same change made in project.json directly."""
+def _apply(ctx: Context, ops: list[dict]) -> None:
+    """Run the ops through reelsmith.ops (validated, undoable); EditRefused when it refuses."""
+    # importlib, not `from reelsmith import ops`: sys.modules is the seam tests swap
+    apply = importlib.import_module("reelsmith.ops").apply
     with _project_lock(ctx.project_file):
         ensure_project(ctx)
-        apply = _ops_apply()
-        if apply is not None:
-            try:
-                result = apply(ctx.project, ops)
-                ok, issues = bool(result[0]), result[1]
-            except Exception as exc:  # noqa: BLE001
-                ok, issues = False, [f"the edit module failed: {type(exc).__name__}: {exc}"]
-            if ok:
-                return ""
-            raise EditRefused(_issues_text(issues) or "refused")
-        data = read_project(ctx) or _minimal_project()
-        direct(data)
-        write_json(ctx.project_file, data)
-    if replacing:
-        return " (replaced the earlier entry of that id in project.json)"
-    return " (written to project.json directly: the edit module is unavailable. Run check to see any issues.)"
+        ok, issues = apply(ctx.project, ops)[:2]
+    if not ok:
+        raise EditRefused("; ".join(str(i) for i in issues[:4]) or "refused")
 
 
 def register_asset(ctx: Context, asset_id: str, entry: dict) -> str:
-    """Add or replace assets[asset_id]; '' or a note on how it was registered."""
+    """Add or replace assets[asset_id]; returns '' (callers append it to their message)."""
     entry = {k: v for k, v in entry.items() if v is not None}
     if entry.get("kind") == "evidence":
         entry.setdefault("site", "")
         entry.setdefault("url", "")
     if not entry.get("note"):
         entry.pop("note", None)
-    old = existing_asset(ctx, asset_id)
-    if old == entry:
+    if existing_asset(ctx, asset_id) == entry:
         return ""
-
-    def direct(data: dict) -> None:
-        assets = data.get("assets")
-        if not isinstance(assets, dict):
-            assets = data["assets"] = {}
-        assets[asset_id] = entry
-
     op = {"op": "add_asset", "id": asset_id, "asset": entry}
     try:
-        return _apply_or_write(ctx, [op], direct, replacing=old is not None)
+        _apply(ctx, [op])
+        return ""
     except EditRefused as exc:
         raise ProviderError(f"{entry.get('path')} is written, but project.json did not take asset {asset_id!r}: "
                             f"{exc.why}. project.json is unchanged. Fix that, then register the file with edit "
@@ -492,16 +373,13 @@ def set_voice_if_unset(ctx: Context, rel: str = VOICE_JSON) -> str:
     if current:
         return f" project.json voice still points at {current!r}; set it to {rel!r} to use this narration."
 
-    def direct(data: dict) -> None:
-        data["voice"] = rel
-
     op = {"op": "set", "path": "voice", "value": rel}
     try:
-        note = _apply_or_write(ctx, [op], direct)
+        _apply(ctx, [op])
     except EditRefused as exc:
         return (f" project.json voice was NOT set ({exc.why}); fix that, then set it with edit "
                 f"{json.dumps([op], ensure_ascii=False)}.")
-    return f" project.json voice set to {rel!r}." + note
+    return f" project.json voice set to {rel!r}."
 
 
 def rel(ctx: Context, path: Path) -> str:

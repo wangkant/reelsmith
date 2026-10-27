@@ -151,10 +151,7 @@ class Workspace:
         config = _read_json(root / WORKSPACE_FILE, "workspace config")
         rules = merge_rules(_read_json(root / RULES_FILE, "owner rules"))
         env = root / ENV_FILE
-        try:
-            keys = Keys(parse_dotenv(env.read_text(encoding="utf-8-sig"))) if env.is_file() else Keys()
-        except OSError as exc:
-            raise WorkspaceError(f"{env}: unreadable ({exc})") from exc
+        keys = Keys(parse_dotenv(env.read_text(encoding="utf-8-sig"))) if env.is_file() else Keys()
         ws = cls(root, config, rules, keys)
         _ = ws.profiles, ws.locale, ws.fonts                # a bad entry is the owner's to fix: say so now
         return ws

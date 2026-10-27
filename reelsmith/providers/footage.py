@@ -56,10 +56,8 @@ def _resolve(ctx: Context, source) -> Media:
     text = str(source or "").strip()
     if not text:
         raise ProviderError("name an asset id (see assets) or a file inside the project folder")
-    assets = read_project(ctx).get("assets")
-    assets = assets if isinstance(assets, dict) else {}
-    entry = assets.get(text)
-    if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+    entry = (read_project(ctx).get("assets") or {}).get(text)
+    if entry is not None:
         check_id(text, "asset id")
         return Media(asset_file(ctx, text, entry), entry["path"], _name(text), text)
     root = ctx.project.resolve()

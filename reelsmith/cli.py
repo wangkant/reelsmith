@@ -182,21 +182,6 @@ def _call(args) -> tools.ToolResult:
     return tools.TOOLS[c](args.project)            # check, assets, notes, typecheck
 
 
-def _run_agent(rest: list[str]) -> int:
-    try:
-        from . import runner
-    except ModuleNotFoundError as exc:
-        print(f"reelsmith run is unavailable: {exc}", file=sys.stderr)
-        return 2
-    params = inspect.signature(runner.main).parameters
-    if params:
-        code = runner.main(rest)
-    else:
-        sys.argv = ["reelsmith run", *rest]
-        code = runner.main()
-    return int(code or 0)
-
-
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -205,7 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             pass
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["run"]:
-        return _run_agent(argv[1:])
+        from .runner import main as run
+        return run(argv[1:])
     if argv[:1] == ["mcp"]:
         from .mcp_server import main as serve
         return int(serve(argv[1:]) or 0)
@@ -222,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cannot read the argument: {exc}", file=sys.stderr)
         return 2
     print(result)
-    return 0 if getattr(result, "ok", True) else 1
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":

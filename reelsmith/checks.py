@@ -34,7 +34,6 @@ MAX_LIST = 25
 
 
 def _mod(name: str):
-    # neighbours are imported late so a broken one fails the call that needs it, not the whole package
     return importlib.import_module(f"{__package__}.{name}")
 
 
@@ -51,10 +50,7 @@ def describe_load_error(exc: Exception) -> list[str]:
         return [f"not valid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"]
     errs = getattr(exc, "errors", None)
     if callable(errs):
-        try:
-            rows = [f"{'.'.join(map(str, e.get('loc', ()))) or '(root)'}: {e.get('msg')}" for e in errs()]
-        except Exception:  # noqa: BLE001 - fall back to the plain text
-            rows = []
+        rows = [f"{'.'.join(map(str, e.get('loc', ()))) or '(root)'}: {e.get('msg')}" for e in errs()]
         if rows:
             more = [f"... and {len(rows) - MAX_LIST} more"] if len(rows) > MAX_LIST else []
             return rows[:MAX_LIST] + more
@@ -68,31 +64,11 @@ def load_and_validate(project: str | Path):
         doc = document.load(project)
     except Exception as exc:  # noqa: BLE001 - every load failure is the agent's to fix
         return None, [Issue("error", PROJECT_FILE, m) for m in describe_load_error(exc)]
-    try:
-        issues = list(document.validate(project, doc))
-    except Exception as exc:  # noqa: BLE001
-        issues = [Issue("error", "validate", f"validation stopped: {exc}")]
-    return doc, issues
+    return doc, list(document.validate(project, doc))
 
 
-def project_meta(doc, project: str | Path) -> dict:
-    """meta as a plain dict, from the loaded document or, failing that, the file."""
-    meta = getattr(doc, "meta", None)
-    if hasattr(meta, "model_dump"):
-        return meta.model_dump()
-    if isinstance(meta, dict):
-        return meta
-    try:
-        data = json.loads((project_root(project) / PROJECT_FILE).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return {}
-    return (data.get("meta") or {}) if isinstance(data, dict) else {}
-
-
-def _source_ok(s) -> bool:
-    if hasattr(s, "model_dump"):
-        s = s.model_dump()
-    return isinstance(s, dict) and bool(HTTP_URL.match(str(s.get("url") or "").strip()))
+def _source_ok(s: dict) -> bool:
+    return bool(HTTP_URL.match(str(s.get("url") or "").strip()))
 
 
 def rule_issues(meta: dict, rules: dict) -> list[Issue]:
@@ -112,7 +88,7 @@ def rule_issues(meta: dict, rules: dict) -> list[Issue]:
         out.append(Issue("error", "meta.title", f"{len(numbers)} numbers ({', '.join(numbers)}); the owner allows "
                                                 f"{max_numbers}: keep the numbers for the film itself"))
     sources = meta.get("sources") or []
-    good = [s for s in sources if _source_ok(s)] if isinstance(sources, list) else []
+    good = [s for s in sources if _source_ok(s)]
     min_sources = hard.get("min_sources")
     if min_sources and len(good) < min_sources:
         out.append(Issue("error", "meta.sources", f"{len(good)} source(s) with an http(s) url; at least {min_sources} "
@@ -133,9 +109,7 @@ def _fps(resolved: dict) -> float:
 
 def _scale(resolved: dict) -> float:
     """The canvas's short side / 1080: what px thresholds are multiplied by."""
-    w, h = resolved.get("width"), resolved.get("height")
-    ok = all(isinstance(v, (int, float)) and v > 0 for v in (w, h))
-    return min(w, h) / REFERENCE_SIDE if ok else 1.0
+    return min(resolved["width"], resolved["height"]) / REFERENCE_SIDE
 
 
 def target_of(rules: dict, profile: Profile):
@@ -291,7 +265,7 @@ def _measure_ink(path: Path, box) -> float | None:
         from PIL import Image
         with Image.open(path) as im:
             gray = im.convert("L")
-    except Exception:  # noqa: BLE001 - no Pillow or an odd file: no estimate
+    except OSError:
         return None
     x, y, w, h = (float(v) for v in box)
     x0, y0 = max(0, int(x)), max(0, int(y))
@@ -445,7 +419,7 @@ def check_project(project: str | Path) -> list[Issue]:
     doc, issues = load_and_validate(root)
     if doc is None:
         return sort_issues(issues)
-    issues += rule_issues(project_meta(doc, root), rules)
+    issues += rule_issues(doc.meta.model_dump(), rules)
     if any(i.level == "error" and not i.where.startswith("meta") for i in issues):
         return sort_issues(issues)          # advice needs a project that resolves
     try:
@@ -494,7 +468,7 @@ def _tolerance(rect) -> float:
 
 
 def transition_windows(resolved: dict | None) -> dict:
-    """{clip id: [(from, to) frames]} of enter/exit animations, where a clip may sit off its place on purpose."""
+    """{clip id: [(from, to) frames]} of enter/exit animations and transitions, where a clip may sit off its place."""
     out: dict = {}
     for t in (resolved or {}).get("tracks") or []:
         for c in t.get("clips") or []:
@@ -504,7 +478,7 @@ def transition_windows(resolved: dict | None) -> dict:
                 spans.append((start, start + (c["enter"].get("dur") or 0)))
             if c.get("exit"):
                 spans.append((start + dur - (c["exit"].get("dur") or 0), start + dur))
-            if c.get("transition"):             # transitions between clips on a track move them on purpose too
+            if c.get("transition"):
                 spans.append((start, start + (c["transition"].get("dur") or 0)))
             leaving = c.get("transitionOut")
             if leaving:
@@ -617,7 +591,7 @@ class _Stills:
                 from PIL import Image
                 with Image.open(png) as im:
                     self.img = im.convert("RGB")
-            except Exception:  # noqa: BLE001 - no still, no Pillow: no contrast check
+            except OSError:
                 self.img = None
         return self.img
 

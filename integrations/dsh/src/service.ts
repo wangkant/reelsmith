@@ -112,9 +112,7 @@ export class ReelsmithService {
       this.ctx.logger?.warn?.(`reelsmith: ${this.error}`)
     }
     this.projects.bump()
-    for (const listener of [...this.toolListeners]) {
-      try { listener(this.tools) } catch (error) { this.ctx.logger?.warn?.('reelsmith: tool listener failed', error) }
-    }
+    for (const listener of [...this.toolListeners]) listener(this.tools)
   }
 
   /** Close every server and discover again (settings changed, or the user asked). */

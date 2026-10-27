@@ -92,11 +92,7 @@ def server_spec(root=None, python=None) -> dict:
 
 
 def skill_text() -> str:
-    try:
-        return SKILL_SOURCE.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise SetupError(f"the reelsmith skill is missing ({SKILL_SOURCE}): reinstall reelsmith from its checkout "
-                         f"({exc})") from None
+    return SKILL_SOURCE.read_text(encoding="utf-8")
 
 
 def _read(path: Path) -> str | None:
@@ -170,7 +166,6 @@ def toml_value(value) -> str:
         return "[" + ", ".join(toml_value(v) for v in value) + "]"
     if isinstance(value, dict):
         return "{ " + ", ".join(f"{toml_key(k)} = {toml_value(v)}" for k, v in value.items()) + " }"
-    raise TypeError(f"no TOML form for {type(value).__name__}")
 
 
 def toml_key(key) -> str:
@@ -234,9 +229,6 @@ def toml_server_change(path: Path, server: dict, uninstall: bool) -> Change | No
         return Change(path, "write", rest, what="the Codex config without reelsmith")
     body = rest.rstrip("\n")
     new = (body + "\n\n" if body else "") + codex_table(server)
-    merged = _toml_load(new, path)
-    if merged is not None and (merged.get("mcp_servers") or {}).get(NAME) != server:
-        raise SetupError(f"{path}: the merged config does not read back as written; nothing was changed")
     return _write_change(path, new, "the Codex config")
 
 
@@ -471,10 +463,7 @@ def apply(p: Plan, cwd=None, home=None, run=_run) -> list[str]:
             _write_atomic(c.path, c.content)
             lines.append(f"wrote {c.path} ({c.what})")
         elif c.action == "remove":
-            try:
-                c.path.unlink()
-            except FileNotFoundError:
-                pass
+            c.path.unlink(missing_ok=True)
             for stop in (cwd, _git_root(cwd), home):
                 if stop in c.path.parents:
                     _prune(c.path, stop)

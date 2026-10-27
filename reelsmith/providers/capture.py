@@ -256,7 +256,7 @@ def launch_browser(chromium, proxy: str):
 
 def default_viewport(profile) -> str:
     """phone for vertical and portrait canvases, desktop for landscape and square ones."""
-    return "phone" if profile is None or profile.orientation == "portrait" else "desktop"
+    return "phone" if profile.orientation == "portrait" else "desktop"
 
 
 def capture_page(p, url: str, match: str, out: Path, guard, viewport: str = "phone",
@@ -405,10 +405,10 @@ def capture(project, url, match="", id="", viewport=None, *, sync_playwright=Non
             f"It shows: {info.get('excerpt')}",
             f"Box of {what} (x, y, w, h in the image's pixels, whole lines of the text column): {box}. That is the "
             "part to enlarge and highlight."]
-    readable = READABLE_PX * (profile.scale if profile else 1.0)
+    readable = READABLE_PX * profile.scale
     need = readable_width(float(info.get("font_px") or 0), box[2], scale, readable)
     if need:
-        wide = profile.safe.w if profile else 840
+        wide = profile.safe.w
         rows.append(f"Its text is {float(info['font_px']):.0f} CSS px: the box must be shown at least {need} px wide "
                     f"for it to stand {readable:.0f} px tall (at {wide} px wide, the safe area's width: "
                     f"{readable * wide / need:.0f} px).")

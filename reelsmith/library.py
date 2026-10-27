@@ -131,9 +131,7 @@ def validate_props(component: Component, props) -> list[str]:
     """Problems with `props` as the agent writes them (Times and asset ids still as written); [] when fine."""
     if component.problem:
         return [f"component {component.name} cannot be used: {component.problem}"]
-    if not isinstance(props, dict):
-        return ["props must be an object"]
-    schema = component.schema or {}
+    schema = component.schema
     if not schema:
         return []
     cls = jsonschema.validators.validator_for(schema)

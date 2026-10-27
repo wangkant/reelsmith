@@ -4,7 +4,7 @@
 
 reelsmith gives a coding agent (Claude Code, Codex, DeepSeek Harness, Cursor or any MCP client) a real video
 editor: a timeline of tracks, clips, keyframes, text and components that it edits with tools and code, looks at
-frame by frame, and renders through checks that will not let a broken film out. It is not a text-to-video model.
+frame by frame, and renders through checks that will not let a broken film out.
 The agent builds the film clip by clip from footage, pictures, narration and its own React components, the way a
 person works in an editing app.
 

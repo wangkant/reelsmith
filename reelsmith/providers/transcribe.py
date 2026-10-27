@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import (Context, EditRefused, ProviderError, _apply_or_write, check_id, context, exe, number, read_project,
+from .config import (Context, EditRefused, ProviderError, _apply, check_id, context, exe, number, read_project,
                      redact, rel, run_tree, safe_tool, tail, write_json)
 from .footage import asset_file, facts, silent_ranges
 
@@ -253,11 +253,10 @@ def stitch(parts: list[tuple[float, dict]]) -> dict:
 
 # ------------------------------------------------------------------ the tool
 def _asset(ctx: Context, asset_id) -> tuple[str, dict, Path]:
-    assets = read_project(ctx).get("assets")
-    assets = assets if isinstance(assets, dict) else {}
+    assets = read_project(ctx).get("assets") or {}
     aid = str(asset_id or "").strip()
     entry = assets.get(aid)
-    if not isinstance(entry, dict):
+    if entry is None:
         known = ", ".join(sorted(assets)) or "none yet"
         raise ProviderError(f"no asset {aid!r} (assets: {known}): import_asset the recording first")
     if entry.get("kind") not in ("video", "audio"):
@@ -307,11 +306,9 @@ def _run(ctx: Context, engine: Engine, cfg: dict, audio: Path, dur: float, work:
 def set_transcript(ctx: Context, aid: str, path: str) -> str:
     """Point the asset's transcript at path ('' or a note)."""
     op = {"op": "update_asset", "id": aid, "set": {"transcript": path}}
-
-    def direct(data: dict) -> None:
-        data.setdefault("assets", {}).setdefault(aid, {})["transcript"] = path
     try:
-        return _apply_or_write(ctx, [op], direct)
+        _apply(ctx, [op])
+        return ""
     except EditRefused as exc:
         return (f" project.json did not take the transcript ({exc.why}); set it with edit "
                 f"{json.dumps([op], ensure_ascii=False)}.")

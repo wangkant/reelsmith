@@ -176,13 +176,12 @@ class OfflineNet:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A workspace with a key in .env and one empty project; reelsmith.ops absent (the direct-write path); the network
+    """A workspace with a key in .env and one empty project; the network
     replaced by offline_resolve and OfflineNet."""
     for name in ("REELSMITH_ROOT", "REELSMITH_BUDGET_USD", "REELSMITH_MIN_BALANCE_USD", "OPENROUTER_API_KEY",
                  "REELSMITH_PROXY", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY",
                  "all_proxy"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setitem(sys.modules, "reelsmith.ops", None)
     monkeypatch.setattr(D, "_BLOCKED", {})
     net = OfflineNet()
     monkeypatch.setattr(N, "system_resolve", offline_resolve)
@@ -269,8 +268,7 @@ def test_context_budget_from_workspace_and_env_override(env, monkeypatch):
     assert err and "budget.per_project_usd" in text
 
 
-def test_project_outside_a_workspace_keeps_its_own_ledger(tmp_path, monkeypatch):
-    monkeypatch.setitem(sys.modules, "reelsmith.ops", None)
+def test_project_outside_a_workspace_keeps_its_own_ledger(tmp_path):
     p = tmp_path / "loose"
     p.mkdir()
     ctx = P.context(p)
@@ -1681,14 +1679,6 @@ def test_a_broken_ops_module_is_an_error_not_a_direct_write(env, monkeypatch):
     assert err and "half-written" in text and (env.project / "project.json").read_bytes() == before
 
 
-def test_without_the_ops_module_the_entry_is_written_directly(env):
-    text, err = P.import_asset(env.project, id="pic", source=str(write_png(env.tmp / "p.png")))
-    assert not err and "written to project.json directly" in text
-    assert read_project(env.project)["assets"]["pic"]["path"] == "assets/pic.png"
-    text, err = P.import_asset(env.project, id="pic", source=str(write_png(env.tmp / "q.png", 10, 10)))
-    assert not err and "replaced the earlier entry" in text
-
-
 @needs_ffmpeg
 def test_a_refused_voice_setting_is_a_note_not_a_lost_narration(env, monkeypatch):
     fake_ops(monkeypatch, ok=False, issues=["[error] voice: nope"])
@@ -1712,13 +1702,6 @@ def test_parallel_registrations_all_land(env):
 
 
 def test_the_real_ops_accepts_what_providers_register(env, monkeypatch):
-    monkeypatch.delitem(sys.modules, "reelsmith.ops")
-    try:
-        ops = importlib.import_module("reelsmith.ops")
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"reelsmith.ops not available yet ({type(exc).__name__})")
-    if not callable(getattr(ops, "apply", None)):
-        pytest.skip("reelsmith.ops has no apply()")
     text, err = P.import_asset(env.project, id="pic", source=str(write_png(env.tmp / "p.png", 1080, 1920)))
     assert not err and "directly" not in text, text
     shot = write_png(env.tmp / "shot.png", 300, 500)

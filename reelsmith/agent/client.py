@@ -83,8 +83,7 @@ def _loopback(host: str) -> bool:
 
 
 def _retry_after(headers) -> float | None:
-    value = (headers.get("Retry-After") if headers is not None else None) or ""
-    value = value.strip()
+    value = (headers.get("Retry-After") or "").strip()
     if not value:
         return None
     try:
@@ -182,15 +181,11 @@ class ChatClient:
                 wait = min(wait, MAX_RETRY_AFTER_S)
                 attempt += 1
                 if self.on_retry is not None:
-                    try:
-                        self.on_retry(attempt, wait, str(exc))
-                    except Exception:  # noqa: BLE001 - a logger must not break the request
-                        pass
+                    self.on_retry(attempt, wait, str(exc))
                 self.sleep(wait)
 
     def _once(self, data: bytes) -> dict:
         req = urllib.request.Request(self.url, data=data, headers=self._headers, method="POST")
-        headers = None
         try:
             with self._opener.open(req, timeout=self.timeout_s) as resp:
                 status, headers, raw = resp.status, resp.headers, resp.read()

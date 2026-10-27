@@ -746,7 +746,7 @@ def _retarget_source(data: dict, old: str, new: str, from_s: float) -> int:
 # ------------------------------------------------------------------ ripple edits (spec 5)
 # A ripple edit moves Times that are written as anchors ("line:4", "clip:a.end", "mark:x"). Every Time is measured
 # before the edit, moved to where the edit wants it and written as a number; an anchor is then put back wherever it
-# still lands on the same frame. So anchors stay where they stay true, and nothing silently drifts.
+# still lands on the same frame.
 def _inner_slots(clip: dict):
     """(holder, key) for the Times inside a clip: keyframe t, highlight.at, component at / *_at."""
     kf = clip.get("keyframes")
@@ -1274,15 +1274,11 @@ def _log_path(project) -> Path:
 
 def _read_log(project) -> dict[int, str]:
     out: dict[int, str] = {}
-    try:
-        for line in _log_path(project).read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-                out[int(row["n"])] = str(row.get("summary") or "")
-            except (ValueError, KeyError, TypeError):
-                continue
-    except OSError:
-        pass
+    path = _log_path(project)
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            out[int(row["n"])] = str(row.get("summary") or "")
     return out
 
 
@@ -1391,10 +1387,7 @@ def apply(project, ops) -> tuple[bool, list[Issue], str]:
             _write_bytes(path, (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8"))
         except OSError as exc:
             return False, [Issue("error", D.PROJECT_FILE, _held(exc))], "nothing changed"
-        try:                                    # only a batch that was written gets a history entry
-            _snapshot(root, content, summary)
-        except OSError as exc:
-            summary += f" (no undo snapshot: .history could not be written: {exc})"
+        _snapshot(root, content, summary)       # only a batch that was written gets a history entry
         return True, after, summary
 
 
@@ -1432,8 +1425,5 @@ def undo(project, steps: int = 1) -> tuple[bool, str]:
 
 
 def _error_count(root: Path) -> int:
-    try:
-        _, issues = D.check_data(root, D.read_raw(root))
-    except (OSError, ValueError):
-        return 0
+    _, issues = D.check_data(root, D.read_raw(root))
     return sum(1 for i in issues if i.level == "error")

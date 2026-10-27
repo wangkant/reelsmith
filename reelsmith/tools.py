@@ -118,8 +118,6 @@ def _seconds(root: Path, value) -> float:
 def manual() -> str:
     """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components and
     what blocks delivery. Read it once before your first edit."""
-    if not MANUAL.is_file():
-        return _fail(f"the manual is missing at {MANUAL}; tell the operator")
     return MANUAL.read_text(encoding="utf-8")
 
 
@@ -173,16 +171,6 @@ def library(project: str, name: str = "") -> str:
             + "\n".join(rows) + where + f"\n{kit}")
 
 
-def _component_meta(comp) -> dict:
-    path = Path(str(getattr(comp, "path", "") or ""))
-    name = getattr(comp, "name", "")
-    meta = path if path.name.endswith(".meta.json") else path.with_name(f"{name}.meta.json")
-    try:
-        return json.loads(meta.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return {}
-
-
 def _first_sentence(text: str, limit: int = 110) -> str:
     text = " ".join(str(text or "").split())
     m = re.match(r"^(.+?[.。!?！？])(\s|$)", text)
@@ -199,22 +187,15 @@ def _prop_names(schema: dict) -> str:
 
 
 def _component_text(comp, full: bool) -> str:
-    name, src = getattr(comp, "name", "?"), getattr(comp, "source", "?")
-    desc = getattr(comp, "description", "") or ""
-    schema = getattr(comp, "schema", None) or {}
-    problem = getattr(comp, "problem", "") or ""
+    name, src, desc, schema, problem = comp.name, comp.source, comp.description, comp.schema, comp.problem
     if not full:
         bad = f"\n  cannot be used: {problem}" if problem else ""
         return f"- {name} ({src}): {_first_sentence(desc)}\n  props: {_prop_names(schema)}{bad}"
     rows = [f"{name} ({src}): {desc}"] + ([f"cannot be used: {problem}"] if problem else []) + \
         ["props schema:", json.dumps(schema, ensure_ascii=False, indent=1)]
-    example = _component_meta(comp).get("example")
-    if example is not None:
-        rows += ["example props:", json.dumps(example, ensure_ascii=False, indent=1)]
-    path = Path(str(getattr(comp, "path", "") or ""))
-    tsx = path.with_name(f"{name}.tsx") if path.name.endswith(".meta.json") else path
-    if tsx.suffix == ".tsx":
-        rows.append(f"source: {tsx}")
+    if comp.example is not None:
+        rows += ["example props:", json.dumps(comp.example, ensure_ascii=False, indent=1)]
+    rows.append(f"source: {comp.path}")
     return "\n".join(rows)
 
 
@@ -323,12 +304,7 @@ def edit(project: str, ops: list[dict] | str) -> str:
     trim_clip ({"id", "in"?, "out"?, "ripple"?}: a clip's in/out, in source seconds for video and audio). Every
     applied batch can be undone."""
     root = _project(project)
-    result = _mod("ops").apply(root, _ops_arg(ops))
-    try:
-        ok, issues, summary = result
-    except (TypeError, ValueError):
-        return str(result)
-    issues = list(issues or [])
+    ok, issues, summary = _mod("ops").apply(root, _ops_arg(ops))
     if not ok:
         rows = ["REFUSED: nothing changed."] + [str(i) for i in issues] + ([summary] if summary else [])
         return _fail(_lines(rows))
@@ -342,13 +318,8 @@ def undo(project: str, steps: int = 1) -> str:
     root = _project(project)
     if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
         raise ToolInputError("steps must be a whole number >= 1")
-    result = _mod("ops").undo(root, steps)
-    if isinstance(result, tuple) and result and isinstance(result[0], bool):
-        rows = [x for r in result[1:] if r for x in (r if isinstance(r, list) else [r])]
-        return ToolResult(_lines(rows) or ("undone" if result[0] else "nothing to undo"), result[0])
-    if isinstance(result, bool):
-        return ToolResult("undone" if result else "nothing to undo", result)
-    return str(result) if result is not None else f"undid {steps} step(s)"
+    ok, text = _mod("ops").undo(root, steps)
+    return ToolResult(text, ok)
 
 
 # ------------------------------------------------------------------ looking and rendering
@@ -596,21 +567,11 @@ def typecheck(project: str) -> str:
 
 # ------------------------------------------------------------------ providers (assets)
 def _provider(name: str, root: Path, **kwargs) -> ToolResult:
-    try:
-        providers = _mod("providers")
-    except ModuleNotFoundError as exc:
-        if exc.name and exc.name.startswith(f"{__package__}.providers"):
-            return _fail(f"{name} is unavailable: reelsmith.providers is not installed. Tell the operator.")
-        raise
-    fn = getattr(providers, name, None)
-    if not callable(fn):
-        return _fail(f"{name} is unavailable: reelsmith.providers has no {name}(). Tell the operator.")
+    fn = getattr(_mod("providers"), name)
     result = fn(root, **{k: v for k, v in kwargs.items() if v is not None})
-    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], bool):
-        return ToolResult(str(result[0]), not result[1])          # providers return (text, is_error)
-    if isinstance(result, ToolResult):
-        return result
-    return _ok(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=1))
+    if isinstance(result, tuple):
+        return ToolResult(str(result[0]), not result[1])          # providers return text or (text, is_error)
+    return _ok(result)
 
 
 def _id_arg(value: str, what: str = "id") -> str:

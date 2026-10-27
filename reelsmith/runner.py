@@ -202,8 +202,7 @@ def settings_for(ws, model=None, budget_usd=None, max_minutes=None, max_turns=No
 
 def key_for(ws, name: str) -> str:
     """A key from the workspace .env, else the environment; "" when neither has it."""
-    keys = ws.keys if ws is not None else {}
-    value = keys.get(name) if hasattr(keys, "get") else None
+    value = ws.keys.get(name) if ws is not None else None
     return value or os.environ.get(name) or ""
 
 
@@ -321,9 +320,9 @@ def _slim(messages: list[dict]) -> list[dict]:
     """The history without image data: a saved conversation stays small, and a resumed agent can look again."""
     out = []
     for m in messages:
-        content = m.get("content") if isinstance(m, dict) else None
-        if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
-            m = {**m, "content": [p if not (isinstance(p, dict) and p.get("type") == "image_url")
+        content = m.get("content")
+        if isinstance(content, list) and any(p.get("type") == "image_url" for p in content):
+            m = {**m, "content": [p if p.get("type") != "image_url"
                                   else {"type": "text", "text": "[image not kept: look again if you need it]"}
                                   for p in content]}
         out.append(m)
@@ -339,11 +338,11 @@ def save_messages(project: Path, settings: Settings, session_id: str, messages: 
 def load_messages(project: Path, session_id: str | None = None) -> list[dict] | None:
     """The saved conversation (of that session), or None when there is none to go on from."""
     data = read_json(project / MESSAGES_FILE, None)
-    if not isinstance(data, dict) or not isinstance(data.get("messages"), list) or not data["messages"]:
+    if not data or not data["messages"]:
         return None
     if session_id and data.get("session_id") != session_id:
         return None
-    return [m for m in data["messages"] if isinstance(m, dict)]
+    return data["messages"]
 
 
 def api_summary(result: dict) -> dict:
@@ -395,10 +394,7 @@ class SessionLog:
 
     def message(self, msg) -> None:
         from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, UserMessage
-        try:
-            data = dataclasses.asdict(msg) if dataclasses.is_dataclass(msg) else {"repr": repr(msg)}
-        except Exception:  # noqa: BLE001
-            data = {"repr": repr(msg)[:2000]}
+        data = dataclasses.asdict(msg) if dataclasses.is_dataclass(msg) else {"repr": repr(msg)}
         self.event("message", type=type(msg).__name__, data=data)
         if isinstance(msg, SystemMessage) and msg.subtype == "init":
             d = msg.data or {}
@@ -548,14 +544,9 @@ def stop_reason(row: dict) -> str:
 def delivery(project: Path) -> tuple[bool, list[str], dict]:
     """(delivered, problems, check summary): out/film.mp4 exists, render's report says ok, and check has no errors."""
     from .checks import check_project
-    problems = []
-    try:
-        issues = check_project(project)
-    except Exception as exc:  # noqa: BLE001
-        issues = []
-        problems.append(f"check failed to run: {exc}")
+    issues = check_project(project)
     errors = [str(i) for i in issues if i.level == "error"]
-    problems += errors[:10]
+    problems = errors[:10]
     counts = {lvl: sum(1 for i in issues if i.level == lvl) for lvl in ("error", "warning", "advice")}
     film = project / "out" / "film.mp4"
     good, failed = project / "out" / "report.json", project / "build" / "report.json"
@@ -588,25 +579,19 @@ def changed_since(project: Path, when: float) -> str | None:
     if ws is not None and ws.components_dir.is_dir():
         parts = [p for p in ws.components_dir.rglob("*") if p.is_file()]
         used = inputs.get("components")
-        if isinstance(used, list):
+        if used is not None:
             # a component is its <Name>.meta.json and siblings; helpers without one may be imported by any
             named = {p.name[:-len(".meta.json")] for p in parts if p.name.endswith(".meta.json")}
             parts = [p for p in parts if p.name.split(".")[0] not in named or p.name.split(".")[0] in used]
         files += parts
     doc = project / PROJECT_FILE
-    try:
-        if doc.stat().st_mtime > when + 1:
-            data = read_json(doc, None)
-            if not (inputs.get("cut") and isinstance(data, dict) and cut_digest(data) == inputs["cut"]):
-                return PROJECT_FILE
-    except OSError:
-        pass
+    if doc.stat().st_mtime > when + 1:
+        data = read_json(doc, None)
+        if not (inputs.get("cut") and isinstance(data, dict) and cut_digest(data) == inputs["cut"]):
+            return PROJECT_FILE
     for p in files:
-        try:
-            if p.stat().st_mtime > when + 1:
-                return p.relative_to(project).as_posix() if p.is_relative_to(project) else p.name
-        except OSError:
-            continue
+        if p.stat().st_mtime > when + 1:
+            return p.relative_to(project).as_posix() if p.is_relative_to(project) else p.name
     return None
 
 
@@ -753,7 +738,7 @@ class Run:
     def settle_inflight(self) -> None:
         """Count the spend of a session whose process was killed before it could record it."""
         left = self.state.get("inflight")
-        if not isinstance(left, dict):
+        if not left:
             return
         row = {"kind": "interrupted", "session_id": left.get("session_id"), "aborted": None,
                "error": "the process was interrupted", "subtype": None, "turns": int(left.get("turns") or 0),

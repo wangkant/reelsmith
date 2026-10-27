@@ -326,7 +326,7 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         return f"prompt must describe the picture in 1-{MAX_PROMPT_CHARS} characters", True
     profile = project_profile(ctx)
-    gen, out_size = parse_size(size, nearest_aspect(profile.width, profile.height) if profile else "9:16")
+    gen, out_size = parse_size(size, nearest_aspect(profile.width, profile.height))
     ref = _style_ref(ctx, style_ref_asset)
     check_replaceable(ctx, asset_id, "image")
     cfg = ctx.providers["image"]
@@ -373,7 +373,7 @@ def _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout,
             else:
                 ctx.assets_dir.mkdir(parents=True, exist_ok=True)
                 fit(shot.png, ctx.assets_dir / f"{asset_id}.png", out_size)
-    except Exception as exc:  # noqa: BLE001 — one picture's surprise must not end the call
+    except Exception as exc:  # noqa: BLE001 - the try is still logged and counted
         shot = Shot("error", detail=f"{type(exc).__name__}: {exc}", thread=shot.thread if shot else "",
                     events=shot.events if shot else "",
                     seconds=round((datetime.now() - started).total_seconds(), 1))
@@ -384,10 +384,7 @@ def _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout,
         except OSError:
             pass
         if shot is not None and shot.thread:
-            try:
-                provider.forget(shot)
-            except Exception:  # noqa: BLE001
-                pass
+            provider.forget(shot)
     _log(ctx, asset_id, shot)
     ctx.ledger().append({"id": call, "project": ctx.project_key, "tool": "draw", "provider": provider.name,
                          "est_usd": 0.0, "cost_usd": 0.0, "status": shot.kind, "asset": asset_id,

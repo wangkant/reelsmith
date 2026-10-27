@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import media, sidecar
 from .checks import LayoutCheck, check_film, check_project, load_and_validate
-from .profiles import Profile, get_profile
+from .profiles import Profile
 from .timeexpr import TimeError, parse as parse_time, to_frame
 from .workspace import PROJECT_FILE, find_workspace, profile_for, project_paths, project_root
 
@@ -230,13 +230,7 @@ def _clear(folder: Path) -> None:
 
 
 def _read_inspect(out_dir: Path) -> dict:
-    path = out_dir / "inspect.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise RenderError(f"render.mjs reported ok but {path} is missing or unreadable ({exc})") from exc
-    if not isinstance(data, dict):
-        raise RenderError(f"{path} is not an object")
+    data = json.loads((out_dir / "inspect.json").read_text(encoding="utf-8"))
     for fr in data.get("frames") or []:
         png = fr.get("png")
         if png and not Path(png).is_absolute():
@@ -259,7 +253,7 @@ def _sheet(pngs: list, out: Path, profile: Profile, labels: list[str] | None = N
         sheet = media.contact_sheet([p for p, _ in pairs], out, profile.outside_safe(), (profile.width, profile.height),
                                     tile, outline=(s.x, s.y, s.w, s.h), labels=[lab for _, lab in pairs],
                                     cols=cols or min(6, max(2, SHEET_WIDTH // tile[0])))
-    except RuntimeError:
+    except RuntimeError:                    # no ffmpeg: the stills still come back, without a sheet
         return None
     return str(sheet) if sheet else None
 
@@ -348,7 +342,7 @@ def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profi
     layout pass) each batch's stills with no problem on them, other than the frames in `keep`, are deleted before
     the next batch, so disk and memory stay bounded however long the film; without it every still stays.
     {ok, layout, frames: [{frame, png}], measured, crashes, res (the calls' results merged)}; a failure is
-    {ok: false, node: render.mjs's result} or {ok: false, error}."""
+    {ok: false, node: render.mjs's result}."""
     fps = float(resolved.get("fps") or profile.fps)
     check = LayoutCheck(profile, resolved)
     crashes: dict[str, str] = {}
@@ -361,10 +355,7 @@ def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profi
                        timeout=max(STILLS_TIMEOUT_S, STILL_TIMEOUT_S * len(batch)))
         if not res.get("ok"):
             return {"ok": False, "node": res}
-        try:
-            inspect = _read_inspect(out_dir)
-        except RenderError as exc:
-            return {"ok": False, "error": str(exc)}
+        inspect = _read_inspect(out_dir)
         for name, why in component_crashes(res).items():
             crashes.setdefault(name, why)
         check.ignore |= _crashed_clips(resolved, crashes)
@@ -410,9 +401,7 @@ def preview(project: str | Path, times: list | None, sweep: bool = False) -> dic
         _fresh_stills(paths.stills)
         got = measure(json_path, root, paths.stills, frames, profile, resolved, keep=asked if sweep else None)
     if not got["ok"]:
-        res = got.get("node")
-        if res is None:
-            return {"ok": False, "stage": "inspect", "error": got["error"]}
+        res = got["node"]
         return {"ok": False, "stage": res.get("stage"), "error": failure_text(res),
                 "transient": bool(res.get("transient")), "crashes": crash_rows(component_crashes(res))}
     res, crashes, layout = got["res"], got["crashes"], got["layout"]
@@ -434,10 +423,7 @@ def preview(project: str | Path, times: list | None, sweep: bool = False) -> dic
 
 # ------------------------------------------------------------------ render
 def _has_audio(path: Path) -> bool:
-    try:
-        return any(s.get("codec_type") == "audio" for s in media.probe(path).get("streams") or [])
-    except Exception:  # noqa: BLE001 - mastering will say what is wrong
-        return True
+    return any(s.get("codec_type") == "audio" for s in media.probe(path).get("streams") or [])
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -460,11 +446,8 @@ def _replace(src: Path, dst: Path, tries: int = 6) -> None:
 
 
 def _post_meta(root: Path, report: dict, profile: Profile) -> dict:
-    try:
-        data = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig"))
-        meta = dict(data.get("meta") or {})
-    except (OSError, ValueError, AttributeError):
-        meta = {}
+    data = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig"))
+    meta = dict(data.get("meta") or {})
     meta.update(duration_s=(report.get("film_check") or {}).get("duration_s"), profile=profile.name,
                 film="film.mp4", rendered_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     side = report.get("sidecars") or {}
@@ -499,44 +482,22 @@ def film_inputs(root: Path) -> dict:
 
 def hdr_sources(root: Path) -> list[str]:
     """Warnings for the HDR (PQ, HLG, Dolby Vision) videos the film shows: the renderer does not tone-map them."""
-    try:
-        data = json.loads((Path(root) / PROJECT_FILE).read_text(encoding="utf-8-sig"))
-        footage = _mod("providers.footage")
-    except (OSError, ValueError, ImportError):
-        return []
-    assets = data.get("assets") if isinstance(data.get("assets"), dict) else {}
-    used = sorted({c.get("asset") for t in data.get("tracks") or [] if isinstance(t, dict) and not t.get("hidden")
-                   for c in t.get("clips") or [] if isinstance(c, dict) and c.get("type") == "video"
-                   and isinstance(c.get("asset"), str)})
+    data = json.loads((Path(root) / PROJECT_FILE).read_text(encoding="utf-8-sig"))
+    footage = _mod("providers.footage")
+    assets = data.get("assets") or {}
+    used = sorted({c["asset"] for t in data.get("tracks") or [] if not t.get("hidden")
+                   for c in t.get("clips") or [] if c.get("type") == "video"})
     rows = []
     for aid in used:
-        entry = assets.get(aid)
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            continue
-        try:
-            hdr = footage.hdr_of_file(Path(root) / entry["path"])
-        except Exception:  # noqa: BLE001 - an unreadable asset is check's business
-            continue
+        hdr = footage.hdr_of_file(Path(root) / assets[aid]["path"])
         if hdr:
             rows.append(f"[warning] assets.{aid}: HDR video ({hdr}): {footage.HDR_NOTE}")
     return rows
 
 
-def _chapters(root: Path, fps: float) -> list[tuple[float, str]]:
-    try:
-        return sidecar.chapters(root, fps)
-    except Exception:  # noqa: BLE001 - a project that cannot load has failed check already
-        return []
-
-
 def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float) -> dict:
     """out/captions/* and out/chapters.txt for the film just delivered (stale ones removed)."""
-    out: dict = {"notes": []}
-    try:
-        out["captions"] = sidecar.write_captions(root, resolved, paths.out / "captions")
-    except OSError as exc:
-        out["captions"] = []
-        out["notes"].append(f"captions files not written: {exc}")
+    out: dict = {"notes": [], "captions": sidecar.write_captions(root, resolved, paths.out / "captions")}
     txt = paths.out / "chapters.txt"
     txt.unlink(missing_ok=True)
     if chapters:
@@ -612,7 +573,7 @@ def render(project: str | Path) -> dict:
         _clear(paths.inspect)
         got = measure(inspect_json, root, paths.inspect, layout_frames(resolved), profile, resolved, keep=set())
         if not got["ok"]:
-            return node_failed("layout", got["node"]) if got.get("node") else finish("layout", got["error"])
+            return node_failed("layout", got["node"])
         crashes, layout = got["crashes"], got["layout"]
         report["layout"] = [str(i) for i in layout]
         report["layout_frames"] = [s["png"] for s in got["frames"]]
@@ -655,7 +616,7 @@ def render(project: str | Path) -> dict:
         return finish("master", str(exc))
     finally:
         raw.unlink(missing_ok=True)
-    chapters = _chapters(root, fps)
+    chapters = sidecar.chapters(root, fps)
     if chapters:
         try:
             media.add_chapters(mastered, sidecar.ffmetadata(chapters, length), timeout=media.scaled_timeout(length))
@@ -748,12 +709,8 @@ def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE) -> dict:
     except PermissionError:
         return {"ok": False, "stage": "deliver", "error": f"{dst} is held open by another program (a video player?): "
                                                           f"close it and try again (the new draft is at {raw})"}
-    width, height = round(profile.width * scale), round(profile.height * scale)
-    try:
-        video = next(s for s in media.probe(dst).get("streams") or [] if s.get("codec_type") == "video")
-        width, height = int(video.get("width") or width), int(video.get("height") or height)
-    except (RuntimeError, StopIteration, ValueError):
-        pass
+    video = next(s for s in media.probe(dst)["streams"] if s.get("codec_type") == "video")
+    width, height = int(video["width"]), int(video["height"])
     return {"ok": True, "film": str(dst), "from_s": round(a / fps, 3), "to_s": round((b + 1) / fps, 3),
             "width": width, "height": height, "scale": scale, "render_s": round(time.time() - started, 1)}
 
@@ -771,10 +728,7 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
     length = media.duration(paths.film) or 0.0
     if length <= 0:
         raise RenderError(f"{paths.film} has no readable duration: render again")
-    try:
-        profile = profile_for(root)
-    except ValueError:
-        profile = get_profile(None)
+    profile = profile_for(root)
     _clear(paths.review)
     if int(n or 0) > 0:
         n = max(2, min(MAX_PREVIEW_FRAMES, int(n)))
@@ -806,28 +760,17 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
 
 
 def _voice_lines(root: Path) -> list:
-    try:
-        voice, _ = _mod("document").load_voice(root, _mod("document").load(root).voice)
-    except Exception:  # noqa: BLE001 - a film without a readable voice is still watched
-        return []
+    voice, _ = _mod("document").load_voice(root, _mod("document").load(root).voice)
     return list(voice.lines) if voice else []
 
 
 def _unchanged(pngs: list[str]) -> list[bool]:
     """Per frame: the picture is the same as the frame before (a still stretch shows as a run of these)."""
-    try:
-        from PIL import Image, ImageChops, ImageStat
-    except ImportError:
-        return [False] * len(pngs)
+    from PIL import Image, ImageChops, ImageStat
     same, prev = [], None
     for p in pngs:
-        try:
-            with Image.open(p) as im:
-                cur = im.convert("L").resize((54, 96))
-        except OSError:
-            same.append(False)
-            prev = None
-            continue
+        with Image.open(p) as im:
+            cur = im.convert("L").resize((54, 96))
         same.append(prev is not None and ImageStat.Stat(ImageChops.difference(cur, prev)).mean[0] < STILL_DIFF)
         prev = cur
     return same
