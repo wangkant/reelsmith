@@ -762,7 +762,7 @@ class Run:
                 raise WorkspaceError("the Codex CLI is not installed here: install it (npm i -g @openai/codex) and "
                                      "sign in, or set CODEX_EXE")
             price = cli_engines.price_for(s.model, s.prices)
-            cmd = cli_engines.codex_command(exe, self.project, scope, srv, s.model, s.effort, stall_s, resume)
+            cmd = cli_engines.codex_command(exe, self.project, scope, srv, s.model, s.effort, stall_s, resume, s.proxy)
             env = cli_engines.codex_env(s.proxy)
             stream_cls, extra = cli_engines.CodexStream, {}
         else:

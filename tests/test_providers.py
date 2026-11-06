@@ -1023,6 +1023,14 @@ def test_draw_stops_trying_once_the_provider_is_logged_out(env):
     assert err and len(painter.calls) == 1 and "cannot draw right now" in text and "editor" in text
 
 
+def test_an_unreachable_provider_stops_the_tries_and_does_not_blame_the_prompt(env):
+    painter = FakePainter(env.tmp, kinds=("network",))
+    text, err = P.draw(env.project, id="a", prompt="x", provider=painter)
+    assert err and len(painter.calls) == 1 and "cannot be reached" in text
+    assert "not the problem" in text and "Rewrite" not in text
+    assert P.draw(env.project, id="b", prompt="y", provider=painter)[1] and len(painter.calls) == 1
+
+
 @needs_ffmpeg
 def test_draw_counts_tries_against_max_draws(env):
     env.config(providers={"image": {"max_draws": 3}})
@@ -1095,12 +1103,22 @@ def test_codex_failures_are_classified(tmp_path):
             return 1, json.dumps({"type": "turn.failed", "error": {"message": final}}), "", False
         return run
     for final, kind in (("401 Unauthorized: please log in again", "auth"), ("You've hit your usage limit", "quota"),
-                        ("I could not draw that", "noimage")):
+                        ("workspace routing discovery timed out", "network"),
+                        ("error sending request for url", "network"), ("I could not draw that", "noimage")):
         codex = D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, run=answering(final), model="")
         assert codex.draw("x", (1024, 1024), tmp_path / "w", None, 60).kind == kind
     slow = D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, model="",
                    run=lambda cmd, **kw: (None, "", "", True))
     assert slow.draw("x", (1024, 1024), tmp_path / "w", None, 1).kind == "timeout"
+
+
+def test_codex_takes_an_explicit_proxy_over_the_system_one(tmp_path, monkeypatch):
+    codex = D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, model="")
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    assert "features.respect_system_proxy=false" in codex.args(tmp_path)
+    monkeypatch.delenv("HTTPS_PROXY")
+    assert "features.respect_system_proxy=true" in codex.args(tmp_path)
 
 
 def test_codex_missing_is_a_kind_not_a_crash(tmp_path, monkeypatch):

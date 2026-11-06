@@ -81,6 +81,13 @@ class Plan:
                 else "nothing to change: already set up"]
 
 
+def codex_follows_system_proxy(env=None) -> bool:
+    """With features.respect_system_proxy on, Codex ignores HTTPS_PROXY and goes direct while the OS proxy is off,
+    so an explicit proxy turns the feature off."""
+    env = os.environ if env is None else env
+    return not (env.get("HTTPS_PROXY") or env.get("https_proxy"))
+
+
 def server_spec(root=None, python=None) -> dict:
     """The stdio server every target gets: this interpreter (not resolved: a venv's python is often a symlink)
     running the reelsmith MCP server, kept off the agent's cwd for imports."""

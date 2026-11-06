@@ -202,6 +202,8 @@ def test_codex_command(ws):
     assert values["mcp_servers.reelsmith.env"]["REELSMITH_ROOT"] == str(w.root)
     assert {"OPENROUTER_API_KEY", "OPENAI_API_KEY"} <= set(values["mcp_servers.reelsmith.env_vars"])
     assert values["mcp_servers.reelsmith.tool_timeout_sec"] == 1800 and "features.shell_tool" not in values
+    proxied = cli_engines.codex_command(["codex"], project, scope, srv, "", None, 1800, proxy="http://127.0.0.1:1")
+    assert "features.respect_system_proxy=false" in proxied
     resumed = cli_engines.codex_command(["codex"], project, scope, srv, "", None, 1800, resume="th-9")
     assert resumed[:4] == ["codex", "exec", "resume", "--json"] and resumed[-2:] == ["th-9", "-"]
     assert "-C" not in resumed and "-m" not in resumed and not any("model_reasoning" in a for a in resumed)

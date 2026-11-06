@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ..agentconf import codex_follows_system_proxy
 from .config import (Context, ProviderError, check_id, check_replaceable, context, existing_asset, exe,
                      image_size, project_profile, register_asset, run_tree, safe_tool, tail)
 from .ledger import utc_now
@@ -37,11 +38,15 @@ SIDE_RANGE = (256, 4096)
 LABELS = {"noimage": "no picture came out", "timeout": "timed out before the picture was done",
           "auth": "the image provider is logged out", "quota": "the image provider's quota is used up",
           "badsize": "the picture came out too small", "missing": "the image provider is not installed here",
+          "network": "the image provider cannot be reached",
           "error": "an error"}
 _AUTH = re.compile(r"401 Unauthorized|not logged in|not signed in|login required|log ?in again|sign in again|"
                    r"refresh[_ ]token|token (?:has )?expired|invalid_grant|re-?authenticate", re.I)
 _QUOTA = re.compile(r"\b429\b|usage limit|rate limit|quota|too many requests|hit your (?:usage )?limit|"
                     r"limit (?:reached|exceeded)|insufficient credits", re.I)
+_NETWORK = re.compile(r"routing discovery|timed out|failed to connect|connection (?:refused|reset|closed)|"
+                      r"error sending request|stream disconnected|dns error", re.I)
+PROVIDER_DOWN = ("auth", "quota", "missing", "network")
 STYLE_REF_NOTE = ("The attached reference image only sets the style (palette, materials, brushwork, how figures are "
                   "drawn). Take the content, composition, time of day and light from the description above; do not copy "
                   "the reference's objects or layout.")
@@ -51,8 +56,7 @@ CODEX_LOCKDOWN = ["--ignore-user-config", "--ignore-rules", "-s", "read-only",
                                 "browser_use_external", "in_app_browser", "computer_use", "multi_agent", "hooks",
                                 "goals", "tool_suggest", "skill_mcp_dependency_install")
                     for a in ("-c", f"features.{f}=false")],
-                  # Codex's websocket ignores HTTPS_PROXY without it
-                  "-c", "features.respect_system_proxy=true", "-c", "suppress_unstable_features_warning=true"]
+                  "-c", "suppress_unstable_features_warning=true"]
 _BLOCKED: dict[str, tuple[str, float]] = {}
 _LOG_LOCK = threading.Lock()
 
@@ -156,7 +160,8 @@ class Codex(ImageProvider):
 
     def args(self, workdir: Path, ref: Path | None = None) -> list[str]:
         args = [str(self.exe), "exec", "-C", str(workdir), "--skip-git-repo-check", "--json", "--ephemeral",
-                *CODEX_LOCKDOWN, "-c", f'model_reasoning_effort="{self.effort}"']
+                *CODEX_LOCKDOWN, "-c", f"features.respect_system_proxy={str(codex_follows_system_proxy()).lower()}",
+                "-c", f'model_reasoning_effort="{self.effort}"']
         if self.model():
             args += ["-m", self.model()]
         args.append("-")
@@ -185,8 +190,10 @@ class Codex(ImageProvider):
             return Shot("ok", made[0], secs, raw, thread, out)
         if timed:
             return Shot("timeout", None, secs, raw, thread, out)
-        final = failed or (errors[-1] if errors else "") or message or err.strip()[-300:]
-        kind = "auth" if _AUTH.search(final or "") else "quota" if _QUOTA.search(final or "") else "noimage"
+        said = failed or (errors[-1] if errors else "")
+        final = said or message or err.strip()[-300:]
+        kind = ("auth" if _AUTH.search(final or "") else "quota" if _QUOTA.search(final or "")
+                else "network" if _NETWORK.search(said) else "noimage")
         return Shot(kind, None, secs, raw, thread, out)
 
     def originals(self, thread: str) -> list[Path]:
@@ -311,6 +318,11 @@ def _take_try(ctx: Context, provider: str, asset_id: str, max_draws: int) -> str
     return call
 
 
+def _down(asset_id: str, name: str, kind: str) -> str:
+    return (f"draw {asset_id!r}: {name} cannot draw right now ({LABELS[kind]}); the prompt is not the problem. Build "
+            "the picture in the editor instead (shapes, text, components, evidence).")
+
+
 def _blocked(name: str) -> str:
     kind, until = _BLOCKED.get(name, ("", 0.0))
     return kind if time.monotonic() < until else ""
@@ -337,8 +349,7 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
     for _ in range(2):                    # one retry for a try that drew nothing
         blocked = _blocked(provider.name)
         if blocked:
-            return (f"draw {asset_id!r}: {provider.name} cannot draw right now ({LABELS[blocked]}). Build the "
-                    "picture in the editor instead (shapes, text, components, evidence)."), True
+            return _down(asset_id, provider.name, blocked), True
         call = _take_try(ctx, provider.name, asset_id, max_draws)
         if call is None:
             return (f"draw {asset_id!r}: this project has used its {max_draws} drawing tries "
@@ -349,9 +360,9 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
                                                  "note": prompt[:200]})
             return (f"Drew {asset_id!r}: assets/{asset_id}.png, {out_size[0]}x{out_size[1]}, in {last.seconds:.0f} s."
                     f"{reg} Look at it once before using it."), False
-        if last.kind in ("auth", "quota", "missing"):
+        if last.kind in PROVIDER_DOWN:
             _BLOCKED[provider.name] = (last.kind, time.monotonic() + BLOCK_S)
-            break
+            return _down(asset_id, provider.name, last.kind), True
     why = LABELS.get(last.kind, LABELS["error"]) if last else LABELS["error"]
     return (f"draw {asset_id!r}: nothing usable ({why}). Rewrite the prompt and try again, or build the picture "
             "in the editor."), True

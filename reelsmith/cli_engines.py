@@ -93,7 +93,8 @@ def _writable(scope: guard.Scope) -> list[str]:
 
 # ------------------------------------------------------------------ codex
 def codex_command(exe: list[str], project: Path, scope: guard.Scope, srv: dict, model: str = "",
-                  effort: str | None = None, tool_timeout_s: float = 3600, resume: str | None = None) -> list[str]:
+                  effort: str | None = None, tool_timeout_s: float = 3600, resume: str | None = None,
+                  proxy: str | None = None) -> list[str]:
     overrides = {
         "sandbox_mode": "workspace-write",
         "sandbox_workspace_write.writable_roots": _writable(scope),
@@ -102,7 +103,7 @@ def codex_command(exe: list[str], project: Path, scope: guard.Scope, srv: dict, 
         "shell_environment_policy.inherit": "core",
         "web_search": "live",
         "project_doc_max_bytes": 0,                 # no AGENTS.md of the host's above the project
-        "features.respect_system_proxy": True,      # Codex's websocket ignores HTTPS_PROXY without it
+        "features.respect_system_proxy": not proxy and agentconf.codex_follows_system_proxy(),
         "suppress_unstable_features_warning": True,
         **{f"features.{f}": False for f in CODEX_FEATURES_OFF},
         "mcp_servers.reelsmith.command": srv["command"],
