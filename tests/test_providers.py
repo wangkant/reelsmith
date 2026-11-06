@@ -183,6 +183,7 @@ def env(tmp_path, monkeypatch):
                  "all_proxy"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(D, "_BLOCKED", {})
+    monkeypatch.setattr(D, "_NETWORK_FAILS", {})
     net = OfflineNet()
     monkeypatch.setattr(N, "system_resolve", offline_resolve)
     monkeypatch.setattr(N, "doh_resolver", lambda proxy, **k: offline_resolve)
@@ -1031,6 +1032,25 @@ def test_an_unreachable_provider_stops_the_tries_and_does_not_blame_the_prompt(e
     assert P.draw(env.project, id="b", prompt="y", provider=painter)[1] and len(painter.calls) == 1
 
 
+def test_a_drop_pauses_drawing_briefly_and_a_longer_outage_for_longer(env, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(D.time, "monotonic", lambda: clock[0])
+    painter = FakePainter(env.tmp, kinds=("network", "network"))
+    assert "about 2 min" in P.draw(env.project, id="a", prompt="x", provider=painter)[0]
+    clock[0] += 121
+    assert "about 10 min" in P.draw(env.project, id="a", prompt="x", provider=painter)[0]
+    assert len(painter.calls) == 2
+
+
+@needs_ffmpeg
+def test_a_picture_that_comes_out_lifts_the_network_pause(env, monkeypatch):
+    painter = FakePainter(env.tmp, kinds=("network", "ok", "network"))
+    assert P.draw(env.project, id="a", prompt="x", provider=painter)[1]
+    D._BLOCKED["fakepaint"] = ("network", 0.0)        # the pause ran out
+    assert not P.draw(env.project, id="b", prompt="x", provider=painter)[1]
+    assert D._NETWORK_FAILS == {} and "about 2 min" in P.draw(env.project, id="c", prompt="x", provider=painter)[0]
+
+
 @needs_ffmpeg
 def test_draw_counts_tries_against_max_draws(env):
     env.config(providers={"image": {"max_draws": 3}})
@@ -1119,6 +1139,22 @@ def test_codex_takes_an_explicit_proxy_over_the_system_one(tmp_path, monkeypatch
     assert "features.respect_system_proxy=false" in codex.args(tmp_path)
     monkeypatch.delenv("HTTPS_PROXY")
     assert "features.respect_system_proxy=true" in codex.args(tmp_path)
+
+
+def test_codex_reads_the_network_out_of_a_run_that_timed_out(tmp_path):
+    waiting = json.dumps({"type": "error", "message": "Reconnecting... waiting for network (Connection failed: "
+                                                      "error sending request)"})
+    codex = D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, model="",
+                    run=lambda cmd, **kw: (None, waiting, "", True))
+    assert codex.draw("x", (1024, 1024), tmp_path / "w", None, 1).kind == "network"
+
+
+def test_a_reconnect_that_recovered_is_not_an_outage(tmp_path):
+    events = [{"type": "error", "message": "Reconnecting... 5/5 (workspace routing discovery failed)"},
+              {"type": "item.completed", "item": {"type": "agent_message", "text": "I cannot draw that picture."}}]
+    out = "\n".join(json.dumps(e) for e in events)
+    codex = D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, model="", run=lambda cmd, **kw: (0, out, "", False))
+    assert codex.draw("x", (1024, 1024), tmp_path / "w", None, 1).kind == "noimage"
 
 
 def test_codex_missing_is_a_kind_not_a_crash(tmp_path, monkeypatch):

@@ -29,6 +29,7 @@ TIMEOUT_S = 6 * 60
 MIN_IMAGE_SIDE = 512
 MAX_PROMPT_CHARS = 2000
 BLOCK_S = 10 * 60               # after a logged-out or out-of-quota answer, no tries for a while
+NETWORK_BLOCK_S = 2 * 60        # real drops clear in about two minutes; still down after that, BLOCK_S
 # aspect -> (size asked of image_gen, size delivered)
 ASPECTS = {"9:16": ((1024, 1536), (1080, 1920)), "2:3": ((1024, 1536), (1080, 1620)),
            "3:4": ((1024, 1536), (1080, 1440)), "4:5": ((1024, 1536), (1080, 1350)),
@@ -58,12 +59,13 @@ CODEX_LOCKDOWN = ["--ignore-user-config", "--ignore-rules", "-s", "read-only",
                     for a in ("-c", f"features.{f}=false")],
                   "-c", "suppress_unstable_features_warning=true"]
 _BLOCKED: dict[str, tuple[str, float]] = {}
+_NETWORK_FAILS: dict[str, int] = {}
 _LOG_LOCK = threading.Lock()
 
 
 @dataclass
 class Shot:
-    """One try. kind: ok / timeout / auth / quota / noimage / badsize / error / missing.
+    """One try. kind: ok / timeout / auth / quota / network / noimage / badsize / error / missing.
     detail and events are the provider's own words: draw.log only, never the agent."""
     kind: str
     png: Path | None = None
@@ -189,11 +191,13 @@ class Codex(ImageProvider):
             # only image_gen's own original counts: a PNG the agent wrote some other way is not our picture
             return Shot("ok", made[0], secs, raw, thread, out)
         if timed:
-            return Shot("timeout", None, secs, raw, thread, out)
-        said = failed or (errors[-1] if errors else "")
-        final = said or message or err.strip()[-300:]
+            kind = "network" if _NETWORK.search(errors[-1] if errors else "") else "timeout"
+            return Shot(kind, None, secs, raw, thread, out)
+        # a reconnect that recovered leaves its error behind: with a last message, only a failed turn counts
+        down = failed or ("" if message else (errors[-1] if errors else ""))
+        final = failed or (errors[-1] if errors else "") or message or err.strip()[-300:]
         kind = ("auth" if _AUTH.search(final or "") else "quota" if _QUOTA.search(final or "")
-                else "network" if _NETWORK.search(said) else "noimage")
+                else "network" if _NETWORK.search(down) else "noimage")
         return Shot(kind, None, secs, raw, thread, out)
 
     def originals(self, thread: str) -> list[Path]:
@@ -318,9 +322,27 @@ def _take_try(ctx: Context, provider: str, asset_id: str, max_draws: int) -> str
     return call
 
 
+def _block(name: str, kind: str) -> None:
+    seconds = BLOCK_S
+    if kind == "network":
+        _NETWORK_FAILS[name] = _NETWORK_FAILS.get(name, 0) + 1
+        seconds = NETWORK_BLOCK_S if _NETWORK_FAILS[name] == 1 else BLOCK_S
+    _BLOCKED[name] = (kind, time.monotonic() + seconds)
+
+
+def _reachable(name: str) -> None:
+    _NETWORK_FAILS.pop(name, None)
+    if _BLOCKED.get(name, ("",))[0] == "network":
+        _BLOCKED.pop(name)
+
+
 def _down(asset_id: str, name: str, kind: str) -> str:
-    return (f"draw {asset_id!r}: {name} cannot draw right now ({LABELS[kind]}); the prompt is not the problem. Build "
-            "the picture in the editor instead (shapes, text, components, evidence).")
+    then = "Build the picture in the editor instead"
+    if kind == "network":
+        left = max(1, math.ceil((_BLOCKED[name][1] - time.monotonic()) / 60))
+        then = f"Try again in about {left} min, or build the picture in the editor"
+    return (f"draw {asset_id!r}: {name} cannot draw right now ({LABELS[kind]}); the prompt is not the problem. "
+            f"{then} (shapes, text, components, evidence).")
 
 
 def _blocked(name: str) -> str:
@@ -356,12 +378,13 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
                     "(providers.image.max_draws); reuse a picture or build it in the editor."), True
         last = _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout, fit, measure)
         if last.kind == "ok":
+            _reachable(provider.name)
             reg = register_asset(ctx, asset_id, {"path": f"assets/{asset_id}.png", "kind": "image",
                                                  "note": prompt[:200]})
             return (f"Drew {asset_id!r}: assets/{asset_id}.png, {out_size[0]}x{out_size[1]}, in {last.seconds:.0f} s."
                     f"{reg} Look at it once before using it."), False
         if last.kind in PROVIDER_DOWN:
-            _BLOCKED[provider.name] = (last.kind, time.monotonic() + BLOCK_S)
+            _block(provider.name, last.kind)
             return _down(asset_id, provider.name, last.kind), True
     why = LABELS.get(last.kind, LABELS["error"]) if last else LABELS["error"]
     return (f"draw {asset_id!r}: nothing usable ({why}). Rewrite the prompt and try again, or build the picture "

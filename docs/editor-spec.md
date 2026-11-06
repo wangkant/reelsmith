@@ -595,7 +595,9 @@ the default is the one nearest the project's canvas) or `"WxH"` with sides 256-4
 image generation only: no user config, no shell, a read-only sandbox without network, no web search, in a
 throwaway folder; Codex's own words go to `<cache>/draw.log`, never to the agent. It uses the model from
 `$CODEX_HOME/config.toml` when one is set there. The binary is `CODEX_EXE`, else the CLI bundled with the Codex
-desktop app on Windows, else `codex` on PATH. A logged-out or out-of-quota answer pauses drawing for 10 minutes.
+desktop app on Windows, else `codex` on PATH. A logged-out or out-of-quota answer pauses drawing for 10 minutes;
+a provider that cannot be reached pauses it for 2, then 10 if it is still unreachable, and a picture that comes out
+lifts that pause. An `HTTPS_PROXY` in the environment takes precedence over the system proxy.
 
 `providers.image`: `provider` `"codex"`, `max_draws` 30 (tries per project, counted in the ledger), `timeout_s`
 360, `effort` `"low"` (`minimal`, `low`, `medium`, `high`).

@@ -28,6 +28,7 @@ TOOL_TIMEOUT_S = 3600           # one render call may take many minutes
 STARTUP_TIMEOUT_S = 60
 # Codex hands an MCP server a minimal environment: the names the tools read from it are forwarded
 CODEX_ENV_VARS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "REELSMITH_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+                  "https_proxy", "http_proxy", "no_proxy",
                   "CODEX_EXE", "CODEX_HOME", "REELSMITH_BUDGET_USD", "REELSMITH_MIN_BALANCE_USD", "REELSMITH_RENDERER"]
 DSH_BEGIN = "# >>> reelsmith (managed by `reelsmith setup dsh`)"
 DSH_END = "# <<< reelsmith"
