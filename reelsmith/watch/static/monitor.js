@@ -23,7 +23,7 @@ export function createMonitor(app) {
     const c = app.cut()?.canvas || app.state?.canvas;
     if (!c) return;
     const box = screen.getBoundingClientRect();
-    const pad = 16;
+    const pad = 0;          // the stage is sized to the canvas: the film fills it edge to edge
     const aw = Math.max(1, box.width - pad * 2), ah = Math.max(1, box.height - pad * 2);
     const s = Math.min(aw / c.width, ah / c.height);
     const w = Math.round(c.width * s), hgt = Math.round(c.height * s);

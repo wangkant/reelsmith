@@ -99,8 +99,10 @@ def test_state_of_the_demo(demo):
     proof = next(i for i in st["issues"] if i["clip"] == "proof")
     assert proof["level"] == "error" and proof["source"] == "check" and proof["t"] == 11.6
     assert st["render"] == {"delivered": None, "draft": None, "last": None}
-    assert st["spend"] == {"project_usd": 0, "budget_usd": 1.0}
+    assert st["spend"] == {"project_usd": 0, "project_budget_usd": 1.0, "chat_usd": 0.0, "chat_budget_usd": 5.0}
     assert st["activity"] == [] and st["history"] == []
+    assert st["result"]["state"] == "none" and st["result"]["reason_code"] == "result.none"
+    assert st["can_undo"] is False and st["can_redo"] is False and st["latest_batch"] is None
 
 
 def test_revision_is_stable_and_moves_with_an_edit(demo):
@@ -776,6 +778,15 @@ def test_a_turn_streams_its_rows_in_order(chat_demo):
     assert not (chat_demo / "build" / "run_state.json").exists()                 # a headless run's state is untouched
 
 
+def test_a_selected_beat_goes_with_the_message(chat_demo):
+    client = FakeClient(reply("Noted."))
+    chat, _ = make_chat(chat_demo, client)
+    chat.send("Shorten this.", context={"beat": 3, "start": 5.62, "end": 8.22, "playhead": 6.0})
+    assert chat.wait(20)
+    assert chat.status()["messages"][0]["context"] == {"beat": 3, "start": 5.62, "end": 8.22, "playhead": 6.0}
+    assert "[selected beat 3 (5.62-8.22 s)]\nShorten this." in client.calls[0][1]["content"]
+
+
 def test_the_next_message_resumes_the_same_session(chat_demo):
     client = FakeClient(reply("One."), reply("Two."))
     chat, _ = make_chat(chat_demo, client)
@@ -923,3 +934,538 @@ def test_a_change_needs_the_token_and_this_origin(chat_served):
     assert post(srv, "/api/chat/stop", {}, {"Origin": "null"})[0] == 403
     assert json.loads(get(srv, "/api/chat")[2])["messages"] == []          # none of them reached the chat
     assert post(srv, "/api/chat", msg, {"Origin": f"http://localhost:{srv.port}"})[0] == 202
+    for path, body in (("/api/action", {"action": "check"}), ("/api/accept", {}), ("/api/reveal", {})):
+        assert post(srv, path, body, token=False)[0] == 403
+        assert post(srv, path, body, {"Origin": "http://evil.example"})[0] == 403
+
+
+def test_chat_refusals_carry_codes(chat_served):
+    srv, tools = chat_served
+    assert post(srv, "/api/chat", {"message": "go"})[0] == 202
+    assert tools.entered.wait(10)
+    code, body = post(srv, "/api/chat", {"message": "more"})
+    assert code == 409 and body["code"] == "busy.chat" and body["params"] == {"turn": 1}
+    srv.site(None).chat.stop()
+    assert srv.site(None).chat.wait(10)
+    code, body = post(srv, "/api/chat", {"message": "x" * 8001})
+    assert body["code"] == "chat.too_long" and body["params"] == {"chars": 8001, "max": 8000}
+    assert post(srv, "/api/chat", {"message": "hi", "engine": "gpt"})[1]["code"] == "chat.unknown_engine"
+    note = json.loads(get(srv, "/api/chat")[2])["messages"][-1]
+    assert note["code"] == "chat.stopped" and note["params"] == {"cost_usd": 0.01}
+
+
+# ------------------------------------------------------------------ beats
+def test_beats_follow_the_narration(demo):
+    st = S.build_state(demo)
+    beats, lines = st["beats"], st["voice"]["lines"]
+    assert [b["line"] for b in beats] == [ln["text"] for ln in lines]
+    assert beats[0]["start"] == 0.0 and beats[-1]["end"] == st["duration"]
+    assert all(a["end"] == b["start"] == ln["start"] for a, b, ln in zip(beats, beats[1:], lines[1:]))
+    one, two = beats[0], beats[1]
+    assert one["frame"] == f"/api/frame?t={round(one['end'] / 2, 3):g}&h=180"
+    assert [p["text"] for p in one["phrases"]] == [i["text"] for i in st["tracks"][0]["items"] if i["line"] == 1]
+    shot = one["shots"][0]
+    assert shot["clip"] == "open" and shot["name_code"] == "shot.still" and shot["notes"] == ["slow push-in"]
+    assert shot["note_codes"] == [{"code": "shot.motion", "params": {"motion": "push"}}]
+    assert shot["thumb"] == "/api/thumb?asset=photo" and shot["continues"] is False
+    assert two["shots"][0]["clip"] == "open" and two["shots"][0]["continues"] is True        # it spans two beats
+    hook = one["elements"][0]
+    assert (hook["clip"], hook["kind"], hook["name_code"], hook["name"]) == ("hook", "title", "text.title", "Title")
+    assert hook["summary"] == "一杯奶茶，成本多少？" and two["elements"][0]["continues"] is True
+    assert one["sound"] == [{"clip": "bed1", "asset": "bed", "start": 0.0, "end": 2.0, "name_code": "sound.effect",
+                             "name": "Sound effect", "continues": False}]
+    named = {e["clip"]: e for b in beats for e in b["elements"] if not e["continues"]}
+    assert named["bill"]["name"] == "Itemised receipt" and "茶底和奶 ¥2.5" in named["bill"]["summary"]
+    assert named["count"]["kind"] == "figure" and named["count"]["summary"] == "¥5 毛利不到"
+    assert named["proof"]["kind"] == "evidence" and named["arrow"]["name_code"] == "shape.arrow"
+    assert named["ring"]["name"] == "Circle mark" and named["verdict"]["name"] == "Verdict stamp"
+    assert "todo" not in named                                                   # a hidden track
+    video = next(s for b in beats for s in b["shots"] if s["clip"] == "shop" and not s["continues"])
+    assert video["notes"] == ["looped"] and video["thumb"].startswith("/api/thumb?asset=clip&t=")
+    proof = next(k for k, i in enumerate(st["issues"]) if i["clip"] == "proof")
+    assert st["issues"][proof]["beat"] == 5 and proof in beats[4]["issues"]       # its own beat, not the one at 11.6
+    assert not any(b["changed"] for b in beats)
+
+
+def test_plain_names_and_summaries():
+    def clip(type_, label="", **raw):
+        return {"type": type_, "label": label, "raw": raw, "asset": raw.get("asset")}
+    canvas = {"height": 1080}
+    assert S.element_name(clip("component", "StoryBeats"), canvas) == ("card", "card.steps", "Step-by-step card")
+    assert S.element_name(clip("component", "PriceTag"), canvas) == ("component", "component.custom", "PriceTag")
+    assert S.element_name(clip("shape", shape="rect", fill="#000"), canvas)[2] == "Backing plate"
+    assert S.element_name(clip("text", "x", style={"size": 40}), canvas)[2] == "Overlay text"
+    assert S.element_name(clip("text", "x", style={"size": 90}), canvas)[2] == "Title"
+    beats = clip("component", "StoryBeats", props={"beats": [{"when": "Day 1", "text": "Rain"}, {"text": "Sea"}],
+                                                   "color": "accent"})
+    assert S.element_summary(beats, {}) == "Day 1 Rain · Sea"
+    count = clip("component", "CountUp", props={"value": 35, "suffix": "g", "label": "of salt", "at": "line:4"})
+    assert S.element_summary(count, {}) == "35g of salt"
+    assert S.picture_subject("from delta: The pale river water flows, slowly") == "The pale river water flows"
+    assert S.picture_subject("") is None
+    shot = {"raw": {}, "rate": 2, "reverse": True, "hold": 1.5, "loop": False,
+            "transition": {"type": "crossfade", "dur": 0.4}}
+    assert [n["text"] for n in S.shot_notes(shot)] == ["2x speed", "reversed", "held frame", "crossfade in"]
+
+
+def test_beats_without_narration(demo):
+    raw = json.loads((demo / "project.json").read_text("utf-8"))
+    raw.pop("voice")
+    raw["tracks"] = [
+        {"id": "bg", "kind": "visual", "clips": [
+            {"id": "s1", "type": "image", "asset": "photo", "start": 0, "dur": 2},
+            {"id": "s2", "type": "image", "asset": "photo", "start": 2, "dur": 2},
+            {"id": "pip", "type": "image", "asset": "photo", "start": 2.5, "dur": 0.5,
+             "box": {"x": 0, "y": 0, "w": 200, "h": 200}},
+            {"id": "s3", "type": "video", "asset": "clip", "start": 4, "dur": 2}]},
+        {"id": "fg", "kind": "visual", "clips": [
+            {"id": "t1", "type": "text", "text": "across", "start": 1, "end": 3}]}]
+    (demo / "project.json").write_text(json.dumps(raw), encoding="utf-8")
+    st = S.build_state(demo)
+    beats = st["beats"]
+    assert [(b["start"], b["end"], b["line"], b["kind"]) for b in beats] == [
+        (0.0, 2.0, None, "shot"), (2.0, 4.0, None, "shot"), (4.0, 6.0, None, "shot")]
+    assert [s["clip"] for s in beats[1]["shots"]] == ["s2", "pip"] and beats[1]["shots"][1]["name"] == "Inset picture"
+    assert [(e["clip"], e["continues"]) for b in beats for e in b["elements"]] == [("t1", False), ("t1", True)]
+
+
+def test_each_batch_says_what_it_touched(demo):
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    edit(demo, {"op": "remove_clip", "id": "ring"})
+    st = S.build_state(demo)
+    rows = [r for r in st["activity"] if r.get("batch")]
+    assert rows[0]["touched"] == {"clips": ["arrow"], "tracks": [], "beats": [4, 5]}
+    assert rows[1]["touched"] == {"clips": ["ring"], "tracks": [], "beats": [6]}    # gone now: its old time counts
+    assert st["latest_batch"] == 2 and [b["n"] for b in st["beats"] if b["changed"]] == [6]
+    tools.undo(str(demo))
+    st = S.build_state(demo)
+    assert st["latest_batch"] == 1 and [b["n"] for b in st["beats"] if b["changed"]] == [4, 5]
+    assert st["can_redo"] is True and st["can_undo"] is True
+
+
+def test_rows_say_which_turn_or_action_made_them(demo):
+    mark = P.set_origin(demo, turn=3)
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    P.clear_origin(demo, mark)
+    mark = P.set_origin(demo, action="check")
+    tools.check(str(demo))
+    P.clear_origin(demo, mark)
+    tools.check(str(demo))
+    rows = S.activity_of(demo)
+    assert [(r.get("turn"), r.get("action")) for r in rows] == [(3, None), (None, "check"), (None, None)]
+    (demo / ".history" / "origin.json").write_text(json.dumps({"pid": 999999999, "turn": 9}), encoding="utf-8")
+    assert P.origin(demo) is None                                   # its process is gone
+
+
+def test_a_chat_tool_row_names_the_batch_it_made(chat_demo):
+    class EditTools(Tools):
+        def __call__(self, project, ws, scope, web):
+            made = super().__call__(project, ws, scope, web)
+            run = made[0]
+
+            def do_edit(args):
+                res = tools.edit(str(chat_demo), [{"op": "update_clip", "id": "arrow",
+                                                   "set": {"start": "line:4", "end": "line:5.end"}}])
+                return type(run.run({}))(str(res))
+            return made + [type(run)("edit", "edits", OBJ, do_edit)]
+    client = FakeClient(reply("Editing.", [("edit", {}), ("noop", {})]), reply("Done."))
+    chat, _ = make_chat(chat_demo, client, EditTools())
+    chat.send("lengthen the arrow")
+    assert chat.wait(20)
+    rows = chat.status()["messages"]
+    tool_rows = {r["tool"]: r for r in rows if r["role"] == "tool"}
+    assert tool_rows["edit"]["batch"] == 1 and "batch" not in tool_rows["noop"]
+    logged = S.activity_of(chat_demo)
+    assert logged[-1]["turn"] == 1 and logged[-1]["batch"] == 1
+    assert not (chat_demo / ".history" / "origin.json").exists()
+    assert rows[-1]["code"] == "chat.end" and rows[-1]["params"] == {"cost_usd": 0.02}
+
+
+# ------------------------------------------------------------------ the result
+def deliver(root: Path, cut: str | None = None, film: bytes = b"not a real film") -> None:
+    from reelsmith.render import film_inputs
+    out = root / "out"
+    out.mkdir(exist_ok=True)
+    (out / "film.mp4").write_bytes(film)
+    report = {"ok": True, "inputs": {"cut": cut or film_inputs(root)["cut"]}, "film_check": {"duration_s": 21.8}}
+    (out / "report.json").write_text(json.dumps(report), encoding="utf-8")
+
+
+def test_the_result_as_a_state(demo):
+    from reelsmith.render import film_inputs
+    deliver(demo)
+    res = S.build_state(demo)["result"]
+    assert res["state"] == "current" and res["reason_code"] == "result.current" and res["accepted"] is None
+    assert res["film"]["url"] == "/project/out/film.mp4" and res["film"]["matches_cut"] is True
+    cut = film_inputs(demo)["cut"]
+    (demo / "out" / "accepted.json").write_text(json.dumps({"at": "2026-11-10T12:00:00", "cut": cut}), "utf-8")
+    assert S.build_state(demo)["result"]["accepted"] == {"at": "2026-11-10T12:00:00"}
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    res = S.build_state(demo)["result"]
+    assert res["state"] == "stale" and res["reason"] == "The delivered film predates the current cut"
+    assert res["accepted"] is None                                  # accepted for another cut
+    build = demo / "build"
+    build.mkdir(exist_ok=True)
+    row = ('[error] verdict @ 19.0s: text "不贵" is cut by the canvas edge (right, 66 px) (also at 19.5s): move it '
+           'in or make it smaller')
+    (build / "report.json").write_text(json.dumps({
+        "ok": False, "stage": "layout", "inputs": {"cut": film_inputs(demo)["cut"]}, "layout": [row],
+        "layout_frames": ["C:\\elsewhere\\demo\\build\\inspect\\still_00570.png"], "kept_previous": True,
+        "error": "words sit where the viewer cannot read them"}), encoding="utf-8")
+    (build / "inspect").mkdir()
+    (build / "inspect" / "still_00570.png").write_bytes(b"png")
+    st = S.build_state(demo)
+    res = st["result"]
+    assert res["state"] == "refused" and res["stage"] == "layout" and res["reason_code"] == "layout.cut_by_edge"
+    assert res["params"] == {"text": "不贵", "side": "right", "px": 66, "also": [19.5]}
+    assert res["reason"] == 'Text "不贵" is cut by the right edge of the canvas (66 px)'
+    assert (res["clip"], res["t"], res["beat"]) == ("verdict", 19.0, 7)
+    assert res["frame"] == "/project/build/inspect/still_00570.png" and res["film"]["matches_cut"] is False
+    issue = next(i for i in st["issues"] if i["source"] == "layout")
+    assert issue["code"] == "layout.cut_by_edge" and issue["params"]["px"] == 66 and issue["beat"] == 7
+    assert 0 <= st["issues"].index(issue) and st["issues"].index(issue) in st["beats"][6]["issues"]
+
+
+def test_layout_messages_as_codes():
+    cases = {
+        'text "a b" sits 12 px outside the safe area (top): the platform\'s UI covers it there; keep words inside x '
+        '0-1, y 0-1': ("layout.outside_safe", {"px": 12, "side": "top"}),
+        'text "a" is 18 px: under 28 px is hard to read on this 1080x1920 canvas and render refuses under 20; give':
+            ("layout.text_tiny", {"px": 18, "min": 28}),
+        'text "a" is 24.5 px (also at 3.0s): under 28 px is hard to read on this 1080x1920 canvas; give it':
+            ("layout.text_small", {"px": 24.5, "min": 28, "also": [3.0]}),
+        'text "a" overlaps text "b" of cap (also at 2.0s): move one of them (captions sit at the bottom)':
+            ("layout.overlap", {"other": 'text "b" of cap'}),
+        'text "a" is cut by its own card: 40% of it stays hidden': ("layout.cut_by_card", {"share": 40}),
+        'text "a" (#777777) on a background of about #808080 has contrast 1.1:1 (aim for 4.5:1 or more): change':
+            ("layout.low_contrast", {"ratio": 1.1, "bg": "#808080"}),
+        'text overflows its clip box by 9 px (bottom): make the box bigger': ("layout.overflow_box",
+                                                                              {"px": 9, "text": ""}),
+    }
+    for msg, (code, params) in cases.items():
+        got = S.layout_code(msg)
+        assert got["code"] == code, msg
+        assert {k: got["params"][k] for k in params} == params, msg
+    assert S.layout_code("something else entirely") is None
+
+
+def test_what_is_running_in_words():
+    row = {"tool": "render", "since": "x", "seconds": 3.0, "stage": "layout", "progress": 0.4}
+    got = S.running_view(row, "chat")
+    assert got["text"] == "The agent is rendering the film: measuring layout (40 %)"
+    assert (got["code"], got["stage_code"], got["percent"]) == ("running.render", "stage.layout", 40)
+    assert got["params"] == {"tool": "render", "by": "chat", "stage": "stage.layout", "percent": 40}
+    assert S.running_view({**row, "stage": None, "progress": None}, "window")["text"] == "Rendering the film"
+    assert S.running_view({**row, "tool": "mystery"}, "agent")["code"] == "running.tool"
+    assert S.running_view(None, "agent") is None
+
+
+# ------------------------------------------------------------------ actions, acceptance, frames
+def _wait_for(check, timeout=20):
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        if check():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_actions_run_a_tool_without_typing(chat_served, monkeypatch):
+    srv, tools_ = chat_served
+    site = srv.site(None)
+    st = json.loads(get(srv, "/api/state")[2])
+    assert st["can"]["check"] is True and st["can"]["undo"] is False and st["can"]["stop"] is False
+    assert st["can"]["why"]["undo"]["code"] == "undo.empty" and st["can"]["why"]["stop"]["code"] == "stop.idle"
+    assert post(srv, "/api/action", {"action": "undo"}) == (409, {"error": "There is no change to undo",
+                                                                  "code": "undo.empty", "params": {}})
+    assert post(srv, "/api/action", {"action": "dance"})[1]["code"] == "action.unknown"
+    assert post(srv, "/api/action", {"action": "stop"})[1] == {"stopped": False, "code": "stop.idle", "params": {},
+                                                               "error": "Nothing is running"}
+    assert post(srv, "/api/action", {"action": "check"}) == (202, {"action": "check", "started": True})
+    assert site.wait_action(20)
+    st = json.loads(get(srv, "/api/state")[2])
+    assert st["last_action"]["code"] == "action.check.failed" and st["last_action"]["ok"] is False   # demo has an error
+    assert st["activity"][-1]["tool"] == "check" and st["activity"][-1]["action"] == "check"
+    # one at a time, and never beside a chat turn
+    gate = threading.Event()
+    monkeypatch.setitem(W.ACTIONS, "check", lambda project: (gate.wait(10), tools.ToolResult("ok"))[1])
+    assert post(srv, "/api/action", {"action": "check"})[0] == 202
+    assert post(srv, "/api/action", {"action": "check"})[1]["code"] == "busy.action"
+    assert post(srv, "/api/chat", {"message": "hi"})[1]["code"] == "busy.action"
+    stop = post(srv, "/api/action", {"action": "stop"})[1]
+    assert stop["stopped"] is False and stop["code"] == "stop.unsupported"
+    st = json.loads(get(srv, "/api/state")[2])
+    assert st["action"]["action"] == "check" and st["can"]["render"] is False
+    assert st["can"]["why"]["render"]["code"] == "busy.action"
+    gate.set()
+    assert site.wait_action(10)
+    assert post(srv, "/api/chat", {"message": "go"})[0] == 202
+    assert tools_.entered.wait(10)
+    assert post(srv, "/api/action", {"action": "check"})[1]["code"] == "busy.chat"
+    st = json.loads(get(srv, "/api/state")[2])
+    assert st["can"]["stop"] is True and st["can"]["why"]["check"]["code"] == "busy.chat"
+    assert post(srv, "/api/action", {"action": "stop"}) == (200, {"stopped": True, "what": "chat"})
+    assert site.chat.wait(10)
+
+
+def test_an_action_is_announced_and_undo_works(served, demo):
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    conn = http.client.HTTPConnection("127.0.0.1", served.port, timeout=20)
+    conn.request("GET", "/api/events")
+    r = conn.getresponse()
+    _event(r)
+    assert post(served, "/api/action", {"action": "undo"})[0] == 202
+    assert json.loads(_event(r, ("action",)))["state"] == "running"
+    done = json.loads(_event(r, ("action",)))
+    assert done["state"] == "done" and done["code"] == "action.undo.ok" and "undid 1 batch" in done["detail"]
+    conn.close()
+    assert _wait_for(lambda: json.loads(get(served, "/api/state")[2])["can"]["redo"] is True)
+    assert post(served, "/api/action", {"action": "redo"})[0] == 202
+    assert served.site(None).wait_action(20)
+
+
+def test_accept_and_reveal(served, demo, monkeypatch):
+    opened = []
+    monkeypatch.setattr(W, "open_folder", opened.append)
+    assert post(served, "/api/accept", {})[1]["code"] == "accept.not_current"
+    assert post(served, "/api/reveal", {}) == (404, {"error": "No film has been delivered", "code": "reveal.no_film",
+                                                     "params": {}})
+    deliver(demo)
+    assert _wait_for(lambda: json.loads(get(served, "/api/state")[2])["result"]["state"] == "current")
+    code, body = post(served, "/api/accept", {})
+    assert code == 200 and body["accepted"]["at"]
+    mark = json.loads((demo / "out" / "accepted.json").read_text("utf-8"))
+    assert _wait_for(lambda: json.loads(get(served, "/api/state")[2])["result"]["accepted"] == body["accepted"])
+    assert mark["cut"] == json.loads(get(served, "/api/state")[2])["cut"]
+    assert post(served, "/api/reveal", {}) == (200, {"revealed": True, "folder": "out"})
+    assert opened == [demo / "out"]
+
+
+def test_open_folder_per_platform(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(W.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr(W.os, "startfile", lambda p: calls.append(["startfile", p]), raising=False)
+    for platform, first in (("win32", "startfile"), ("darwin", "open"), ("linux", "xdg-open")):
+        monkeypatch.setattr(W.sys, "platform", platform)
+        W.open_folder(tmp_path)
+        assert calls[-1] == [first, str(tmp_path)]
+
+
+def _png(path: Path) -> None:
+    subprocess.run(["ffmpeg", "-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=108x192",
+                    "-frames:v", "1", str(path)], check=True, capture_output=True)
+
+
+@needs_ffmpeg
+def test_frames_of_the_cut_are_queued_and_batched(served, demo, monkeypatch):
+    runs = []
+
+    def fake(mode, src, project, out, frames, timeout=0, **kw):
+        runs.append(list(frames))
+        stills = []
+        for f in frames:
+            _png(Path(out) / f"still_{f:05d}.png")
+            stills.append({"frame": f, "png": str(Path(out) / f"still_{f:05d}.png")})
+        return {"ok": True, "stills": stills}
+    monkeypatch.setattr(W.R, "run_node", fake)
+    conn = http.client.HTTPConnection("127.0.0.1", served.port, timeout=30)
+    conn.request("GET", "/api/events")
+    r = conn.getresponse()
+    _event(r)
+    with W.R.project_lock(demo / "build"):          # never beside a render: the queue waits
+        for i in range(14):
+            code, _, body = get(served, f"/api/frame?t={i}&h=90")
+            assert code == 202 and json.loads(body) == {"pending": True}
+        time.sleep(1.5)
+        assert runs == []
+    ready = []
+    while len(ready) < 14:
+        ready += json.loads(_event(r, ("frames",)))["ready"]
+    conn.close()
+    assert [len(x) for x in runs] == [12, 2] and ready[0]["url"] == "/api/frame?t=0&h=90"
+    code, head, body = get(served, "/api/frame?t=3&h=90")
+    assert code == 200 and head["X-Frame-Source"] == "cut" and body[:2] == b"\xff\xd8"
+    beat = json.loads(get(served, "/api/state")[2])["beats"][0]
+    assert beat["frame"].startswith("/api/frame?t=") and beat["frame"].endswith("&h=180")
+
+
+def test_frames_of_an_older_cut_are_dropped(served, demo, monkeypatch):
+    runs = []
+    monkeypatch.setattr(W.R, "run_node", lambda mode, src, project, out, frames, **kw: runs.append(frames) or {
+        "ok": False, "error": "unused"})
+    conn = http.client.HTTPConnection("127.0.0.1", served.port, timeout=30)
+    conn.request("GET", "/api/events")
+    r = conn.getresponse()
+    _event(r)
+    with W.R.project_lock(demo / "build"):
+        assert get(served, "/api/frame?t=2&h=90")[0] == 202
+        edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    got = json.loads(_event(r, ("frames",)))
+    conn.close()
+    assert got["stale"] == [{"t": 2.0, "h": 90, "frame": 60, "url": "/api/frame?t=2&h=90"}]
+    assert got["ready"] == [] and runs == []
+
+
+@needs_ffmpeg
+def test_a_failed_frame_says_why(served, monkeypatch):
+    monkeypatch.setattr(W.R, "run_node", lambda *a, **kw: {"ok": False, "stage": "render", "error": "it broke"})
+    assert get(served, "/api/frame?t=1&h=90")[0] == 202
+    assert _wait_for(lambda: get(served, "/api/frame?t=1&h=90")[0] == 503)
+    body = json.loads(get(served, "/api/frame?t=1&h=90")[2])
+    assert body["code"] == "frame.failed" and "it broke" in body["params"]["error"]
+
+
+@needs_ffmpeg
+def test_frames_of_a_delivered_film_come_from_it(served, demo):
+    film = demo / "out" / "film.mp4"
+    film.parent.mkdir()
+    subprocess.run(["ffmpeg", "-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=108x192:d=3",
+                    "-pix_fmt", "yuv420p", str(film)], check=True, capture_output=True)
+    deliver(demo, film=film.read_bytes())
+    assert _wait_for(lambda: json.loads(get(served, "/api/state")[2])["result"]["state"] == "current")
+    code, head, body = get(served, "/api/frame?t=1&h=96")
+    assert code == 200 and head["X-Frame-Source"] == "film" and body[:2] == b"\xff\xd8"
+    assert get(served, "/api/frame?t=1&h=96&src=nope")[0] == 400
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    assert get(served, "/api/frame?t=1&h=96&src=film")[1]["X-Frame-Source"] == "film"    # asked for explicitly
+
+
+def _fake_stills(runs, delay=0.0, guard=None, live=None):
+    """run_node for "stills": writes a picture per frame and notes each run (frames, a render held the lock)."""
+    def fake(mode, src, project, out, frames, timeout=0, **kw):
+        with guard or threading.Lock():
+            if live is not None:
+                live[0] += 1
+                live[1] = max(live[1], live[0])
+            runs.append((list(frames), W.render_busy(Path(project))))
+        time.sleep(delay)
+        stills = []
+        for f in frames:
+            _png(Path(out) / f"still_{f:05d}.png")
+            stills.append({"frame": f, "png": str(Path(out) / f"still_{f:05d}.png")})
+        if live is not None:
+            with guard:
+                live[0] -= 1
+        return {"ok": True, "stills": stills}
+    return fake
+
+
+@needs_ffmpeg
+def test_twenty_frames_asked_at_once(served, demo, monkeypatch):
+    runs, live, guard = [], [0, 0], threading.Lock()
+    monkeypatch.setattr(W.R, "run_node", _fake_stills(runs, 0.3, guard, live))
+    ts = [round(0.2 + i, 2) for i in range(20)]
+    codes = []
+    with W.R.project_lock(demo / "build"):          # a render holds the project: nothing starts
+        asks = [threading.Thread(target=lambda t=t: codes.append(get(served, f"/api/frame?t={t}&h=90")[0]))
+                for t in ts]
+        for a in asks:
+            a.start()
+        for a in asks:
+            a.join()
+        assert codes == [202] * 20
+        time.sleep(1.5)
+        assert runs == []
+    assert _wait_for(lambda: all(get(served, f"/api/frame?t={t}&h=90")[0] == 200 for t in ts), 60)
+    drawn = [f for frames, _ in runs for f in frames]
+    assert live[1] == 1 and all(len(frames) <= W.FRAME_BATCH for frames, _ in runs)
+    assert not any(busy for _, busy in runs) and len(drawn) == len(set(drawn)) == 20    # each frame drawn once
+
+
+@needs_ffmpeg
+def test_a_render_that_begins_meanwhile_holds_back_the_frames(served, demo, monkeypatch):
+    site, runs = served.site(None), []
+    answers = iter([False, True])                   # the worker finds the project free; by the renderer it is not
+    monkeypatch.setattr(site, "rendering", lambda: next(answers, False))
+    monkeypatch.setattr(W.R, "run_node", _fake_stills(runs))
+    canvas = json.loads(get(served, "/api/state")[2])["canvas"]
+    h = round(54 * canvas["height"] / canvas["width"])
+    assert get(served, "/api/frame?t=1&w=54")[0] == 202          # a width is read as the canvas's shape
+    assert _wait_for(lambda: get(served, f"/api/frame?t=1&h={h}")[0] == 200)
+    assert len(runs) == 1 and get(served, "/api/frame?t=1&w=54")[0] == 200
+
+
+def test_beats_from_caption_groups(demo):
+    raw = json.loads((demo / "project.json").read_text("utf-8"))
+    raw.pop("voice")
+    raw["tracks"] = [
+        {"id": "bg", "kind": "visual", "clips": [
+            {"id": "s1", "type": "image", "asset": "photo", "start": 0, "dur": 3},
+            {"id": "s2", "type": "image", "asset": "photo", "start": 3, "dur": 9.5}]},
+        {"id": "cap", "kind": "captions", "items": [
+            {"start": 0, "end": 1, "text": "One two"}, {"start": 1.1, "end": 2, "text": "three four."},
+            {"start": 2.1, "end": 2.9, "text": "Five"}, {"start": 3.0, "end": 4, "text": "six seven"},
+            {"start": 4.1, "end": 5, "text": "eight"}, {"start": 5.1, "end": 10.9, "text": "nine"},
+            {"start": 11.0, "end": 12.5, "text": "ten"}]}]
+    (demo / "project.json").write_text(json.dumps(raw), encoding="utf-8")
+    st = S.build_state(demo)
+    assert st["valid"], st["error"]
+    beats = st["beats"]
+    # a sentence's end, a cut to s2, and a group over GROUP_S long each start a beat
+    assert [(b["start"], b["end"], b["kind"]) for b in beats] == [
+        (0.0, 2.1, "phrase"), (2.1, 3.0, "phrase"), (3.0, 11.0, "phrase"), (11.0, 12.5, "phrase")]
+    assert [p["text"] for p in beats[2]["phrases"]] == ["six seven", "eight", "nine"]
+    assert [(s["clip"], s["continues"]) for b in beats for s in b["shots"]] == [
+        ("s1", False), ("s1", True), ("s2", False), ("s2", True)]
+    assert all(b["line"] is None for b in beats)
+
+
+def test_an_acceptance_holds_only_for_its_cut(served, demo):
+    state = lambda: json.loads(get(served, "/api/state")[2])["result"]       # noqa: E731
+    deliver(demo)
+    assert _wait_for(lambda: state()["state"] == "current")
+    code, body = post(served, "/api/accept", {})
+    assert code == 200 and _wait_for(lambda: state()["accepted"] == body["accepted"])
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "line:4", "end": "line:5.end"}})
+    assert _wait_for(lambda: state()["state"] == "stale")
+    assert state()["accepted"] is None
+    assert post(served, "/api/accept", {}) == (409, {"error": S.TEXTS["accept.not_current"],
+                                                     "code": "accept.not_current", "params": {}})
+    tools.undo(str(demo))                           # the accepted cut again: its acceptance stands again
+    assert _wait_for(lambda: state()["state"] == "current")
+    assert state()["accepted"] == body["accepted"]
+
+
+def test_a_chat_turn_and_an_action_never_start_together(chat_served, monkeypatch):
+    srv, tools_ = chat_served
+    site = srv.site(None)
+    send = site.chat.send
+
+    def slow(*a, **kw):
+        time.sleep(0.5)                             # the action is asked for meanwhile
+        return send(*a, **kw)
+    monkeypatch.setattr(site.chat, "send", slow)
+    got = {}
+    asking = threading.Thread(target=lambda: got.update(chat=post(srv, "/api/chat", {"message": "go"})))
+    asking.start()
+    time.sleep(0.15)
+    got["action"] = post(srv, "/api/action", {"action": "check"})
+    asking.join()
+    assert got["chat"] == (202, {"turn": 1}) and got["action"][0] == 409 and got["action"][1]["code"] == "busy.chat"
+    assert tools_.entered.wait(10)
+    site.chat.stop()
+    assert site.chat.wait(10)
+
+
+def test_every_code_the_page_translates_has_its_parameters():
+    import re
+    en = (W.STATIC / "i18n" / "en.js").read_text("utf-8")
+    page = {k: set(re.findall(r"\{(\w+)\}", v)) for k, v in re.findall(r'^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"', en,
+                                                                       re.M)}
+    sent = {code: set(re.findall(r"\{(\w+)\}", text)) for code, text in S.TEXTS.items()}
+    sent.update({code: set() for code, _ in S.STAGES.values()})
+    sent.update({code: set() for _, code, _ in S.PRESETS.values()})
+    sent.update({code: set() for code, _ in S.SHAPES.values()})
+    sent.update({code: set() for code in [*S.SHOTS, *S.SOUNDS, "shape.plate", "shape.frame", "text.title",
+                                          "text.overlay", "evidence.card", "component.custom", "shot.reversed",
+                                          "shot.held", "shot.looped"]})
+    sent.update({"shot.speed": {"rate"}, "shot.motion": {"motion"}, "shot.transition_in": {"type"},
+                 "chat.too_long": {"chars", "max"}, "chat.unknown_engine": {"engine"},
+                 "chat.engine_unavailable": {"engine", "why"}, "busy.chat": {"turn"}, "chat.empty": set(),
+                 "chat.bad_context": set(), "chat.no_engine": set(), "chat.workspace_hidden": set(),
+                 "chat.error": {"error"}, "chat.stopped": {"cost_usd"},
+                 "chat.aborted": {"reason", "cost_usd"}})
+    sent.update({f"motion.{m}": set() for m in S.MOTIONS})
+    sent.update({f"side.{s}": set() for s in ("left", "right", "top", "bottom")})
+    assert sorted(c for c in sent if c not in page) == []
+    assert {c: page[c] - p for c, p in sent.items() if page[c] - p} == {}

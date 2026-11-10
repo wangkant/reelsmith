@@ -187,6 +187,8 @@ def _log_activity(project: str, name: str, result: ToolResult, seconds: float, b
         row = {"ts": datetime.now().isoformat(timespec="seconds"), "tool": name, "ok": bool(result.ok),
                "seconds": round(seconds, 2), "summary": text.split("\n", 1)[0][:300], "batch": batch,
                "files": named_files(root, str(result), sources), "text": text[:ACTIVITY_TEXT]}
+        asked = presence.origin(root) or {}             # the watch window's chat turn or action that made the call
+        row.update({k: asked[k] for k in ("turn", "action") if k in asked})
         path = root / ACTIVITY_LOG
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8", newline="\n") as f:

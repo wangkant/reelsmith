@@ -14,6 +14,7 @@ from pathlib import Path
 
 SERVED = ("assets", "voice", "out", "build")          # the only project folders the window is handed
 RUNNING = Path(".history") / "running.json"
+ORIGIN = Path(".history") / "origin.json"
 WINDOW = Path("build") / "watch" / "window.json"
 RUNNING_STALE_S = 3 * 3600          # a call this old has died without saying so
 WRITE_EVERY_S = 0.25                # progress alone is written at most this often
@@ -125,6 +126,32 @@ def running(root: Path, now: float | None = None) -> dict | None:
     progress = row.get("progress")
     return {"tool": row.get("tool"), "since": row.get("since"), "seconds": round(max(0.0, seconds), 1),
             "stage": row.get("stage"), "progress": progress if isinstance(progress, (int, float)) else None}
+
+
+# ------------------------------------------------------------------ who asked: a chat turn or a window action
+def set_origin(root: Path, **what) -> dict:
+    """Mark the calls on the project from now on as asked by `what` ({"turn": n} or {"action": name}) until
+    clear_origin; the activity log copies it onto their rows. Tools in another process read it the same way."""
+    row = {"pid": os.getpid(), "since": datetime.now().isoformat(timespec="milliseconds"), **what}
+    try:
+        _write(Path(root) / ORIGIN, row)
+    except OSError:
+        pass
+    return row
+
+
+def clear_origin(root: Path, row: dict) -> None:
+    path = Path(root) / ORIGIN
+    try:
+        if _read(path) == row:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def origin(root: Path) -> dict | None:
+    row = _read(Path(root) / ORIGIN)
+    return row if row and pid_alive(row.get("pid")) else None
 
 
 # ------------------------------------------------------------------ the window on a project

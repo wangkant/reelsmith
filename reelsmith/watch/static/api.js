@@ -42,7 +42,7 @@ export async function getStill(t, w, cut) {
 
 // EventSource reconnects on its own; status reports what the person sees in the top bar. A 'running' event (a slow
 // tool started, changed stage or ended) arrives at once and needs no state refetch.
-export function subscribe(onChange, onStatus, onRunning) {
+export function subscribe(onChange, onStatus, onRunning, onPushed = () => {}) {
   let es = null;
   let retry = 0;
   const parse = (e) => { try { return JSON.parse(e.data); } catch { return undefined; } };
@@ -59,6 +59,7 @@ export function subscribe(onChange, onStatus, onRunning) {
       const d = parse(e);
       if (d !== undefined) onRunning(d);
     });
+    for (const name of ["frames", "action"]) es.addEventListener(name, (e) => onPushed(name, parse(e)));
     es.onerror = () => {
       onStatus("reconnecting");
       if (es.readyState === EventSource.CLOSED) {
@@ -69,4 +70,34 @@ export function subscribe(onChange, onStatus, onRunning) {
     };
   };
   open();
+}
+
+// Served from a workspace, the page and its requests live under /p/<project>.
+export const BASE = (/^\/p\/[^/]+/.exec(location.pathname) || [""])[0];
+let token = null;
+async function getToken() {
+  if (!token) token = (await json(`${BASE}/api/session`)).token;
+  return token;
+}
+
+// A POST with a JSON body; the server's reason is the error's message, with its code and parameters beside it.
+export async function post(url, body = {}, again = true) {
+  const r = await fetch(`${BASE}${url}`, {
+    method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Reelsmith-Token": await getToken() }, body: JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await r.json(); } catch { /* no body */ }
+  if (r.status === 403 && again && /header/.test(data?.error || "")) {      // a restarted server has a new token
+    token = null;
+    return post(url, body, false);
+  }
+  if (!r.ok) {
+    const err = new Error(data?.error || `${r.status} ${r.statusText}`);
+    err.status = r.status;
+    err.code = data?.code;
+    err.params = data?.params;
+    throw err;
+  }
+  return data;
 }

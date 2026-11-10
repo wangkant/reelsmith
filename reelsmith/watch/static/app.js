@@ -1,20 +1,19 @@
 import { getHistory, getState, subscribe } from "./api.js";
+import { createBeats } from "./beats.js";
 import { createChat } from "./chat.js";
-import { lang, t, translate } from "./i18n.js";
+import { has, lang, t, translate } from "./i18n.js";
 import { createMonitor } from "./monitor.js";
 import { createPanel } from "./panel.js";
 import { createTimeline } from "./timeline.js";
-import {
-  busy, bytes, clamp, clock, closeOnBackdrop, disable, elapsed, h, installTips, isOff, note, pressable, shortTime, storage, store,
-  timecode, tip,
-} from "./util.js";
+import { createTop } from "./top.js";
+import { createTransport } from "./transport.js";
+import { busy, clamp, closeOnBackdrop, elapsed, h, installTips, lowerFirst, note, pressable, storage, store, tip } from "./util.js";
 
 installTips();
 translate();
 
 // A brand-new project has no length yet: that is a waiting state, not an error.
 const NO_LENGTH = /has no length/;
-const PANELS = ["chat", "activity", "issues", "clip", "assets"];
 
 // ---------------------------------------------------------------- the shared store
 const listeners = {};
@@ -28,6 +27,8 @@ const app = {
   waiting: false,         // playing was asked for but no frame has come yet
   scrubbing: false,
   selected: null,
+  beat: null,
+  beats: [],
   follow: storage("follow", true),
   safe: storage("safe", false),
   source: "live",
@@ -61,11 +62,19 @@ const app = {
     if (s.valid === false && this.lastGood) return { ...this.lastGood, valid: false };
     return s;
   },
-  // What the monitor plays: always the current cut, or the last one that loaded.
+  // What the monitor plays and the beats describe: always the current cut, or the last one that loaded.
   cut() { return this.state?.valid === false && this.lastGood ? this.lastGood : this.state; },
   dimmed() { return !this.viewing && this.state?.valid === false && !!this.lastGood; },
   empty() { return !!this.state?.empty; },
   broken() { return this.state?.valid === false && !this.state.empty; },
+
+  // The standing of the result, in the person's language: the server's reason code wins over its English.
+  result() {
+    const r = this.state?.result;
+    if (!r?.state) return { state: "none" };
+    const reason = r.reason_code && has(r.reason_code) ? t(r.reason_code, localParams(r.params)) : r.reason;
+    return { ...r, reason, accepted_at: r.accepted?.at || null };
+  },
 
   setTime(sec, origin = "seek") {
     const nt = clamp(sec, 0, this.lastFrameTime());
@@ -104,14 +113,17 @@ const app = {
     else if (is.clip) this.seekToClip(is.clip);
   },
   changedAt(id) { return this.changed.get(id) || 0; },
-  showPanel(name) {
-    const i = PANELS.indexOf(name);
-    // the chat already shows a picked clip as the context of the next message: stay there
-    if (name === "clip" && panel.current() === 0) return;
-    if (i >= 0) panel.show(i);
-  },
+  showPanel(name) { panel.show(name); },
 };
 window.__watch = app;
+
+// Layout codes carry their side as a word to translate; numbers and quoted text stay as they are.
+function localParams(p = {}) {
+  const out = { ...p };
+  if (out.side && has(`side.${out.side}`)) out.side = t(`side.${out.side}`);
+  if (out.stage && has(`stage.${out.stage}`)) out.stage = t(`stage.${out.stage}`);
+  return out;
+}
 
 // ---------------------------------------------------------------- diffing two cuts
 function clipKeys(tracks) {
@@ -148,32 +160,42 @@ async function refresh() {
   try {
     const next = prepare(await getState());
     const prev = app.state;
-    if (app.status !== "connected") { app.status = "connected"; renderConn(); }
-    setRunning(next.running ?? null);
-    if (!prev || prev.revision !== next.revision) {
+    if (app.status !== "connected") { app.status = "connected"; top.renderConn(); }
+    const moved = !prev || prev.revision !== next.revision || JSON.stringify([prev.can, prev.action, prev.last_action, prev.result])
+      !== JSON.stringify([next.can, next.action, next.last_action, next.result]);
+    if (moved) {
       const before = prev?.valid ? prev.tracks : app.lastGood?.tracks;
+      const newCut = !prev || prev.revision !== next.revision;
       app.state = next;
       if (next.valid) app.lastGood = next;
-      const changed = prev && next.valid ? diff(before, next.tracks) : new Set();
+      const changed = newCut && prev && next.valid ? diff(before, next.tracks) : new Set();
       if (changed.size) {
         flash(changed);
         app.latest = changed;
       }
+      setRunning(next.running ?? null);
       if (app.time > app.lastFrameTime()) app.setTime(app.lastFrameTime(), "state");
-      renderTop();
+      const c = next.canvas || app.lastGood?.canvas;
+      if (c?.width) {
+        document.body.classList.toggle("is-tall", c.height >= c.width);
+        document.body.classList.toggle("is-square", c.height === c.width);
+      }
+      document.body.classList.toggle("is-empty", app.empty());
+      top.renderTop();
       renderError();
       renderSummary();
-      app.emit("state", { revisionChanged: true });
-      if (!app.viewing) app.emit("view", { changed, live: !!prev });
+      app.emit("state", { revisionChanged: newCut });
+      if (newCut && !app.viewing) app.emit("view", { changed, live: !!prev });
       if (firstPaint) {
         firstPaint = false;
+        resume();
         requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add("ready")));
       }
-    }
+    } else setRunning(next.running ?? null);
   } catch (e) {
     console.warn("watch: refresh", e);
     app.status = "reconnecting";
-    renderConn();
+    top.renderConn();
     clearTimeout(retryTimer);
     retryTimer = setTimeout(refresh, 2000);
   } finally {
@@ -181,10 +203,23 @@ async function refresh() {
     if (again) { again = false; refresh(); }
   }
 }
+app.refresh = refresh;
+
+// A language change reloads the page; the playhead and the open beat come back where they were.
+function resume() {
+  try {
+    const r = JSON.parse(sessionStorage.getItem("rs-watch:resume"));
+    sessionStorage.removeItem("rs-watch:resume");
+    if (!r) return;
+    if (r.beat != null) app.setBeat(r.beat, { seek: false });
+    app.seek(r.time || 0);
+  } catch { /* private window */ }
+}
 
 // ---------------------------------------------------------------- the agent at work
 function setRunning(r) {
   const same = r && app.running && r.tool === app.running.tool && r.since === app.running.since;
+  const was = JSON.stringify(app.running && { ...app.running, at: 0 });
   if (r) {
     const at = same && Math.abs(app.running.at - (performance.now() - (r.seconds || 0) * 1000)) < 1500
       ? app.running.at : performance.now() - (r.seconds || 0) * 1000;
@@ -192,135 +227,40 @@ function setRunning(r) {
   } else {
     app.running = null;
   }
-  renderAgent();
+  top.renderAgent();
   if (!same) app.emit("running");
-}
-
-function ago(ts) {
-  const d = (Date.now() - new Date(ts).getTime()) / 1000;
-  if (!(d >= 0)) return "";
-  if (d < 10) return t("ago.now");
-  if (d < 60) return t("ago.s", { n: Math.floor(d) });
-  if (d < 3600) return t("ago.min", { n: Math.floor(d / 60) });
-  return t("ago.h", { n: Math.floor(d / 3600) });
+  else if (was !== JSON.stringify({ ...app.running, at: 0 })) app.emit("progress");
 }
 
 function runWhat(r) {
-  return t(`run.${r.tool}`) !== `run.${r.tool}` ? t(`run.${r.tool}`) : t("run.other", { tool: r.tool });
+  const k = `run.${r.tool}`;
+  return has(k) ? t(k) : t("run.other", { tool: r.tool });
 }
+const upperFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// The words for a running call, shared by the top bar and the Activity feed so both say the same thing.
+// The words for a running call, shared by the top bar, the session and the stage so all say the same thing.
 app.runText = () => {
   const r = app.running;
   if (!r) return null;
   const secs = (performance.now() - r.at) / 1000;
   const what = runWhat(r);
-  const stage = r.stage ? (t(`stage.${r.stage}`) !== `stage.${r.stage}` ? t(`stage.${r.stage}`) : r.stage) : null;
-  const pct = typeof r.progress === "number" ? `${Math.round(r.progress * 100)}%` : null;
+  const sk = r.stage_code || (r.stage ? `stage.${r.stage}` : null);
+  const stage = sk ? (has(sk) ? t(sk) : r.stage) : null;
+  const pct = typeof r.progress === "number" ? t("unit.pct", { n: Math.round(r.progress * 100) }) : null;
   const stuck = secs > 600;
-  return { what, stuck, secs, text: [stuck ? `${t("run.stuck")}: ${what}` : what, stage, pct, elapsed(secs)].filter(Boolean).join(" · ") };
+  const how = stage ? (pct ? `${stage} (${pct})` : stage) : pct;
+  return {
+    what, lower: lowerFirst(what), stuck, secs, elapsed: elapsed(secs), stage, pct,
+    figures: [pct, elapsed(secs)].filter(Boolean).join(" · "),
+    short: how ? upperFirst(how) : what,
+    text: `${stuck ? `${t("run.stuck")}: ` : ""}${how ? t("run.withStage", { what, how }) : what}`,
+  };
 };
+setInterval(() => { top.renderAgent(); app.emit("tick"); }, 1000);
 
 const $ = (id) => document.getElementById(id);
-function renderAgent() {
-  const el = $("agent"), bar = $("runBar");
-  const r = app.running;
-  document.getElementById("timeline").classList.toggle("is-working", !!r);
-  app.emit("tick");
-  if (r) {
-    const { what, stuck, secs, text } = app.runText();
-    el.dataset.state = stuck ? "stuck" : "running";
-    $("agentText").textContent = text;
-    tip(el, stuck ? t("run.stuckTip", { what, ago: elapsed(secs) }) : t("status.tip"));
-    bar.hidden = typeof r.progress !== "number";
-    bar.style.setProperty("--p", `${clamp((r.progress || 0) * 100, 0, 100)}%`);
-    return;
-  }
-  bar.hidden = true;
-  const acts = app.state?.activity || [];
-  const last = acts.at(-1)?.ts;
-  el.dataset.state = app.state ? "idle" : "off";
-  $("agentText").textContent = last ? t("status.idleAgo", { ago: ago(last) }) : t("status.idle");
-  tip(el, t("status.tip"));
-}
-setInterval(renderAgent, 1000);
 
-function renderConn() {
-  const c = $("conn");
-  c.dataset.state = app.status;
-  $("connText").textContent = t(`status.${app.status}`);
-  tip(c, app.status === "connected" ? t("status.connected") : t("status.goneTip"));
-  renderTransport();
-}
-
-// ---------------------------------------------------------------- top bar
-function orientation(c) {
-  return c.width > c.height ? "landscape" : c.width < c.height ? "vertical" : "square";
-}
-function renderTop() {
-  const s = app.state;
-  const title = s.project?.title || app.lastGood?.project?.title || t("top.untitled");
-  $("filmTitle").textContent = title;
-  tip($("filmTitle"), title);
-  $("projName").textContent = s.project?.name || "";
-  tip($("projName"), t("top.projTip", { path: s.project?.path || "" }));
-  document.title = `${title} · reelsmith watch`;
-
-  const c = s.canvas || app.lastGood?.canvas;
-  const info = $("canvasInfo");
-  if (c?.width) {
-    const len = app.cut()?.duration;
-    info.replaceChildren(t(`top.orient.${orientation(c)}`), " ", h("span", { class: "num", text: `${c.width}×${c.height}` }),
-      h("span", { class: "c-fps" }, " · ", h("span", { class: "num", text: t("top.fps", { n: c.fps }) })),
-      ...(len ? [h("span", {}, " · ", h("span", { class: "num", text: timecode(len, c.fps) }))] : []));
-    tip(info, t("top.canvasTip", { profile: c.profile, w: c.width, h: c.height, fps: c.fps }));
-    document.body.classList.toggle("is-tall", c.height >= c.width);
-  } else {
-    info.replaceChildren();
-  }
-
-  const sp = s.spend;
-  $("spendBox").hidden = !sp;
-  if (sp) {
-    const spent = `$${sp.project_usd.toFixed(2)}`;
-    const share = sp.budget_usd ? sp.project_usd / sp.budget_usd : 0;
-    $("spendText").textContent = sp.budget_usd ? `${spent} ${t("top.of")} $${sp.budget_usd.toFixed(2)}` : spent;
-    $("spendBar").style.setProperty("--fill", `${clamp(share * 100, 0, 100)}%`);
-    $("spendBar").hidden = !sp.budget_usd;
-    $("spendBox").classList.toggle("is-high", share > 0.8 || !sp.budget_usd);
-    tip($("spendBox"), sp.budget_usd ? t("top.spendTip", { spent, budget: `$${sp.budget_usd.toFixed(2)}` })
-      : t("top.spendTipNoBudget", { spent }));
-  }
-  renderDelivery();
-  renderAgent();
-  renderConn();
-}
-
-function renderDelivery() {
-  const s = app.state;
-  const d = s.render?.delivered, last = s.render?.last;
-  const del = $("delivery");
-  del.hidden = !!app.viewing || app.broken();
-  del.className = "pill";
-  if (last && !last.ok && (!d || (last.at > d.at && !d.matches_cut))) {
-    del.classList.add("is-error");
-    del.textContent = `${t("top.lastFailed")}${last.stage ? ` · ${last.stage}` : ""}`;
-    tip(del, last.text || "");
-  } else if (d) {
-    del.classList.add(d.matches_cut ? "is-ok" : "is-warn");
-    del.textContent = t(d.matches_cut ? "top.delivered.matches" : "top.delivered.stale");
-    tip(del, [clock(d.at), d.duration ? timecode(d.duration, app.fps()) : null, d.lufs != null ? `${d.lufs} LUFS` : null, bytes(d.bytes)]
-      .filter(Boolean).join(" · "));
-  } else {
-    del.textContent = t("top.notDelivered");
-    tip(del, t("top.notDeliveredTip"));
-  }
-  const sw = $("srcDelivered");
-  disable(sw, d ? null : t("tr.noDelivered"), t("tr.deliveredTip"));
-  if (!d && app.source === "delivered") setSource("live");
-}
-
-// ---------------------------------------------------------------- the film so far
+// ---------------------------------------------------------------- the Tracks drawer's summary line
 function renderSummary() {
   const el = $("summary");
   el.hidden = !!app.viewing;
@@ -334,13 +274,10 @@ function renderSummary() {
   const issues = s.issues || [];
   const errors = issues.filter((i) => i.level === "error").length, warnings = issues.filter((i) => i.level === "warning").length;
   const parts = [
-    h("b", { class: "num", text: shortTime(cut.duration || 0) }),
     h("span", { text: t("sum.clips", { n: sum.clips ?? 0 }) }),
-    sum.covered != null ? h("span", { text: t("sum.picture", { p: `${Math.round(sum.covered * 100)}%` }) }) : null,
-    h("span", { text: sum.narrated_s ? t("sum.narrated", { d: shortTime(sum.narrated_s) }) : t("sum.notNarrated") }),
+    sum.covered != null ? h("span", { text: t("sum.picture", { p: t("unit.pct", { n: Math.round(sum.covered * 100) }) }) }) : null,
     errors ? h("span", { class: "is-error", text: t("sum.errors", { n: errors }) }) : null,
     warnings ? h("span", { class: "is-warn", text: t("sum.warnings", { n: warnings }) }) : null,
-    !errors && !warnings ? h("span", { class: "is-ok", text: t("sum.clean") }) : null,
   ].filter(Boolean);
   const out = [h("span", { class: "sum-k", text: t("sum.label") })];
   parts.forEach((p, i) => out.push(...(i ? [" · ", p] : [p])));
@@ -362,11 +299,11 @@ function renderBanner() {
   const b = $("historyBanner");
   b.hidden = !app.viewing;
   if (app.viewing) {
-    $("historyText").textContent = t("tl.viewing", { n: app.viewing.n, at: clock(app.viewing.at) });
+    $("historyText").textContent = t("tl.viewing", { n: app.viewing.n, at: (app.viewing.at || "").slice(11, 19) });
     tip($("historyText"), app.viewing.summary);
   }
   document.body.classList.toggle("is-history", !!app.viewing);
-  renderDelivery();
+  top.renderResult();
   renderSummary();
 }
 pressable($("backToNow"), () => app.backToNow());
@@ -388,13 +325,15 @@ app.viewHistory = async (n) => {
     const before = app.view().tracks;
     app.viewing = snap;
     flash(diff(before, snap.tracks));
+    if (!tracksOpen()) setTracks(true);
     renderBanner();
     app.emit("view", { changed: new Set() });
   } catch (e) {
-    note($("historyBanner").hidden ? $("summary") : $("historyBanner"), t("tl.historyFailed", { n, why: e.message }), "is-error");
+    note($("historyBanner").hidden ? $("tracksBtn") : $("historyBanner"), t("tl.historyFailed", { n, why: e.message }), "is-error");
   } finally {
     clearTimeout(slow);
     busy($("historyBanner"), false);
+    $("summary").classList.remove("is-loading");
   }
 };
 app.backToNow = () => {
@@ -460,120 +399,22 @@ app.toggleReplay = async () => {
   replayTimer = setTimeout(tick, 900);
 };
 
-// ---------------------------------------------------------------- transport
-const playBtn = $("playBtn");
-function renderTransport() {
-  const nothing = !app.duration();
-  playBtn.setAttribute("aria-pressed", String(app.playing));
-  playBtn.classList.toggle("is-playing", app.playing);
-  disable(playBtn, nothing ? t("tr.nothing") : null, t(app.playing ? "tr.pause" : "tr.play"), "Space");
-  busy(playBtn, app.playing && app.waiting);
-  const note = $("tcNote");
-  const gone = app.status !== "connected" && app.playing && app.waiting;
-  note.textContent = gone ? t("mon.serverGone") : app.playing && app.waiting ? t("mon.buffering") : "";
-  note.classList.toggle("is-warn", gone);
-  renderEnds();
+// ---------------------------------------------------------------- the Tracks drawer
+const tracksBtn = $("tracksBtn"), timelineEl = $("timeline");
+const tracksOpen = () => !timelineEl.hidden;
+function setTracks(open) {
+  timelineEl.hidden = !open;
+  document.body.classList.toggle("tracks-open", open);
+  tracksBtn.setAttribute("aria-expanded", String(open));
+  tracksBtn.setAttribute("aria-pressed", String(open));
+  tip(tracksBtn, t(open ? "beats.tracksHide" : "beats.tracksShow"), "T");
+  store("tracks", open);
+  if (!open && app.viewing) app.backToNow();
+  app.emit("layout");
 }
-function renderEnds() {
-  const atStart = app.time <= 1e-6, atEnd = app.time >= app.lastFrameTime() - 1e-6 || !app.duration();
-  disable($("startBtn"), atStart ? t("tr.atStart") : null, t("tr.start"), "Home");
-  disable($("backBtn"), atStart ? t("tr.atStart") : null, t("tr.back"), "←");
-  disable($("fwdBtn"), atEnd ? t("tr.atEnd") : null, t("tr.fwd"), "→");
-  disable($("endBtn"), atEnd ? t("tr.atEnd") : null, t("tr.end"), "End");
-}
-function renderTime() {
-  $("tc").textContent = timecode(app.time, app.fps());
-  $("tcFrame").textContent = t("tr.frameN", { n: app.frame() });
-  $("tcTotal").textContent = timecode(app.duration(), app.fps());
-  renderEnds();
-}
-pressable(playBtn, () => app.toggle());
-pressable($("startBtn"), () => app.seek(0));
-pressable($("endBtn"), () => app.seek(app.lastFrameTime()));
-pressable($("backBtn"), () => app.step(-1));
-pressable($("fwdBtn"), () => app.step(1));
+app.toggleTracks = () => setTracks(!tracksOpen());
+pressable(tracksBtn, app.toggleTracks);
 
-const vol = $("volume"), volVal = $("volVal");
-let volHide = 0;
-function renderAudio() {
-  const v = app.muted ? 0 : app.volume;
-  vol.value = String(v);
-  vol.style.setProperty("--fill", `${v * 100}%`);
-  vol.setAttribute("aria-valuetext", t("tr.volumeValue", { v: Math.round(v * 100) }));
-  tip(vol, t("tr.volumeValue", { v: Math.round(v * 100) }));
-  const mb = $("muteBtn");
-  mb.setAttribute("aria-pressed", String(app.muted));
-  tip(mb, t(app.muted ? "tr.unmute" : "tr.mute"));
-  mb.classList.toggle("is-muted", app.muted || app.volume === 0);
-}
-function showVolume() {
-  volVal.hidden = false;
-  volVal.textContent = `${Math.round(Number(vol.value) * 100)}%`;
-  volVal.style.setProperty("--x", `${5 + Number(vol.value) * (vol.offsetWidth - 10)}px`);
-  clearTimeout(volHide);
-  volHide = setTimeout(() => { volVal.hidden = true; }, 900);
-}
-vol.addEventListener("input", () => {
-  app.volume = Number(vol.value);
-  app.muted = app.volume === 0;
-  store("volume", app.volume); store("muted", app.muted);
-  renderAudio();
-  showVolume();
-  app.emit("audio");
-});
-vol.addEventListener("pointerdown", showVolume);
-pressable($("muteBtn"), () => {
-  app.muted = !app.muted;
-  if (!app.muted && app.volume === 0) app.volume = 1;
-  store("muted", app.muted);
-  renderAudio();
-  app.emit("audio");
-});
-
-function setSafe(v) {
-  app.safe = v;
-  store("safe", v);
-  $("safeBtn").setAttribute("aria-pressed", String(v));
-  tip($("safeBtn"), t(v ? "tr.safeOn" : "tr.safe"), "S", t("tr.safe"));
-  app.emit("safe");
-}
-pressable($("safeBtn"), () => setSafe(!app.safe));
-
-function setSource(src) {
-  app.source = src;
-  $("srcLive").setAttribute("aria-pressed", String(src === "live"));
-  $("srcDelivered").setAttribute("aria-pressed", String(src === "delivered"));
-  app.emit("source");
-  renderTime();
-  renderTransport();
-}
-app.setSource = setSource;
-tip($("srcLive"), t("tr.liveTip"));
-pressable($("srcLive"), () => setSource("live"));
-pressable($("srcDelivered"), () => setSource("delivered"));
-app.on("source-busy", () => {
-  busy($("srcDelivered"), app.sourceBusy);
-  if (app.sourceBusy) tip($("srcDelivered"), t("tr.deliveredLoading"));
-  else if (!isOff($("srcDelivered"))) tip($("srcDelivered"), t("tr.deliveredTip"));
-});
-
-// A change landed while the person was playing: offer to go there instead of pulling the playhead away.
-const jump = $("jumpChange");
-let jumpTo = null, jumpHide = 0;
-app.on("pending-change", ({ at }) => {
-  jumpTo = at;
-  $("jumpText").textContent = t("tr.jumpChange", { t: timecode(at, app.fps()) });
-  tip(jump, t("tr.jumpChangeTip"));
-  jump.hidden = false;
-  clearTimeout(jumpHide);
-  jumpHide = setTimeout(() => { jump.hidden = true; }, 12000);
-});
-pressable(jump, () => {
-  jump.hidden = true;
-  if (jumpTo != null) app.seek(jumpTo);
-});
-
-// ---------------------------------------------------------------- timeline toolbar
 const followBtn = $("followBtn");
 function setFollow(v, said = false) {
   app.follow = v;
@@ -584,79 +425,46 @@ function setFollow(v, said = false) {
 }
 pressable(followBtn, () => setFollow(!app.follow, true));
 
-// ---------------------------------------------------------------- splitter between the monitor row and the timeline
-const split = $("split");
-let userTl = storage("tl-user", null);
-function maxTl() { return Math.max(180, innerHeight - 260); }
-function applyTlHeight() {
-  const ih = innerHeight;
-  const tall = document.body.classList.contains("is-tall");
-  const want = userTl ?? clamp(timeline.naturalHeight(), ih * 0.3, ih * (tall ? 0.36 : 0.42));
-  const v = Math.round(clamp(want, 170, maxTl()));
-  document.documentElement.style.setProperty("--tl-h", `${v}px`);
-  split.setAttribute("aria-valuenow", String(v));
-  split.setAttribute("aria-valuemin", "170");
-  split.setAttribute("aria-valuemax", String(maxTl()));
-}
-function setUserTl(px) {
-  userTl = Math.round(clamp(px, 170, maxTl()));
-  store("tl-user", userTl);
-  applyTlHeight();
-}
-tip(split, t("split.tip"), null, t("tl.timeline"));
-split.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
-  split.setPointerCapture(e.pointerId);
-  split.classList.add("is-dragging");
-  const move = (ev) => setUserTl(innerHeight - ev.clientY - 3);
-  const up = () => {
-    split.classList.remove("is-dragging");
-    split.removeEventListener("pointermove", move);
-    split.removeEventListener("pointerup", up);
-    split.removeEventListener("pointercancel", up);
-  };
-  split.addEventListener("pointermove", move);
-  split.addEventListener("pointerup", up);
-  split.addEventListener("pointercancel", up);
-});
-function autoHeight() {
-  userTl = null;
-  store("tl-user", null);
-  applyTlHeight();
-  note(split, t("split.auto"));
-}
-split.addEventListener("dblclick", autoHeight);
-split.addEventListener("keydown", (e) => {
-  const cur = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tl-h")) || 300;
-  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-    e.preventDefault();
-    e.stopPropagation();
-    setUserTl(cur + (e.key === "ArrowUp" ? 24 : -24));
-  } else if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    e.stopPropagation();
-    autoHeight();
-  }
-});
-addEventListener("resize", applyTlHeight);
-
 // ---------------------------------------------------------------- help
 const help = $("help");
 const TYPES = ["video", "image", "text", "component", "evidence", "shape", "audio", "voice", "caption"];
 $("legend").replaceChildren(...TYPES.map((k) => h("li", {}, h("span", { class: "sw", style: { "--sw": `var(--clip-${k})` } }), t(`type.${k}`))));
-const helpBtn = $("helpBtn");
-tip(helpBtn, t("help.btn"), "?");
 // Close takes the focus, so the sheet would open scrolled to its foot: start it at the top.
 app.openHelp = () => { help.showModal(); help.scrollTop = 0; };
-pressable(helpBtn, app.openHelp);
 pressable($("helpClose"), () => help.close());
 closeOnBackdrop(help);
 
 // ---------------------------------------------------------------- wiring
+const top = createTop(app);
+app.on("chat-busy", () => top.renderAgent());
 const monitor = createMonitor(app);
 const timeline = createTimeline(app);
 const panel = createPanel(app);
+createBeats(app);
+createTransport(app);
 createChat(app, panel);
+// The stage takes the canvas's shape: as wide as the area allows while the beats keep their row below it, or,
+// for a vertical or square film, as tall as the area with the beats in a column beside it.
+const stageArea = $("stageArea"), playerBox = $("playerBox"), screenEl = $("screen");
+function fitStage() {
+  const c = app.cut()?.canvas || app.state?.canvas;
+  if (!c?.width) return;
+  const cs = getComputedStyle(stageArea);
+  const aw = stageArea.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const ah = stageArea.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const tr = $("transport").offsetHeight || 56, gap = parseFloat(cs.rowGap) || 16;
+  const ar = c.height / c.width;
+  const keep = (innerHeight < 760 ? 186 : 220) + (tracksOpen() ? 272 : 0);
+  // a square film takes more of the width than a vertical one; either leaves the column of beats 300 px
+  const w = Math.floor(c.height >= c.width ? Math.min(aw * (ar === 1 ? 0.6 : 0.52), aw - gap - 300, (ah - tr) / ar) : Math.min(aw, (ah - tr - gap - keep) / ar));
+  playerBox.style.width = `${Math.max(200, w)}px`;
+  screenEl.style.height = `${Math.round(Math.max(200, w) * ar)}px`;
+  monitor.layout();
+}
+new ResizeObserver(fitStage).observe(stageArea);
+app.on("state", fitStage);
+app.on("layout", fitStage);
+
 pressable($("zoomIn"), timeline.zoomIn);
 pressable($("zoomOut"), timeline.zoomOut);
 pressable($("zoomFit"), () => {
@@ -664,12 +472,7 @@ pressable($("zoomFit"), () => {
   timeline.fit();
 });
 tip($("zoomLabel"), t("tl.zoomLabel"));
-
-app.on("time", renderTime);
-app.on("playing", renderTransport);
-app.on("waiting", renderTransport);
-app.on("state", () => { renderTime(); renderTransport(); });
-app.on("view", () => { if (!app.viewing) applyTlHeight(); renderSummary(); });   // a past batch never resizes the window
+app.on("view", renderSummary);
 
 // ---------------------------------------------------------------- keys
 addEventListener("keydown", (e) => {
@@ -677,41 +480,43 @@ addEventListener("keydown", (e) => {
   const tag = e.target?.tagName;
   const typing = tag === "INPUT" && e.target.type !== "range" || tag === "TEXTAREA" || e.target?.isContentEditable;
   if (typing || help.open && e.key !== "?") return;
+  if (document.querySelector("dialog[open]") && e.key !== "?") return;
   const onRange = tag === "INPUT" && e.target.type === "range";
+  const onList = e.target?.closest?.("[role=listbox], [role=menu], [role=tablist]");
   const k = e.key;
   const fps = app.fps();
   if (k === " " && !(e.ctrlKey || e.metaKey)) {
-    if ((tag === "BUTTON" || e.target?.getAttribute?.("role") === "tab") && e.target.id !== "playBtn") return;
+    if (["BUTTON", "SUMMARY"].includes(tag) && e.target.id !== "playBtn" || e.target?.getAttribute?.("role") === "button" || onList) return;
     e.preventDefault();
     app.toggle();
     if (e.target?.id !== "playBtn") monitor.pop();
-  } else if ((k === "ArrowLeft" || k === "ArrowRight") && !onRange && !(e.ctrlKey || e.metaKey)) {
-    if (e.target?.getAttribute?.("role") === "tab") return;
+  } else if ((k === "ArrowLeft" || k === "ArrowRight") && !onRange && !onList && !(e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    const n = e.shiftKey ? fps : 1;
-    app.step(k === "ArrowLeft" ? -n : n);
-  } else if (k === "Home" && !onRange) { e.preventDefault(); app.seek(0); }
-  else if (k === "End" && !onRange) { e.preventDefault(); app.seek(app.lastFrameTime()); }
-  else if ((k === "+" || k === "=") && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); timeline.zoomIn(); }
-  else if ((k === "-" || k === "_") && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); timeline.zoomOut(); }
+    app.step(k === "ArrowLeft" ? -(e.shiftKey ? fps : 1) : e.shiftKey ? fps : 1);
+  } else if (k === "Home" && !onRange && !onList) { e.preventDefault(); app.seek(0); }
+  else if (k === "End" && !onRange && !onList) { e.preventDefault(); app.seek(app.lastFrameTime()); }
+  else if (k === "PageUp" || k === "PageDown") { e.preventDefault(); app.stepBeat(k === "PageUp" ? -1 : 1); }
   else if (e.ctrlKey || e.metaKey) return;
-  else if (k === "f" || k === "F") timeline.fit();
-  else if (k === "s" || k === "S") setSafe(!app.safe);
-  else if (k >= "1" && k <= "5") panel.show(Number(k) - 1);
+  else if ((k === "+" || k === "=") && tracksOpen()) { e.preventDefault(); timeline.zoomIn(); }
+  else if ((k === "-" || k === "_") && tracksOpen()) { e.preventDefault(); timeline.zoomOut(); }
+  else if ((k === "f" || k === "F") && tracksOpen()) timeline.fit();
+  else if (k === "t" || k === "T") app.toggleTracks();
+  else if (k === "s" || k === "S") app.setSafe(!app.safe);
+  else if (k === "m" || k === "M") app.toggleMute();
   else if (k === "?") { e.preventDefault(); help.open ? help.close() : app.openHelp(); }
+  else if (k === "Escape" && app.closeMenus?.()) e.preventDefault();
   else if (k === "Escape" && app.viewing) app.backToNow();
+  else if (k === "Escape" && panel.current() !== "chat") panel.show("chat");
   else if (k === "Escape" && app.selected) app.select(null);
+  else if (k === "Escape" && app.beat != null) app.setBeat(null, { seek: false });
 });
 
 // ---------------------------------------------------------------- start
-document.documentElement.classList.toggle("lang-zh", lang === "zh");
+document.documentElement.classList.toggle("lang-cjk", /^(zh|ja|ko)/.test(lang));
 setFollow(app.follow);
-setSafe(app.safe);
-setSource("live");
-renderAudio();
-renderTransport();
-renderTime();
-renderConn();
-applyTlHeight();
-subscribe(() => refresh(), (s) => { app.status = s; renderConn(); }, setRunning);
+setTracks(storage("tracks", false));
+top.renderConn();
+top.renderAgent();
+subscribe(() => refresh(), (s) => { app.status = s; top.renderConn(); }, setRunning,
+  (name, d) => (name === "frames" ? app.emit("frames", d) : refresh()));
 refresh();

@@ -38,9 +38,9 @@ export function createTimeline(app) {
 
   function readColors() {
     colors = {
-      bg: css("--tl-bg"), row: css("--tl-row"), rowAlt: css("--tl-row-alt"), line: css("--line"), text: css("--text"),
-      dim: css("--text-dim"), faint: css("--text-faint"), accent: css("--accent"), accentHover: css("--accent-hover"), accentInk: css("--accent-ink"),
-      ruler: css("--tl-ruler"), error: css("--error"), warning: css("--warning"), advice: css("--advice"),
+      bg: css("--tl-bg"), row: css("--tl-row"), rowAlt: css("--tl-row-alt"), line: css("--hair"), text: css("--text"),
+      dim: css("--text-2"), faint: css("--text-3"), accent: css("--accent"), accentHover: css("--accent-hover"), accentInk: css("--accent-ink"),
+      ruler: css("--tl-ruler"), error: css("--err"), warning: css("--warn"), advice: css("--advice"),
       voice: css("--clip-voice"), caption: css("--clip-caption"), marker: css("--marker"),
     };
     const p = document.createElement("canvas");
@@ -245,7 +245,7 @@ export function createTimeline(app) {
   }
 
   // ---------------------------------------------------------------- text
-  const seg = typeof Intl.Segmenter === "function" ? new Intl.Segmenter(lang === "zh" ? "zh" : "en", { granularity: "word" }) : null;
+  const seg = typeof Intl.Segmenter === "function" ? new Intl.Segmenter(lang, { granularity: "word" }) : null;
   const words = new Map();
   function wordsOf(s) {
     let w = words.get(s);
