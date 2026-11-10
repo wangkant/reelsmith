@@ -2,15 +2,18 @@ import http.client
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from reelsmith import cli
+from reelsmith import cli, media
 from reelsmith import resolve as R
 from reelsmith import tools
+from reelsmith.watch import presence as P
 from reelsmith.watch import server as W
 from reelsmith.watch import state as S
 
@@ -153,8 +156,93 @@ def test_tool_calls_leave_an_activity_line(demo):
     assert rows[0]["batch"] is None and rows[0]["ok"] is False          # the demo has an error
     assert rows[1]["ok"] and rows[1]["batch"] == 1 and rows[1]["summary"].startswith("applied: ")
     assert rows[2]["ok"] is False and rows[2]["batch"] is None and not bad.ok
-    assert set(rows[1]) == {"ts", "tool", "ok", "seconds", "summary", "batch"}
+    assert set(rows[1]) == {"ts", "tool", "ok", "seconds", "summary", "batch", "files", "text"}
     assert all(len(r["summary"]) <= 300 and "\n" not in r["summary"] for r in rows)
+    assert rows[2]["text"] == str(bad) and rows[2]["text"].startswith(rows[2]["summary"]) and rows[2]["files"] == []
+    assert not (demo / ".history" / "running.json").exists()
+
+
+def test_a_row_names_the_pictures_the_result_names(demo):
+    stills = demo / "build" / "stills"
+    stills.mkdir(parents=True)
+    for i in range(14):
+        (stills / f"still_{i:04d}.png").write_bytes(b"png")
+    (stills / "contact.png").write_bytes(b"png")
+    root = tools._project(str(demo))
+    text = "\n".join([f"- {i}.00s (frame {i}): {stills / f'still_{i:04d}.png'}" for i in range(2)]
+                     + [f"contact sheet (dark bands): {(stills / 'contact.png').as_posix()}",
+                        "Drew 'photo': assets/photo.png, 1080x1920.", "gone: build/stills/nothing.png",
+                        f"outside: {root.parent / 'build' / 'x.png'}", "not a picture: assets/clip.mp4"])
+    assert tools.named_files(root, text) == ["build/stills/still_0000.png", "build/stills/still_0001.png",
+                                             "build/stills/contact.png", "assets/photo.png"]
+    many = "\n".join(str(stills / f"still_{i:04d}.png") for i in range(14)) + f"\n{stills / 'contact.png'}"
+    got = tools.named_files(root, many)
+    assert len(got) == 12 and got[-1] == "build/stills/contact.png" and got[0] == "build/stills/still_0000.png"
+    assert tools.named_files(root, "x", ["assets/photo.png"]) == ["assets/photo.png"]      # an animated clip's source
+
+
+def test_a_key_in_a_result_is_masked_before_it_is_logged(demo):
+    key, token = "sk-" + "a1B2c3D4e5" * 4, "abcDEF123456ghiJKL"
+    result = tools.ToolResult(f"provider said {key} was refused\nretry with Bearer {token} later", False)
+    tools._log_activity(str(demo), "draw", result, 0.5, None)
+    raw = (demo / ".history" / "activity.jsonl").read_text(encoding="utf-8")
+    row = S.activity_of(demo)[-1]
+    assert key not in raw and token not in raw
+    assert row["summary"] == "provider said [redacted] was refused" and "Bearer [redacted]" in row["text"]
+
+
+def test_a_long_result_keeps_its_first_4000_characters(demo):
+    tools._log_activity(str(demo), "check", tools.ToolResult("x" * 5000), 0.1, None)
+    row = S.activity_of(demo)[-1]
+    assert len(row["text"]) == 4000 and len(row["summary"]) == 300
+
+
+# ------------------------------------------------------------------ the call at work
+def test_a_call_says_it_is_running_until_it_ends(demo):
+    seen = []
+
+    def slow(project):
+        seen.append(json.loads((demo / ".history" / "running.json").read_text(encoding="utf-8")))
+        tools._progress("film", 0.5)
+        seen.append(P.running(demo))
+        tools._progress("film", 0.51)                  # progress alone waits a moment before it is written
+        seen.append(P.running(demo))
+        return "done"
+    assert tools.tool(slow)(str(demo)) == "done"
+    assert set(seen[0]) == {"tool", "since", "pid", "stage", "progress"}
+    assert seen[0]["tool"] == "slow" and seen[0]["pid"] == os.getpid() and seen[0]["stage"] is None
+    assert seen[1]["stage"] == "film" and seen[1]["progress"] == 0.5 and seen[1]["seconds"] >= 0
+    assert seen[2]["progress"] == 0.5
+    assert not (demo / ".history" / "running.json").exists() and P.running(demo) is None
+    assert S.activity_of(demo)[-1]["tool"] == "slow"
+
+
+def test_a_dead_or_old_call_is_not_running(demo):
+    path = demo / ".history" / "running.json"
+    path.parent.mkdir(exist_ok=True)
+    row = {"tool": "render", "since": "2026-01-01T10:00:00", "pid": os.getpid(), "stage": "film", "progress": 0.2}
+    path.write_text(json.dumps(row), encoding="utf-8")
+    assert P.running(demo) is None                                  # over three hours old
+    now = int(time.time())
+    path.write_text(json.dumps({**row, "since": S._iso(now - 30)}), encoding="utf-8")
+    got = P.running(demo, now)
+    assert got == {"tool": "render", "since": S._iso(now - 30), "seconds": 30.0, "stage": "film", "progress": 0.2}
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    path.write_text(json.dumps({**row, "since": S._iso(now), "pid": dead.pid}), encoding="utf-8")
+    assert P.running(demo) is None and not P.pid_alive(0)
+
+
+def test_run_tree_hears_each_line_as_it_comes():
+    heard = []
+    rc, out, _, timed = media.run_tree([sys.executable, "-c", "print('render 5% (1/20 frames)'); print('done')"],
+                                       on_line=heard.append)
+    assert rc == 0 and not timed and heard == ["render 5% (1/20 frames)", "done"] and out.splitlines() == heard
+    steps = []
+    listen = W.R._film_listener(lambda stage, p: steps.append((stage, p)))
+    for line in ("bundle 50%", "render 45% (9/20 frames)", "render 100% (20/20 frames)"):
+        listen(line)
+    assert steps == [("film", 0.45), ("film", 1.0)]
 
 
 def test_the_activity_log_is_capped_and_never_fails_a_tool(demo, monkeypatch):
@@ -245,15 +333,115 @@ def test_events_announce_a_change(served, demo):
     conn.close()
 
 
-def _event(r) -> str:
-    """The data of the next "change" event on an event stream."""
+def _event(r, kinds=("change",)) -> str:
+    """The data of the next event of one of `kinds` on an event stream."""
     kind = None
     while True:
         line = r.fp.readline().decode("utf-8").rstrip("\n")
         if line.startswith("event: "):
             kind = line[7:]
-        elif line.startswith("data: ") and kind == "change":
+        elif line.startswith("data: ") and kind in kinds:
             return line[6:]
+
+
+def test_events_announce_a_running_call(served, demo):
+    path = demo / ".history" / "running.json"
+    path.parent.mkdir(exist_ok=True)
+    row = {"tool": "render", "since": S._iso(time.time()), "pid": os.getpid(), "stage": "layout", "progress": 0.1}
+    conn = http.client.HTTPConnection("127.0.0.1", served.port, timeout=20)
+    conn.request("GET", "/api/events")
+    r = conn.getresponse()
+    assert json.loads(_event(r))["running"] is None
+    path.write_text(json.dumps(row), encoding="utf-8")
+    got = json.loads(_event(r, ("running",)))
+    assert got["tool"] == "render" and got["stage"] == "layout" and got["progress"] == 0.1
+    st = json.loads(get(served, "/api/state")[2])
+    assert st["running"]["stage"] == "layout" and st["running"]["seconds"] >= 0
+    path.write_text(json.dumps({**row, "stage": "film", "progress": 0.0}), encoding="utf-8")
+    assert json.loads(_event(r, ("running",)))["stage"] == "film"            # a new stage: at once
+    t0 = time.monotonic()
+    path.write_text(json.dumps({**row, "stage": "film", "progress": 0.3}), encoding="utf-8")
+    assert json.loads(_event(r, ("running",)))["progress"] == 0.3
+    assert time.monotonic() - t0 >= W.RUNNING_PUSH_S - 0.6                  # progress alone: at most once a second
+    path.unlink()
+    assert json.loads(_event(r, ("running",))) is None
+    assert json.loads(get(served, "/api/state")[2])["running"] is None
+    conn.close()
+
+
+def test_the_summary_at_a_glance(demo):
+    st = S.build_state(demo)
+    sm = st["summary"]
+    assert set(sm) == {"clips", "tracks", "narrated_s", "covered", "errors", "warnings", "batches"}
+    assert sm["tracks"] == len(st["tracks"]) and sm["clips"] == sum(len(t["clips"]) for t in st["tracks"])
+    assert sm["errors"] == sum(i["level"] == "error" for i in st["issues"]) and sm["batches"] == 0
+    assert 0 < sm["narrated_s"] <= st["voice"]["duration"] and 0 < sm["covered"] <= 1
+    edit(demo, {"op": "update_clip", "id": "arrow", "set": {"end": "line:5.end"}})
+    assert S.build_state(demo)["summary"]["batches"] == 1
+    film = {"tracks": [{"kind": "visual", "hidden": False, "clips": [{"start": 0, "end": 4}, {"start": 2, "end": 6}]},
+                       {"kind": "visual", "hidden": True, "clips": [{"start": 6, "end": 10}]},
+                       {"kind": "audio", "hidden": False, "clips": [{"start": 0, "end": 10}]}],
+            "duration": 10.0, "voice": None, "issues": [], "history": []}
+    assert S.summary_of(film)["covered"] == 0.6 and S.summary_of(film)["narrated_s"] == 0
+
+
+def test_the_window_icon_is_served(served):
+    code, head, body = get(served, "/favicon.ico")
+    assert code == 200 and body[:4] == b"\x00\x00\x01\x00"
+    assert get(served, "/static/favicon.svg")[1]["Content-Type"] == "image/svg+xml"
+
+
+# ------------------------------------------------------------------ opening by itself
+@pytest.fixture
+def opener(monkeypatch):
+    """Auto-open allowed in this test, the window available, and launches recorded instead of made."""
+    from reelsmith.watch import window
+    monkeypatch.setattr(P, "ALLOW_UNDER_PYTEST", True)
+    monkeypatch.setattr(P, "_DECIDED", set())
+    monkeypatch.setattr(window, "available", lambda: True)
+    monkeypatch.delenv(P.WATCH_ENV, raising=False)
+    launched = []
+    monkeypatch.setattr(P, "launch", launched.append)
+    return launched
+
+
+def test_the_first_call_opens_the_window_when_asked(demo, opener, monkeypatch):
+    assert P.OPENED_LINE not in tools.check(str(demo)) and opener == []           # nobody asked
+    monkeypatch.setattr(P, "_DECIDED", set())
+    monkeypatch.setenv(P.WATCH_ENV, "1")
+    first = tools.check(str(demo))
+    assert str(first).endswith("\n" + P.OPENED_LINE) and not first.ok and opener == [demo.resolve()]
+    assert P.OPENED_LINE not in tools.check(str(demo)) and len(opener) == 1     # once per project per process
+    fresh = demo.parent / "fresh"
+    made = tools.new_project(str(fresh))
+    assert made.ok and str(made).endswith(P.OPENED_LINE) and opener[-1] == fresh.resolve()
+    assert S.activity_of(fresh)[-1]["text"].endswith(P.OPENED_LINE)
+
+
+def test_a_workspace_can_ask_for_the_window(demo, opener):
+    (demo.parent.parent / "workspace.json").write_text('{"watch": true}', encoding="utf-8")
+    assert str(tools.check(str(demo))).endswith(P.OPENED_LINE) and len(opener) == 1
+
+
+def test_no_second_window_and_never_under_pytest(demo, opener, monkeypatch):
+    monkeypatch.setenv(P.WATCH_ENV, "1")
+    P.record_window(demo, "http://127.0.0.1:1/")                 # this process is alive: a window is open
+    assert P.OPENED_LINE not in tools.check(str(demo)) and opener == []
+    P.forget_window(demo)
+    monkeypatch.setattr(P, "_DECIDED", set())
+    monkeypatch.setattr(P, "ALLOW_UNDER_PYTEST", False)
+    assert P.OPENED_LINE not in tools.check(str(demo)) and opener == []
+    monkeypatch.setattr(P, "ALLOW_UNDER_PYTEST", True)
+    from reelsmith.watch import window
+    monkeypatch.setattr(window, "available", lambda: False)      # no desktop window: never a browser tab
+    assert P.OPENED_LINE not in tools.check(str(demo)) and opener == []
+
+
+def test_a_launch_that_fails_never_fails_the_tool(demo, opener, monkeypatch):
+    monkeypatch.setenv(P.WATCH_ENV, "1")
+    monkeypatch.setattr(P, "launch", lambda root: (_ for _ in ()).throw(OSError("no python")))
+    res = tools.check(str(demo))
+    assert "BLOCKED" in res and P.OPENED_LINE not in res
 
 
 def test_the_player_waits_for_its_bundle(served, monkeypatch):
@@ -336,6 +524,33 @@ def test_the_watch_command(monkeypatch, demo, capsys):
     assert 'pip install "reelsmith[app]"' in capsys.readouterr().out
     assert cli.main(["watch", str(demo / "assets")]) == 2
     assert cli.command_parser("watch").parse_args([str(demo), "--port", "0"]).port == 0
+
+
+def test_one_window_per_project(monkeypatch, demo, capsys):
+    from reelsmith.watch import window
+    monkeypatch.setattr(window, "available", lambda: True)
+    monkeypatch.setattr(W.WatchServer, "shutdown", lambda self: None)
+    monkeypatch.setattr(W.WatchServer, "serve_forever", lambda self: None)
+    seen = []
+    monkeypatch.setattr(window, "open_window", lambda url, title, ready=None: seen.append(P.window_of(demo)))
+    assert cli.main(["watch", str(demo)]) == 0
+    assert seen[0]["pid"] == os.getpid() and seen[0]["url"].startswith("http://127.0.0.1:")    # recorded while open
+    assert P.window_of(demo) is None and not (demo / P.WINDOW).exists()                        # and gone after
+    P.record_window(demo, "http://127.0.0.1:9/")                       # another window on it is open
+    capsys.readouterr()
+    assert cli.main(["watch", str(demo / "project.json")]) == 0 and len(seen) == 1
+    assert "already open (http://127.0.0.1:9/" in capsys.readouterr().out
+    opened = []
+    monkeypatch.setattr(W.webbrowser, "open", opened.append)
+    monkeypatch.setattr(W.WatchServer, "serve_forever", lambda self: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert cli.main(["watch", str(demo), "--browser"]) == 0 and len(opened) == 1             # as asked
+    assert P.window_of(demo)["url"] == "http://127.0.0.1:9/"
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    (demo / P.WINDOW).write_text(json.dumps({"pid": dead.pid, "url": "x"}), encoding="utf-8")
+    assert P.window_of(demo) is None
+    monkeypatch.setattr(W.WatchServer, "serve_forever", lambda self: None)
+    assert cli.main(["watch", str(demo)]) == 0 and len(seen) == 2                            # a dead one is ignored
 
 
 def test_the_feed_has_a_row_for_every_batch_the_log_missed():

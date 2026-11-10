@@ -17,8 +17,9 @@ from .. import timeexpr as T
 from ..checks import check_project
 from ..media import probe
 from ..workspace import WorkspaceError, find_workspace, profile_for, project_file
+from . import presence
+from .presence import SERVED
 
-SERVED = ("assets", "voice", "out", "build")          # the only project folders the server hands out
 ACTIVITY = "activity.jsonl"
 ACTIVITY_SHOWN = 300
 _ROUND = 4
@@ -309,6 +310,28 @@ def spend_of(root: Path) -> dict | None:
         return None
 
 
+def summary_of(state: dict) -> dict:
+    """A few facts at a glance, from the state itself."""
+    tracks = state["tracks"]
+    clips = [c for t in tracks for c in t["clips"]]
+    voice = state["voice"]
+    narrated = sum(max(0.0, ln["end"] - ln["start"]) for ln in voice["lines"]) if voice else 0.0
+    covered = None
+    if state["duration"]:
+        spans = sorted((max(0.0, c["start"]), min(state["duration"], c["end"])) for t in tracks
+                       if t["kind"] == "visual" and not t["hidden"] for c in t["clips"]
+                       if c["start"] is not None and c["end"] is not None)
+        total, reach = 0.0, 0.0
+        for a, b in spans:
+            a = max(a, reach)
+            if b > a:
+                total, reach = total + b - a, b
+        covered = round(min(1.0, total / state["duration"]), 3)
+    levels = [i["level"] for i in state["issues"]]
+    return {"clips": len(clips), "tracks": len(tracks), "narrated_s": round(narrated, 1), "covered": covered,
+            "errors": levels.count("error"), "warnings": levels.count("warning"), "batches": len(state["history"])}
+
+
 def activity_of(root: Path, limit: int = ACTIVITY_SHOWN) -> list[dict]:
     path = root / ".history" / ACTIVITY
     try:
@@ -331,8 +354,8 @@ def with_batches(activity: list[dict], history: list[dict]) -> list[dict]:
     """The feed with a row for every recorded batch the activity log does not have (edits made before the log
     existed, or by hand through the Python API), in time order."""
     logged = {row.get("batch") for row in activity}
-    extra = [{"ts": h["at"], "tool": "edit", "ok": True, "seconds": None, "summary": h["summary"], "batch": h["n"]}
-             for h in history if h["n"] not in logged]
+    extra = [{"ts": h["at"], "tool": "edit", "ok": True, "seconds": None, "summary": h["summary"], "batch": h["n"],
+              "files": [], "text": h["summary"]} for h in history if h["n"] not in logged]
     return sorted(activity + extra, key=lambda row: str(row.get("ts") or "")) if extra else activity
 
 
@@ -400,7 +423,7 @@ def _error_text(exc: Exception) -> str:
 
 
 def digest(state: dict) -> str:
-    body = {k: v for k, v in state.items() if k != "revision"}
+    body = {k: v for k, v in state.items() if k not in ("revision", "running")}
     return hashlib.sha1(json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
 
 
@@ -456,6 +479,8 @@ def build_state(root: str | Path, base: str = "") -> dict:
     state["spend"] = spend_of(root)
     state["history"] = history_of(root)
     state["activity"] = with_batches(activity_of(root), state["history"])
+    state["summary"] = summary_of(state)
+    state["running"] = presence.running(root)          # moves on its own: not part of the revision
     state["revision"] = digest(state)
     return state
 
@@ -466,8 +491,9 @@ def watched(root: Path) -> list[Path]:
         ws = find_workspace(root)
     except WorkspaceError:
         ws = None
+    # not the .history folder itself: running.json comes and goes there on every tool call
     files = [root / D.PROJECT_FILE, root / "voice" / "voice.json", root / "voice", root / "assets",
-             root / ".history", root / ".history" / "log.jsonl", root / ".history" / ACTIVITY,
+             root / ".history" / "log.jsonl", root / ".history" / ACTIVITY,
              root / "build" / "report.json", root / "out" / "report.json", root / "out" / "film.mp4",
              root / "build" / "draft.mp4", root / "ledger.jsonl"]
     if ws is not None:
@@ -476,7 +502,8 @@ def watched(root: Path) -> list[Path]:
 
 
 def signature(root: Path) -> tuple:
-    return tuple(_stamp(p) for p in watched(root))
+    from ..ops import snapshots
+    return tuple(_stamp(p) for p in watched(root)) + (tuple(n for n, _ in snapshots(root)),)
 
 
 class StateCache:

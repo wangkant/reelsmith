@@ -1,7 +1,9 @@
 """Every agent-facing tool (spec 10) as a plain function returning text. The MCP server, the CLI and the runner call
 these. No tool raises: a failure comes back as text that says what to do, with `ok` False on the result."""
+import contextvars
 import functools
 import importlib
+import inspect
 import json
 import os
 import re
@@ -15,7 +17,8 @@ from . import render as R
 from .checks import check_project
 from .media import run_tree
 from .profiles import ProfileError, choose, fps_label, parse_canvas
-from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_root
+from .watch import presence
+from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_file, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "manual.md"
@@ -77,10 +80,18 @@ def tool(fn):
 UNLOGGED = {"manual", "notes", "library", "describe", "assets"}     # read-only chatter
 ACTIVITY_LOG = ".history/activity.jsonl"
 ACTIVITY_KEEP = 1000
+ACTIVITY_TEXT = 4000
+ACTIVITY_FILES = 12
+_PICTURE = r"\.(?:png|jpe?g|webp|gif)"
+_NAMED_FILE = re.compile(r"(?:^|(?<=[\s:(\[\"'=,]))\x00?((?:" + "|".join(presence.SERVED)
+                         + r")/[^\s,;\"'()\[\]<>|*?]*?" + _PICTURE + r")(?![A-Za-z0-9_])", re.I)
+_SHEET = re.compile(r"^(contact|sheet_)", re.I)
+_CALL = contextvars.ContextVar("reelsmith_call", default=None)
 
 
 def _logged(name: str, call):
-    """A call on a project leaves a line in its activity log (what `reelsmith watch` shows)."""
+    """A call on a project leaves a line in its activity log and, while it runs, .history/running.json (what
+    `reelsmith watch` shows); it may open the watch window the user asked for."""
     if name in UNLOGGED:
         return call
 
@@ -90,10 +101,69 @@ def _logged(name: str, call):
         if not isinstance(project, str):
             return call(*args, **kwargs)
         started, before = time.monotonic(), _batch_mark(project)
-        result = call(*args, **kwargs)
-        _log_activity(project, name, result, time.monotonic() - started, before)
+        root = _existing(project)
+        opened = root is not None and presence.maybe_open(root)
+        mark = presence.Running(root, name).start() if root is not None else None
+        token = _CALL.set(mark)
+        try:
+            result = call(*args, **kwargs)
+        finally:
+            _CALL.reset(token)
+            if mark is not None:
+                mark.end()
+        if root is None and (root := _existing(project)) is not None:      # new_project made it
+            opened = presence.maybe_open(root)
+        if opened:
+            result = ToolResult(f"{result}\n{presence.OPENED_LINE}", result.ok)
+        _log_activity(project, name, result, time.monotonic() - started, before, _sources(call, args, kwargs, root))
         return result
     return wrapper
+
+
+def _existing(project: str) -> Path | None:
+    try:
+        return _project(project)
+    except (ToolInputError, OSError, ValueError):
+        return None
+
+
+def _progress(stage: str, progress: float | None = None) -> None:
+    """render's and preview's stages, passed on to the running call's running.json."""
+    mark = _CALL.get()
+    if mark is not None:
+        mark.update(stage, progress)
+
+
+def _sources(call, args, kwargs, root: Path | None) -> list[str]:
+    """The picture an animated clip starts from (its result names only the clip)."""
+    try:
+        aid = inspect.signature(call).bind_partial(*args, **kwargs).arguments.get("image_asset")
+        if root is None or not isinstance(aid, str):
+            return []
+        entry = (json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig")).get("assets") or {}).get(aid)
+        return [str(entry["path"])] if isinstance(entry, dict) and entry.get("path") else []
+    except (TypeError, ValueError, OSError, AttributeError):
+        return []
+
+
+def named_files(root: Path, text: str, first: list[str] = ()) -> list[str]:
+    """Project-relative paths of the pictures `text` names that exist in the folders the watch window serves, in the
+    order named, at most ACTIVITY_FILES (contact sheets are kept when stills crowd them out)."""
+    for form in sorted({str(root), root.as_posix()}, key=len, reverse=True):
+        text = text.replace(form + "\\", "\x00").replace(form + "/", "\x00")
+    found: list[str] = []
+    for rel in [*first, *(m.group(1) for m in _NAMED_FILE.finditer(text.replace("\\", "/")))]:
+        rel = rel.replace("\\", "/")
+        if rel in found or not re.search(_PICTURE + "$", rel, re.I):
+            continue
+        path = project_file(root, rel)
+        if path is not None and path.is_file():
+            found.append(rel)
+    if len(found) <= ACTIVITY_FILES:
+        return found
+    sheets = [f for f in found if _SHEET.match(f.rsplit("/", 1)[-1])][:ACTIVITY_FILES]
+    others = [f for f in found if f not in sheets][:ACTIVITY_FILES - len(sheets)]
+    return [f for f in found if f in sheets or f in others]
 
 
 def _batch_mark(project: str):
@@ -103,16 +173,29 @@ def _batch_mark(project: str):
         return None
 
 
-def _log_activity(project: str, name: str, result: ToolResult, seconds: float, before) -> None:
-    """Never the arguments, only the result's first line (tools keep keys out of it); never fails the tool."""
+def _masked(root: Path, text: str) -> str:
+    """The text with the workspace's keys and anything shaped like a key masked (tools keep keys out of results;
+    this makes sure)."""
+    config = _mod("providers.config")
+    try:
+        return config.context(root).redact(text)
+    except Exception:  # noqa: BLE001 - a workspace whose keys cannot be read: the shape-based masking still runs
+        return config.redact(text)
+
+
+def _log_activity(project: str, name: str, result: ToolResult, seconds: float, before,
+                  sources: list[str] = ()) -> None:
+    """Never the arguments, only the result (masked) and the pictures it names; never fails the tool."""
     try:
         root = _project(project)
         batch = None
         if _batch_mark(project) != before:
             last = (root / ".history" / "log.jsonl").read_text(encoding="utf-8").splitlines()[-1]
             batch = int(json.loads(last)["n"])
+        text = _masked(root, str(result))
         row = {"ts": datetime.now().isoformat(timespec="seconds"), "tool": name, "ok": bool(result.ok),
-               "seconds": round(seconds, 2), "summary": str(result).split("\n", 1)[0][:300], "batch": batch}
+               "seconds": round(seconds, 2), "summary": text.split("\n", 1)[0][:300], "batch": batch,
+               "files": named_files(root, str(result), sources), "text": text[:ACTIVITY_TEXT]}
         path = root / ACTIVITY_LOG
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8", newline="\n") as f:
@@ -474,7 +557,7 @@ def preview(project: str, times: list[float | str] | float | str = [],  # noqa: 
         times = []
     if not isinstance(times, list):
         times = [times]                     # one Time on its own
-    res = R.preview(root, times, sweep=bool(sweep))
+    res = R.preview(root, times, sweep=bool(sweep), progress=_progress)
     if not res.get("ok"):
         if res.get("stage") == "component":         # leads with "component X crashed at File.tsx:N"
             return _fail(_lines([str(res.get("error"))], 120))
@@ -569,10 +652,10 @@ def render(project: str, draft: bool = False, start: float | str = "", end: floa
     for a part of the film."""
     root = _project(project)
     if draft:
-        return _draft_text(R.draft(root, start, end, scale))
+        return _draft_text(R.draft(root, start, end, scale, progress=_progress))
     if start not in ("", None) or end not in ("", None):
         raise ToolInputError("start and end are for a draft (draft=true): a delivered film is always the whole film")
-    return _render_text(R.render(root))
+    return _render_text(R.render(root, progress=_progress))
 
 
 def _runs(frames: list[dict], key) -> list[tuple[float, float, object, int]]:

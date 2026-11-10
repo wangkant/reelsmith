@@ -25,6 +25,7 @@ from .. import render as R
 from .. import resolve as RS
 from .. import timeexpr as T
 from ..workspace import PROJECT_FILE, WORKSPACE_FILE, WorkspaceError, find_workspace, project_file
+from . import presence as P
 from . import state as S
 
 HOST = "127.0.0.1"
@@ -32,6 +33,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 PLACEHOLDER = b"<!doctype html><meta charset=utf-8><title>reelsmith watch</title><p>reelsmith watch: the window is " \
               b"not built yet; <a href=api/state>api/state</a> works.</p>"
 POLL_S = 0.5
+RUNNING_PUSH_S = 1.0                # progress alone is announced at most this often
 KEEPALIVE_S = 15
 STILL_W = 960
 STILL_TIMEOUT_S = 180
@@ -190,6 +192,9 @@ class Site:
         self.changed = threading.Condition()
         self.revision: str | None = None
         self._sig: tuple | None = None
+        self.running: dict | None = None            # as last announced
+        self.running_seq = 0                        # moves whenever the running call is announced
+        self._running_at = 0.0
         self._still = threading.Lock()
         self._media = threading.BoundedSemaphore(2)
         self._resolved: tuple[tuple, bytes, str] | None = None
@@ -197,6 +202,7 @@ class Site:
         self.watch_dir = root / "build" / "watch"
 
     def poll(self) -> None:
+        self.poll_running()
         sig = S.signature(self.root)
         if sig == self._sig:
             return
@@ -207,13 +213,26 @@ class Site:
                 self.revision = rev
                 self.changed.notify_all()
 
+    def poll_running(self) -> None:
+        """Announce a call that starts, moves to another stage or ends at once; its progress alone at most every
+        RUNNING_PUSH_S."""
+        now, was = P.running(self.root), self.running
+        key = lambda r: r and (r["tool"], r["since"], r["stage"])  # noqa: E731
+        if key(now) == key(was) and (now is None or now["progress"] == was["progress"]
+                                     or time.monotonic() - self._running_at < RUNNING_PUSH_S):
+            return
+        with self.changed:
+            self.running, self._running_at = now, time.monotonic()
+            self.running_seq += 1
+            self.changed.notify_all()
+
     def state(self) -> dict:
         st = self.cache.get()
         if st["revision"] != self.revision:
             with self.changed:
                 self.revision = st["revision"]
                 self.changed.notify_all()
-        return st
+        return {**st, "running": P.running(self.root)}
 
     def resolved(self) -> tuple[bytes, str]:
         """The film exactly as render hands it to render.mjs, and its digest (the stills' cache key)."""
@@ -380,6 +399,8 @@ class Handler(BaseHTTPRequestHandler):
         q = self.query
         if path in ("/", "/index.html"):
             return self.static("index.html")
+        if path == "/favicon.ico":
+            return self.static("icon.ico")
         if path.startswith("/static/"):
             return self.static(path[len("/static/"):])
         if path == "/api/state":
@@ -512,18 +533,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.close_connection = True
-        sent = None
+        sent, seq = None, site.running_seq
         stop = self.server.stopping
         while not stop.is_set():
             with site.changed:
-                if site.revision == sent:
+                if site.revision == sent and site.running_seq == seq:
                     site.changed.wait(timeout=KEEPALIVE_S)
-                rev = site.revision
+                rev, now_seq, running = site.revision, site.running_seq, site.running
             if stop.is_set():
                 break
             if rev is not None and rev != sent:
-                self.wfile.write(f"event: change\ndata: {json.dumps({'revision': rev})}\n\n".encode())
-                sent = rev
+                data = json.dumps({"revision": rev, "running": running}, ensure_ascii=False)
+                self.wfile.write(f"event: change\ndata: {data}\n\n".encode())
+                sent, seq = rev, now_seq
+            elif now_seq != seq:
+                self.wfile.write(f"event: running\ndata: {json.dumps(running, ensure_ascii=False)}\n\n".encode())
+                seq = now_seq
             else:
                 self.wfile.write(b": keepalive\n\n")
             self.wfile.flush()
@@ -669,17 +694,27 @@ def _title(srv: WatchServer) -> str:
 def main(argv: list[str] | None = None) -> int:
     from . import window
     args = parser().parse_args(argv)
+    as_app = not args.no_open and not args.browser and window.available()
+    target = Path(args.project).expanduser().resolve()
+    target = target.parent if target.name == PROJECT_FILE else target
+    open_on = P.window_of(target) if as_app and (target / PROJECT_FILE).is_file() else None
+    if open_on:
+        print(f"reelsmith watch: a window on {target.name} is already open ({open_on.get('url')}, process "
+              f"{open_on.get('pid')}); --browser serves another view in the browser", flush=True)
+        return 0
     try:
         srv = WatchServer(args.project, args.port)
     except (ValueError, WorkspaceError, OSError) as exc:
         print(f"reelsmith watch: {exc}", file=sys.stderr)
         return 2
-    as_app = not args.no_open and not args.browser and window.available()
     print(f"reelsmith watch: {srv.url}  (read-only, local; "
           f"{'closing the window' if as_app else 'Ctrl+C'} stops it)", flush=True)
+    recorded = as_app and srv.workspace is None
     try:
         if as_app:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
+            if recorded:
+                P.record_window(srv.target, srv.url)
             window.open_window(srv.url, _title(srv))
             srv.shutdown()
         else:
@@ -692,6 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if recorded:
+            P.forget_window(srv.target)
         srv.stopping.set()
         srv.server_close()
     return 0
