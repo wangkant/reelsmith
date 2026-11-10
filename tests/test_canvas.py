@@ -1,6 +1,7 @@
 """Any canvas, any locale: profiles (built-in and custom), the locale, workspace fonts and canvas-scaled checks."""
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import replace
@@ -62,7 +63,7 @@ def english(p: Path, lines: list[str], **project) -> None:
 # ------------------------------------------------------------------ 1. profiles
 def test_generic_and_platform_profiles():
     assert set(P.PROFILES) == {"landscape", "vertical", "square", "portrait", "youtube", "douyin", "douyin-long",
-                               "tiktok", "shorts", "reels"}
+                               "tiktok", "shorts", "reels", "bilibili", "bilibili-story", "xiaohongshu", "channels"}
     assert P.get_profile(None) is P.LANDSCAPE and P.DEFAULT_PROFILE == "landscape"
     sizes = {n: (P.PROFILES[n].width, P.PROFILES[n].height) for n in ("landscape", "vertical", "square", "portrait")}
     assert sizes == {"landscape": (1920, 1080), "vertical": (1080, 1920), "square": (1080, 1080),
@@ -77,16 +78,44 @@ def test_generic_and_platform_profiles():
             p.safe.x, p.safe.w, 200, p.safe.y + p.safe.h)
     assert P.YOUTUBE.require_audio and (P.YOUTUBE.width, P.YOUTUBE.height, P.YOUTUBE.lufs) == (1920, 1080, -14.0)
     assert P.YOUTUBE.max_s is None and P.YOUTUBE.max_mb is None and P.YOUTUBE.max_still_s is None
-    assert P.REELS.safe == P.Box(66, 250, 884, 1000) and (P.REELS.min_s, P.REELS.max_s, P.REELS.lufs) == (3, 180, -14)
-    for name in ("douyin", "douyin-long", "tiktok", "shorts", "reels"):        # the social ones keep every check
+    assert P.REELS.safe == P.Box(66, 270, 884, 978) and (P.REELS.min_s, P.REELS.max_s, P.REELS.lufs) == (3, 180, -14)
+    assert P.REELS.max_mb == 300 and P.TIKTOK.safe == P.Box(120, 240, 760, 1220)
+    assert P.SHORTS.safe == P.Box(60, 288, 820, 960)                         # Google's 288 top, 672 bottom
+    social = ("douyin", "douyin-long", "tiktok", "shorts", "reels", "bilibili", "bilibili-story", "xiaohongshu",
+              "channels")
+    for name in social:                                                     # the social ones keep every check
         p = P.PROFILES[name]
         assert p.require_audio and p.max_still_s == 5.0 and p.ui and p.max_black_ratio == 0.10, name
     d = P.DOUYIN
     assert (d.width, d.height, d.safe, d.captions, d.min_s, d.max_s, d.target_s, d.max_mb, d.lufs) == (
         1080, 1920, P.Box(120, 240, 760, 1220), P.Box(120, 1260, 760, 200), 20, 90, (45, 75), 80, -10.0)
+    shape = {n: (P.PROFILES[n].width, P.PROFILES[n].height, P.PROFILES[n].safe, P.PROFILES[n].min_s,
+                 P.PROFILES[n].max_s, P.PROFILES[n].target_s, P.PROFILES[n].max_mb)
+             for n in ("bilibili", "bilibili-story", "xiaohongshu", "channels")}
+    assert shape == {"bilibili": (1920, 1080, P.Box(96, 54, 1728, 946), None, None, (180, 900), None),
+                     "bilibili-story": (1080, 1920, P.Box(120, 300, 760, 1100), None, 600, (30, 90), None),
+                     "xiaohongshu": (1080, 1920, P.Box(120, 240, 840, 1240), None, 300, (30, 90), 1000),
+                     "channels": (1080, 1920, P.Box(120, 200, 840, 1300), None, 3600, (60, 180), 2000)}
     assert [P.PROFILES[n].orientation for n in ("landscape", "vertical", "square")] == ["landscape", "portrait",
                                                                                        "square"]
     assert P.LANDSCAPE.scale == 1 and P.make_profile({"width": 1280, "height": 720}).scale == pytest.approx(2 / 3)
+
+
+def test_every_platform_profile_has_a_playbook():
+    # the manual hands the agent docs/platforms/<playbook>.md; generic canvases have none
+    assert set(P.PLAYBOOKS) == {n for n, p in P.PROFILES.items() if p.ui or p.require_audio}
+    assert not set(P.PLAYBOOKS) & {"landscape", "vertical", "square", "portrait"}
+    heads = ["## The frame", "## The first seconds", "## Pace and length", "## Words on screen and captions",
+             "## Sound", "## The ending, title, cover and tags", "## What gets a film limited",
+             "## What is not known", "## Sources"]
+    for book in set(P.PLAYBOOKS.values()):
+        lines = (ROOT / "docs" / "platforms" / f"{book}.md").read_text(encoding="utf-8").splitlines()
+        assert [ln for ln in lines if ln.startswith("## ")] == heads, book
+        body, sources = lines[:lines.index("## Sources")], lines[lines.index("## Sources"):]
+        assert len(body) <= 90, book
+        cited = set(re.findall(r"\[\^([\w-]+)\]", "\n".join(body)))
+        defined = {m.group(1) for ln in sources if (m := re.match(r"\[\^([\w-]+)\]:", ln))}
+        assert cited == defined, (book, cited ^ defined)
 
 
 def test_custom_profiles_from_workspace_json(tmp_path):
@@ -114,7 +143,35 @@ def test_custom_profiles_from_workspace_json(tmp_path):
     assert P.choose(None, {"width": 640, "height": 360}).width == 640   # workspace.json profile may be inline too
 
 
+def test_covers_come_with_the_platform_profile_and_match_the_playbooks():
+    crops = {n: [(c.name, c.crop) for c in p.cover] for n, p in P.PROFILES.items() if p.cover}
+    assert crops == {"youtube": [("cover", (1920, 1080, 0, 0))],
+                     "douyin": [("cover", (1080, 1440, 0, 240))], "douyin-long": [("cover", (1080, 1440, 0, 240))],
+                     "reels": [("cover", (1080, 1920, 0, 0)), ("cover-3x4", (1080, 1440, 0, 240))],
+                     "bilibili": [("cover", (1920, 1080, 0, 0)), ("cover-4x3", (1440, 1080, 240, 0))],
+                     "xiaohongshu": [("cover", (1080, 1440, 0, 240))],
+                     "channels": [("cover", (1080, 1920, 0, 0)), ("cover-3x4", (1080, 1440, 0, 240))]}
+    douyin = (ROOT / "docs" / "platforms" / "douyin.md").read_text(encoding="utf-8")
+    bilibili = (ROOT / "docs" / "platforms" / "bilibili.md").read_text(encoding="utf-8")
+    assert "cropped 3:4 from the middle (y 240–1680)" in douyin and "crop=1440:1080:240:0" in bilibili
+    assert P.DOUYIN.cover[0].label(1080, 1920) == "3:4 cover (y 240-1680)"
+    assert P.BILIBILI.cover[1].label(1920, 1080) == "4:3 cover (x 240-1680)" and \
+        P.BILIBILI.cover[0].label(1920, 1080) == "16:9 cover"
+    assert P.make_profile({"base": "douyin", "fps": 25}).cover == P.DOUYIN.cover
+    assert P.make_profile({"base": "douyin", "width": 720, "height": 1280}).cover == ()   # cut for another canvas
+    own = P.make_profile({"base": "vertical", "cover": [{"name": "grid", "crop": [1080, 1080, 0, 420]}]})
+    assert own.cover == (P.Cover("grid", (1080, 1080, 0, 420)),)
+    assert P.make_profile({"base": "douyin", "cover": []}).cover == ()
+    assert json.loads(json.dumps(P.DOUYIN.to_json()))["cover"] == [{"name": "cover", "crop": [1080, 1440, 0, 240]}]
+
+
 @pytest.mark.parametrize("profiles, fragment", [
+    ({"x": {"cover": {"name": "cover"}}}, "profiles.x.cover must be a list of"),
+    ({"x": {"cover": [{"name": "c", "crop": [1920, 1080, 10, 0]}]}}, "profiles.x.cover[0].crop [1920, 1080, 10, 0] "
+                                                                       "must lie inside the 1920x1080 canvas"),
+    ({"x": {"cover": [{"name": "c", "crop": [100, 100.5, 0, 0]}]}}, "profiles.x.cover[0].crop must be [w, h, x, y]"),
+    ({"x": {"cover": [{"name": "c", "crop": [9, 9, 0, 0]}, {"name": "c", "crop": [8, 8, 0, 0]}]}},
+     "profiles.x.cover[1].name must be a distinct file name"),
     ({"x": {"width": 1001}}, "profiles.x.width must be an even whole number 64-4096"),
     ({"x": {"height": 32}}, "profiles.x.height"),
     ({"x": {"fps": 0}}, "profiles.x.fps must be a frame rate 1-120"),

@@ -12,12 +12,13 @@ import pytest
 
 from reelsmith import checks as C
 from reelsmith.issues import Issue
-from reelsmith.profiles import DOUYIN as DOUYIN_NOW, Box
+from reelsmith.profiles import DOUYIN as DOUYIN_NOW, PROFILES, Box
 from reelsmith.workspace import DEFAULT_RULES, WorkspaceError, default_rules, merge_rules
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
-# the layout fixtures are drawn on the douyin screen as it was (x 40-880, y 220-1460); the checks are geometry-free
-DOUYIN = replace(DOUYIN_NOW, safe=Box(40, 220, 840, 1240), captions=Box(40, 1260, 840, 200))
+# the layout fixtures are drawn on the douyin screen as it was (x 40-880, y 220-1460, no cover crop); the checks are
+# geometry-free
+DOUYIN = replace(DOUYIN_NOW, safe=Box(40, 220, 840, 1240), captions=Box(40, 1260, 840, 200), cover=())
 TINY = replace(DOUYIN, name="tiny", width=108, height=192, safe=Box(8, 20, 92, 150), min_s=1, max_s=30,
                target_s=(1, 10), lufs=-16.0, max_still_s=2.0)
 
@@ -486,6 +487,35 @@ def test_cover_warnings_only_where_a_cover_matters(monkeypatch, tmp_path, profil
     assert covers == ({"cover", "title @ 0.0s"} if warned else set())
 
 
+@pytest.mark.parametrize("profile, sources, advised", [
+    ("douyin", [], True), ({"base": "bilibili", "fps": 25}, [], True), ("landscape", [], False),
+    ("vertical", [], False), ("douyin", [{"title": "Report", "url": "https://example.org/r"}], False)])
+def test_a_platform_film_without_sources_is_advised_to_hand_them_over(monkeypatch, tmp_path, profile, sources,
+                                                                        advised):
+    project = tmp_path / "p"
+    project.mkdir()
+    meta = dict(GOOD_META, sources=sources)
+    (project / "project.json").write_text(json.dumps({"version": 2, "profile": profile, "meta": meta}),
+                                          encoding="utf-8")
+    fake_doc(monkeypatch, meta=meta)
+    fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "video", 0, 900)], 30))
+    found = [i for i in C.check_project(project) if i.where == "meta.sources"]
+    assert [i.level for i in found] == (["advice"] if advised else [])
+    if advised:
+        book = "bilibili" if isinstance(profile, dict) else profile
+        assert f"the {book} playbook (docs/platforms/{book}.md) asks for the sources" in found[0].msg
+
+
+def test_the_owners_sources_rule_speaks_alone(monkeypatch, tmp_path):
+    (tmp_path / "workspace.json").write_text(json.dumps({"profile": "douyin"}), encoding="utf-8")
+    (tmp_path / "rules.json").write_text(json.dumps({"hard": {"min_sources": 1}}), encoding="utf-8")
+    project = tmp_path / "projects" / "p"
+    project.mkdir(parents=True)
+    fake_doc(monkeypatch, meta=dict(GOOD_META, sources=[]))
+    fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "video", 0, 900)], 30))
+    assert [i.level for i in C.check_project(project) if i.where == "meta.sources"] == ["error"]
+
+
 def test_check_project_resolve_failure_is_an_error(monkeypatch, project):
     fake_doc(monkeypatch)
 
@@ -577,6 +607,23 @@ def test_layout_ignores_faint_offcanvas_and_small_overhang():
                             text("edge", [40, 214, 400, 100]),                   # 6 px above the safe top: line box
                             )]}
     assert C.check_layout(ins, DOUYIN) == []
+
+
+def test_layout_warns_about_words_on_frame_0_that_a_cover_crop_cuts_or_leaves_out():
+    # channels: safe y 200-1500, the profile grid's 3:4 crop keeps y 240-1680
+    cut = {"frames": [frame(0, text("hook", [200, 205, 600, 120]), text("fine", [200, 600, 600, 120])),
+                      frame(30, text("later", [200, 205, 600, 120]))]}
+    found = C.check_layout(cut, PROFILES["channels"])
+    assert [(i.level, i.where) for i in found] == [("warning", "hook @ 0.0s")]
+    assert "is cut by the 3:4 cover (y 240-1680) (35 px past its top edge)" in found[0].msg
+    # bilibili: the 4:3 cover keeps x 240-1680; the 16:9 one is the whole frame
+    out = {"frames": [frame(0, text("tag", [100, 500, 120, 60]))]}
+    found = C.check_layout(out, PROFILES["bilibili"])
+    assert [i.where for i in found] == ["tag @ 0.0s"] and "lies outside the 4:3 cover (x 240-1680)" in found[0].msg
+    # words the safe area already refuses are not reported twice; generic canvases have no cover
+    assert [i.level for i in C.check_layout({"frames": [frame(0, text("top", [200, 150, 600, 100]))]},
+                                            PROFILES["douyin"])] == ["error"]
+    assert C.check_layout(out, PROFILES["landscape"]) == []
 
 
 def test_layout_captions_track_items_use_track_id():

@@ -20,7 +20,7 @@ const ARROW = 26;
 const GAP = 6;
 // text floors in canvas px at a 1080 short side
 const READ = 40;
-const SMALL = 30;
+const SMALL = 34;
 // widest label pill (px at a 1080 short side): longer labels wrap to two lines so they fit between cards
 const PILL = 300;
 
@@ -62,60 +62,65 @@ function pillBlock(label: string, maxW: number, wide: number, k: number): Block 
   return at(wide, SMALL / k);
 }
 
-function measureCard(p: Party, style: "v" | "h", cw: number, badge: number, k: number): Omit<Card, "rect"> & { hgt: number } {
+// z: how much larger than the base sizes the cards are drawn, so they fill a roomy box
+function measureCard(p: Party, style: "v" | "h", cw: number, badge: number, k: number, z: number): Omit<Card, "rect"> & { hgt: number } {
   const padX = style === "v" ? 20 : 26;
   const textW = style === "v" ? cw - padX * 2 : cw - padX * 2 - badge - 24;
-  const name = fitBlock(String(p.name ?? ""), textW, 60, 48, READ / k, 800, 2);
-  const role = fitBlock(String(p.role ?? ""), textW, 40, 34, SMALL / k, 500, 2);
+  // z lifts the ceilings only: a name or role that fits one line at the base size keeps one line
+  const name = fitBlock(String(p.name ?? ""), textW, 60 * z, 48, READ / k, 800, 2);
+  const role = fitBlock(String(p.role ?? ""), textW, 40 * z, 36, SMALL / k, 500, 2);
   const nameH = name.lines.length * name.size * 1.16;
   const roleH = role.lines.length ? 8 + role.lines.length * role.size * 1.24 : 0;
-  const hgt = style === "v" ? 26 + badge + 14 + nameH + roleH + 26 : Math.max(badge + 48, nameH + roleH + 52);
+  const hgt = style === "v" ? 26 * z + badge + 14 + nameH + roleH + 26 * z : Math.max(badge + 48 * z, nameH + roleH + 52 * z);
   return { style, badge, name, role, hgt };
 }
 
 // rowGap: room a labelled link between two side-by-side cards needs, so it can run straight with its label in the gap
-function layoutCards(parties: Party[], mode: string, X0: number, Y0: number, IW: number, IH: number, hasLinks: boolean, rowGap: number, k: number): { cards: Card[]; ok: boolean } {
+function layoutCards(
+  parties: Party[], mode: string, X0: number, Y0: number, IW: number, IH: number, hasLinks: boolean, rowGap: number, k: number, z = 1,
+): { cards: Card[]; ok: boolean; roomy: boolean } {
   const n = parties.length;
   const rg = rowGap / k;
   const scales = [1, 0.9, 0.8];
   let out: Card[] = [];
   let ok = false;
-  for (const s of scales) {
+  let roomy = false;
+  for (const s0 of scales) {
     out = [];
     if (mode === "column") {
-      const badge = Math.round(Math.min(120, IW * 0.17) * s);
-      const ms = parties.map((p) => measureCard(p, "h", IW, badge, k));
+      const badge = Math.round(Math.min(120 * z, IW * 0.17) * s0);
+      const ms = parties.map((p) => measureCard(p, "h", IW, badge, k, z));
       const hc = Math.max(...ms.map((m) => m.hgt));
       const step = n > 1 ? (IH - hc) / (n - 1) : 0;
       ms.forEach((m, i) => out.push({ ...m, rect: { x: X0, y: n > 1 ? Y0 + i * step : Y0 + (IH - hc) / 2, w: IW, h: hc } }));
       ok = n * hc + (n - 1) * (hasLinks ? 120 : 40) <= IH;
-      if (n * hc + (n - 1) * (hasLinks ? 170 : 60) <= IH) break;
+      roomy = n * hc + (n - 1) * (hasLinks ? 170 : 60) <= IH;
     } else if (mode === "row") {
       const gap = n === 2 ? Math.max(IW * 0.34, Math.min(rg, IW * 0.5)) : IW * 0.14;
       const cw = (IW - gap * (n - 1)) / n;
-      const badge = Math.round(Math.min(120, cw * 0.44) * s);
-      const ms = parties.map((p) => measureCard(p, "v", cw, badge, k));
+      const badge = Math.round(Math.min(120 * z, cw * 0.44) * s0);
+      const ms = parties.map((p) => measureCard(p, "v", cw, badge, k, z));
       const hc = Math.max(...ms.map((m) => m.hgt));
       ms.forEach((m, i) => out.push({ ...m, rect: { x: X0 + i * (cw + gap), y: Y0 + (IH - hc) / 2, w: cw, h: hc } }));
       ok = hc <= IH * 0.72;
-      if (hc <= IH * 0.56) break;
+      roomy = hc <= IH * 0.56;
     } else if (mode === "triangle") {
       const tw = IW * 0.66;
       const bw = Math.min(IW * 0.39, (IW - Math.min(rg, IW * 0.34)) / 2);
-      const badgeT = Math.round(Math.min(116, tw * 0.25) * s);
-      const badgeB = Math.round(Math.min(112, bw * 0.34) * s);
-      const top = measureCard(parties[0], "h", tw, badgeT, k);
-      const bs = parties.slice(1).map((p) => measureCard(p, "v", bw, badgeB, k));
+      const badgeT = Math.round(Math.min(116 * z, tw * 0.25) * s0);
+      const badgeB = Math.round(Math.min(112 * z, bw * 0.34) * s0);
+      const top = measureCard(parties[0], "h", tw, badgeT, k, z);
+      const bs = parties.slice(1).map((p) => measureCard(p, "v", bw, badgeB, k, z));
       const hb = Math.max(...bs.map((m) => m.hgt));
       out.push({ ...top, rect: { x: X0 + (IW - tw) / 2, y: Y0, w: tw, h: top.hgt } });
       bs.forEach((m, i) => out.push({ ...m, rect: { x: i === 0 ? X0 : X0 + IW - bw, y: Y0 + IH - hb, w: bw, h: hb } }));
       ok = top.hgt + hb + 170 <= IH;
-      if (top.hgt + hb + 230 <= IH) break;
+      roomy = top.hgt + hb + 230 <= IH;
     } else {
       const gx = Math.max(IW * 0.26, Math.min(rg, IW * 0.34));
       const cw = (IW - gx) / 2;
-      const badge = Math.round(Math.min(96, cw * 0.32) * s);
-      const ms = parties.map((p) => measureCard(p, "v", cw, badge, k));
+      const badge = Math.round(Math.min(96 * z, cw * 0.32) * s0);
+      const ms = parties.map((p) => measureCard(p, "v", cw, badge, k, z));
       const hc = Math.max(...ms.map((m) => m.hgt));
       ms.forEach((m, i) => {
         const row = i < 2 ? 0 : 1;
@@ -124,10 +129,11 @@ function layoutCards(parties: Party[], mode: string, X0: number, Y0: number, IW:
         out.push({ ...m, rect: { x, y: row === 0 ? Y0 : Y0 + IH - hc, w: cw, h: hc } });
       });
       ok = 2 * hc + 240 <= IH;
-      if (2 * hc + 300 <= IH) break;
+      roomy = 2 * hc + 300 <= IH;
     }
+    if (roomy) break;
   }
-  return { cards: out, ok };
+  return { cards: out, ok, roomy };
 }
 
 const bez = (c: Curve, t: number): Pt => {
@@ -315,39 +321,69 @@ export default function Parties({ props }: { props: any }) {
     .map((l) => pillW(String(l.label)) + 60));
   // a box too small for the cards is laid out larger and scaled down whole (text keeps its floor, so it wraps instead)
   const pad = (bw: number, bh: number) => Math.round(cl(Math.min(bw, bh) * 0.04, 20, 34));
-  let k = 1;
+  // kt: what the text floors are divided by; it follows k, except in the last resort below
+  let k = 1, kt = 1;
   if (bw0 >= 200 && bh0 >= 200 && n >= 2) {
-    for (const kk of [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52]) {
-      k = kk;
+    const fits = (kk: number, kf: number) => {
       const vw = bw0 / kk, vh = bh0 / kk, pp = pad(vw, vh);
-      if (layoutCards(parties, mode, pp, pp, vw - 2 * pp, vh - 2 * pp, links.length > 0, rowGap, kk).ok) break;
+      return layoutCards(parties, mode, pp, pp, vw - 2 * pp, vh - 2 * pp, links.length > 0, rowGap, kf).ok;
+    };
+    let ok = false;
+    for (const kk of [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52]) {
+      k = kt = kk;
+      if ((ok = fits(kk, kk))) break;
+    }
+    // the longest names and roles fit no box at the floor: the text goes under it with the cards rather than overlap
+    if (!ok) {
+      for (const kk of [0.92, 0.84, 0.76, 0.68, 0.6, 0.52, 0.44]) {
+        k = kk;
+        kt = 1;
+        if (fits(kk, 1)) break;
+      }
     }
   }
   const w = bw0 / k, h = bh0 / k;
   const P = pad(w, h);
   const X0 = P, IW = w - 2 * P;
   let Y0 = P, IH = h - 2 * P;
+  // a roomy box draws the cards larger, up to the largest size whose layout still has room for the links
+  let z = 1;
+  if (k === 1 && w >= 200 && h >= 200 && n >= 2) {
+    for (const zz of [1.4, 1.3, 1.2, 1.1]) {
+      if (layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, kt, zz).roomy) {
+        z = zz;
+        break;
+      }
+    }
+  }
+  if ((mode === "triangle" || mode === "grid") && n >= 3 && w >= 200 && h >= 200) {
+    // the rows keep a gap the links need, not the whole box: the panel hugs them
+    const cs = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, kt, z).cards;
+    const used = Math.min(IH, cs[0].rect.h + cs[cs.length - 1].rect.h + (links.length ? 360 : 120));
+    Y0 += (IH - used) / 2;
+    IH = used;
+  }
   if (mode === "column" && n >= 2 && w >= 200 && h >= 200) {
     // a tall box would leave a void between the cards: cap the gap and let the panel hug the content
-    const hc = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, k).cards[0].rect.h;
+    const hc = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, kt, z).cards[0].rect.h;
     const used = Math.min(IH, n * hc + (n - 1) * (links.length ? 380 : 110));
     Y0 += (IH - used) / 2;
     IH = used;
   } else if (mode === "row" && n >= 2 && w >= 200 && h >= 200) {
-    const hc = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, k).cards[0].rect.h;
+    const hc = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, kt, z).cards[0].rect.h;
     // two side by side link straight across the gap; more need room for arcs above and below
     const used = Math.min(IH, hc + (links.length ? (n === 2 ? 140 : 400) : 0));
     Y0 += (IH - used) / 2;
     IH = used;
   }
 
-  const key = JSON.stringify([w, h, k, mode, parties.map((p) => [p.id, p.name, p.role]), links.map((l) => [l.from, l.to, l.label])]);
+  const key = JSON.stringify([w, h, k, kt, z, mode, parties.map((p) => [p.id, p.name, p.role]), links.map((l) => [l.from, l.to, l.label])]);
   const geo = useMemo(() => {
     if (w < 200 || h < 200 || n < 2) return null;
-    const cards = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, k).cards;
+    const cards = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, kt, z).cards;
     const rects = cards.map((c) => c.rect);
-    const pillMax = Math.min(IW * 0.62, PILL / k);
-    const pills = links.map((l) => pillBlock(String(l.label ?? ""), pillMax - 44, IW * 0.9 - 44, k));
+    const pillMax = Math.min(IW * 0.62, PILL / kt);
+    const pills = links.map((l) => pillBlock(String(l.label ?? ""), pillMax - 44, IW * 0.9 - 44, kt));
     const pillDims = pills.map((b) => (b.lines.length
       ? { w: Math.max(...b.lines.map((s) => textWidth(s, b.size, FONTS.sans, 700))) + 44, h: b.lines.length * b.size * 1.22 + 22 }
       : { w: 0, h: 0 }));

@@ -12,16 +12,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import locales
+from . import locales, sidecar
 from . import render as R
-from .checks import check_project
+from .checks import check_project, platform_of
 from .media import run_tree
-from .profiles import ProfileError, choose, fps_label, parse_canvas
+from .profiles import PLAYBOOKS, ProfileError, choose, fps_label, parse_canvas
 from .watch import presence
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_file, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "manual.md"
+PLATFORMS = ROOT / "docs" / "platforms"
 KIT_DOC = ROOT / "docs" / "kit.md"
 MAX_NOTE_CHARS = 4000
 MAX_NOTES_SHOWN = 30000
@@ -244,10 +245,33 @@ def _seconds(root: Path, value) -> float:
 
 # ------------------------------------------------------------------ reading
 @tool
-def manual() -> str:
-    """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components and
-    what blocks delivery. Read it once before your first edit."""
-    return MANUAL.read_text(encoding="utf-8")
+def manual(project: str = "") -> str:
+    """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components,
+    making a film people watch and what blocks delivery. With `project`, the playbook of its profile's platform
+    follows (Douyin, Bilibili, YouTube, TikTok, Reels, Xiaohongshu, WeChat Channels): how a film is made there.
+    Read it once before your first edit."""
+    text = MANUAL.read_text(encoding="utf-8")
+    if not project:
+        books = {}
+        for name, book in PLAYBOOKS.items():
+            books.setdefault(book, []).append(name)
+        listed = "; ".join(f"{', '.join(names)} → {_book_title(book)}" for book, names in books.items())
+        return (f"{text}\n---\nPlatform playbooks, one per platform profile: {listed}. Call manual(project) once the "
+                f"project exists to get its profile's playbook after this text (files in {PLATFORMS}).\n")
+    name = platform_of(_project(project))
+    book = PLAYBOOKS.get(name)
+    if not book:
+        return f"{text}\n---\nThis project's canvas ({name}) is not a platform profile: no playbook.\n"
+    lines = (PLATFORMS / f"{book}.md").read_text(encoding="utf-8").splitlines()
+    body = lines[1:lines.index("## Sources")] if "## Sources" in lines else lines[1:]
+    return (f"{text}\n# This film is for {_book_title(book)}\n\nThe playbook of profile `{name}`; its rules win "
+            f"over the general chapters above. Sources for every [^note]: {PLATFORMS / f'{book}.md'}.\n"
+            + "\n".join(body).rstrip() + "\n")
+
+
+def _book_title(book: str) -> str:
+    with (PLATFORMS / f"{book}.md").open(encoding="utf-8") as f:
+        return f.readline().lstrip("#").strip()
 
 
 @tool
@@ -370,14 +394,14 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
                 from_project: str = "") -> str:
     """Create a project folder with an empty project.json (no tracks yet), assets/, voice/ and script.md.
     Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys. profile: a profile name
-    (landscape, vertical, square, portrait, youtube, douyin, douyin-long, tiktok, shorts, reels or one of the
-    workspace's); empty takes the workspace's (else landscape). canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" (e.g.
-    "1920x1080@25", "1920x1080@29.97") for a canvas of your own, starting from `profile` (or the workspace's): its
-    safe area scales to the new size. locale: the film's language as a BCP-47 tag
-    ("en", "zh-CN", "ja"); empty takes the workspace's (else en). from_project: the folder of a project to put on
-    this canvas: its assets and voice (hard-linked like import_asset), tracks, markers, chapters, meta and theme
-    come along (its locale too unless `locale` is given), and every box is mapped from its safe area to this one;
-    look at the result with preview."""
+    (landscape, vertical, square, portrait, youtube, shorts, douyin, douyin-long, tiktok, reels, bilibili,
+    bilibili-story, xiaohongshu, channels or one of the workspace's); empty takes the workspace's (else landscape).
+    A platform profile has a playbook (the result names it; manual(project) returns it) and gets handover.md.
+    canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" ("1920x1080@25", "1920x1080@29.97") for a canvas of your own based on `profile`.
+    locale: the film's language as a BCP-47 tag ("en", "zh-CN", "ja"); empty takes the workspace's (else en).
+    from_project: the folder of a project to put on this canvas: its assets and voice (hard-linked), edit, meta
+    and theme come along (its locale too unless `locale` is given), every box mapped from its safe area to this
+    one; look at the result with preview."""
     root = _project(project, must_exist=False)
     if (root / PROJECT_FILE).is_file():
         return _fail(f"{root / PROJECT_FILE} already exists: edit it instead")
@@ -429,8 +453,15 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
         script.write_text("# Research, sources and script\n", encoding="utf-8", newline="\n")
     where = f"in workspace {ws.root}" if ws else "outside any workspace (no library, default rules, keys from env)"
     s = made.safe
+    book = PLAYBOOKS.get(platform_of(root))
+    playbook = (f"\nplaybook for {_book_title(book)}: {PLATFORMS / f'{book}.md'}; read manual(project) before you "
+                "edit: it adds this playbook to the manual" if book else "")
+    handover = root / sidecar.HANDOVER_FILE
+    if book and not handover.exists():
+        handover.write_text(sidecar.handover_skeleton(book, title), encoding="utf-8", newline="\n")
+        playbook += f"\n{handover}: what to hand over beside the film; fill its {sidecar.TODO} lines before you deliver"
     return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {fps_label(made.fps)} "
-            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}{mapped}")
+            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}{mapped}{playbook}")
 
 
 def _map_boxes(tracks: list, was, now) -> int:
@@ -603,6 +634,7 @@ def _render_text(rep: dict) -> ToolResult:
         if side.get("chapters"):
             rows.append(f"chapters ({len(side['chapters'])}, also in the mp4): "
                         f"{Path(rep['film']).parent / 'chapters.txt'}")
+        rows += [f"{c['name']}: {c['label']} of frame 0, {c['png']}" for c in side.get("covers") or []]
         rows += [f"note: {n}" for n in (fc.get("notes") or []) + (rep.get("notes") or [])]
         rows += [r for r in rep.get("layout") or []] + issues
         return _ok(_lines(rows))
@@ -638,7 +670,8 @@ def render(project: str, draft: bool = False, start: float | str = "", end: floa
            scale: float = R.DRAFT_SCALE) -> str:
     """Render the whole film to out/film.mp4: refuses on check errors; measures text layout (the same pass as
     preview sweep=true); renders, masters loudness and runs the delivery checks; writes every captions track as
-    out/captions/<track>.srt and .vtt and the chapters as out/chapters.txt. Anything failing keeps the previous film
+    out/captions/<track>.srt and .vtt, the chapters as out/chapters.txt and the covers a platform profile asks for
+    (frame 0, cut as its playbook says) as out/cover.png and the like. Anything failing keeps the previous film
     and says what to fix; a transient renderer failure is retried once and said to be one. Takes minutes: preview
     first. draft=true renders a quick low-quality look to build/draft.mp4 instead (no layout pass, no mastering, no
     delivery checks; out/ untouched): `scale` 0.1-1 of the canvas (default 0.5), `start`/`end` (seconds or Times)
@@ -667,8 +700,9 @@ def _runs(frames: list[dict], key) -> list[tuple[float, float, object, int]]:
 @tool
 def review(project: str, n: int = 0, every: float = R.WATCH_EVERY_S) -> str:
     """Watch the delivered out/film.mp4 as a viewer meets it: a frame every `every` seconds (default 1) from the
-    first, on phone-size sheets in order, with the voice line heard at each frame and the stretches where the picture
-    does not change. Read every sheet, first to last. n > 0: only n evenly spaced frames (2-24) on one sheet."""
+    first, on phone-size sheets in order, with the voice line heard at each frame (without narration, the caption on
+    screen) and the stretches where the picture does not change. Read every sheet, first to last. n > 0: only n
+    evenly spaced frames (2-24) on one sheet."""
     res = R.review(_project(project), n, every)
     if "sheets" not in res:
         rows = [f"{len(res['frames'])} frame(s) of {res['film']} ({res['duration_s']} s), look with Read:"]
@@ -689,6 +723,10 @@ def review(project: str, n: int = 0, every: float = R.WATCH_EVERY_S) -> str:
         rows.append("heard at each frame:")
         rows += [f"- {span(a, b)}: " + (f"[{ln}] {said[a]}" if ln else "(no voice)")
                  for a, b, ln, _ in _runs(frames, lambda f: f.get("line"))]
+    elif res.get("captions"):
+        rows.append("no voice line (no voice.json); the caption on screen at each frame:")
+        rows += [f"- {span(a, b)}: " + (shown or "(no caption)")
+                 for a, b, shown, _ in _runs(frames, lambda f: f.get("shown"))]
     else:
         rows.append("no voice line to list (no voice.json): what is heard is footage or music")
     still = [(a, b) for a, b, same, count in _runs(frames, lambda f: bool(f.get("same"))) if same and count >= 2]
@@ -806,8 +844,8 @@ def speak(project: str, lines: list[str | dict], gap_s: float = 0.22) -> str:
 def capture(project: str, url: str, id: str, match: str = "", viewport: str = "") -> str:
     """Screenshot a web page as evidence asset `id` (assets/<id>.png), boxing the sentence that contains `match` (a
     short exact phrase from the page, 8-20 characters is safest; empty boxes the title). viewport: "phone" (430 CSS
-    px wide) or "desktop" (1440 CSS px wide); empty follows the canvas (phone for vertical and portrait, desktop for
-    landscape and square)."""
+    px wide) or "desktop" (1440 CSS px wide); empty follows the canvas (phone on a canvas taller than wide, desktop
+    on a wide or square one)."""
     if not re.match(r"^https?://", url or ""):
         raise ToolInputError("url must start with http:// or https://")
     if viewport not in ("", "phone", "desktop"):

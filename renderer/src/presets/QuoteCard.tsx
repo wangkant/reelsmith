@@ -158,8 +158,8 @@ export default function QuoteCard({ props }: { props: any }) {
   const { w, h, fps, dur, theme, width, height } = useClip();
   const f = useCurrentFrame();
   const gid = "qc" + useId().replace(/[^A-Za-z0-9_-]/g, "");
-  const u = Math.min(width, height) / 1080; // px at a 1080 short side -> this canvas
-  if (!(w >= 200 * u && h >= 200 * u)) return null;
+  const u0 = Math.min(width, height) / 1080; // px at a 1080 short side -> this canvas
+  if (!(w >= 200 * u0 && h >= 200 * u0)) return null;
   const quote = String(props?.quote ?? "").trim();
   if (!quote) return null;
   const at = frameOr(props?.at, 0);
@@ -189,62 +189,84 @@ export default function QuoteCard({ props }: { props: any }) {
   });
   hotR.sort((p, q) => p[0] - q[0]);
 
-  // the card hugs a text column of at most 1040 px and centres in the box
-  const innerW = Math.min(w - 96 * u, 1040 * u);
-  const pad = Math.min((w - innerW) / 2, 64 * u);
-  const cardW = innerW + pad * 2;
-  const cardLeft = (w - cardW) / 2;
-  const qm = (s: number) => (t: string) => textWidth(t, s, FONTS.serif, 700);
   const chars = quote.replace(/\s/g, "").length;
   const latin = !CJK.test(quote);
   const short = latin ? chars <= 16 : chars <= 8;
   const mid = latin ? chars <= 32 : chars <= 16;
-  const maxS = Math.round(Math.min((short ? 112 : mid ? 92 : 80) * u, innerW / 5));
+  const qm = (s: number) => (t: string) => textWidth(t, s, FONTS.serif, 700);
 
-  // layout, computed once: a roomy spacing first, a compact one when the quote would drop under 44 px
-  const plan = (compact: boolean, floor: number) => {
-    const padY = compact ? 40 * u : Math.max(44 * u, pad * 0.9);
-    const badge = Math.round(Math.max(92 * u, Math.min((compact ? 108 : 136) * u, cardW * 0.17)));
-    const av = compact ? 84 * u : Math.round(Math.max(92 * u, Math.min(112 * u, cardW * 0.14)));
-    const gap = (compact ? 20 : 26) * u;
-    // the badge's lower half reaches into the plate row: the name keeps clear of all of it, the role of half
-    const textW = innerW - av - gap - badge * 0.5;
-    const nameW = innerW - av - gap - badge - 12 * u;
-    const name = fitWrap(who, nameW, 52 * u, 40 * u, FONTS.sans, 800);
-    const roleF = fitWrap(role, textW, 34 * u, 30 * u, FONTS.sans, 500);
-    const textH = name.lines.length * name.size * 1.22 + roleF.lines.length * roleF.size * 1.3 + (who && role ? 4 * u : 0);
-    const plateH = Math.max(av, textH);
-    const src = fitWrap(source, innerW - 52 * u, 30 * u, 30 * u, FONTS.sans, 500);
-    const srcH = src.lines.length * src.size * 1.4;
-    const gapA = (compact ? 22 : 38) * u;
-    const gapB = source ? (compact ? 16 : 30) * u : 0;
-    const lh = compact ? 1.3 : 1.4;
-    const overhang = Math.round(badge * 0.42);
-    const budget = h - overhang - padY * 2 - plateH - gapA - gapB - srcH;
-    const maxLines = compact ? 8 : 6;
-    // the largest size that fits, unless one at most 20% smaller breaks more cleanly (no split compounds, more
-    // breaks at punctuation)
-    let pick: { s: number; L: Wrap } | null = null;
-    let first = 0;
-    for (let s = maxS; s >= floor; s -= 2 * u) {
-      if (first && s < first * 0.75) break;
-      const L = wrap(quote, innerW, qm(s), hotR);
-      if (L.over || L.lines.length > maxLines || L.lines.length * s * lh > budget) continue;
-      if (!first) first = s;
-      if (!pick || (+L.bad - +pick.L.bad || L.ugly - pick.L.ugly || L.soft - pick.L.soft) < 0) pick = { s, L };
-    }
-    return { padY, badge, av, gap, name, roleF, plateH, src, srcH, gapA, gapB, lh, overhang, pick };
+  // the whole layout at a unit size u (u0 x a fill factor): the card grows to its box, the quote up to a ceiling
+  // that a short one never passes, the labels within their own ceilings so the quote stays the largest thing
+  const build = (u: number) => {
+    // the card hugs a text column of at most 1040 px and centres in the box
+    const innerW = Math.min(w - 96 * u, 1040 * u);
+    const pad = Math.min((w - innerW) / 2, 64 * u);
+    const cardW = innerW + pad * 2;
+    const cardLeft = (w - cardW) / 2;
+    const maxS = Math.round(Math.min((short ? 112 : mid ? 92 : 80) * u, (short ? 124 : 104) * u0, innerW / 5));
+
+    // a roomy spacing first, a compact one when the quote would drop under the floor
+    const plan = (compact: boolean, floor: number) => {
+      const padY = compact ? 40 * u : Math.max(44 * u, pad * 0.9);
+      const badge = Math.round(Math.max(92 * u, Math.min((compact ? 108 : 136) * u, cardW * 0.17)));
+      const av = compact ? 84 * u : Math.round(Math.max(92 * u, Math.min(112 * u, cardW * 0.14)));
+      const gap = (compact ? 20 : 26) * u;
+      // the badge's lower half reaches into the plate row: the name keeps clear of all of it, the role of half
+      const textW = innerW - av - gap - badge * 0.5;
+      const nameW = innerW - av - gap - badge - 12 * u;
+      const name = fitWrap(who, nameW, Math.min(52 * u, 60 * u0), 40 * u0, FONTS.sans, 800);
+      const roleF = fitWrap(role, textW, Math.min(36 * u, 42 * u0), 34 * u0, FONTS.sans, 500);
+      const textH = name.lines.length * name.size * 1.22 + roleF.lines.length * roleF.size * 1.3 + (who && role ? 4 * u : 0);
+      const plateH = Math.max(av, textH);
+      const src = fitWrap(source, innerW - 52 * u, Math.min(34 * u, 38 * u0), 32 * u0, FONTS.sans, 500);
+      const srcH = src.lines.length * src.size * 1.4;
+      const gapA = (compact ? 22 : 38) * u;
+      const gapB = source ? (compact ? 16 : 30) * u : 0;
+      const lh = compact ? 1.3 : 1.4;
+      const overhang = Math.round(badge * 0.42);
+      const budget = h - overhang - padY * 2 - plateH - gapA - gapB - srcH;
+      const maxLines = compact ? 8 : 6;
+      // the largest size that fits, unless one at most 12% smaller breaks more cleanly (no split compounds, more
+      // breaks at punctuation)
+      let pick: { s: number; L: Wrap } | null = null;
+      let first = 0;
+      for (let s = maxS; s >= floor; s -= 2 * u0) {
+        if (first && s < first * 0.88) break;
+        const L = wrap(quote, innerW, qm(s), hotR);
+        if (L.over || L.lines.length > maxLines || L.lines.length * s * lh > budget) continue;
+        if (!first) first = s;
+        if (!pick || (+L.bad - +pick.L.bad || L.ugly - pick.L.ugly || L.soft - pick.L.soft) < 0) pick = { s, L };
+      }
+      return { padY, badge, av, gap, name, roleF, plateH, src, srcH, gapA, gapB, lh, overhang, pick };
+    };
+    return { u, innerW, pad, cardW, cardLeft, plan };
   };
-  let P = plan(false, 44 * u);
-  if (!P.pick) P = plan(true, 40 * u);
-  const qSize = P.pick ? P.pick.s : 40 * u;
-  const lines = P.pick ? P.pick.L.lines : wrap(quote, innerW, qm(40 * u), hotR).lines;
+  let B = build(u0);
+  let P = B.plan(false, 48 * u0);
+  for (const k of [1.3, 1.22, 1.14, 1.07]) {
+    const b = build(u0 * k);
+    const p = b.plan(false, 48 * u0);
+    // a larger card only while the quote stays well above the name and its last line is no stub
+    const L = p.pick?.L.lines;
+    const stub = !!L && L.length > 1 && textWidth(quote.slice(...L[L.length - 1]).trim(), p.pick!.s, FONTS.serif, 700) < b.innerW * 0.5;
+    if (p.pick && !stub && p.pick.s >= p.name.size * 1.2 && p.pick.s >= (P.pick?.s ?? 0)) {
+      B = b;
+      P = p;
+      break;
+    }
+  }
+  if (!P.pick) P = B.plan(true, 44 * u0);
+  const { u, innerW, pad, cardW, cardLeft } = B;
+  const qSize = P.pick ? P.pick.s : 40 * u0;
+  const lines = P.pick ? P.pick.L.lines : wrap(quote, innerW, qm(40 * u0), hotR).lines;
   const { padY, badge, av, gap, name, roleF, plateH, src, srcH, gapA, gapB, lh, overhang } = P;
   const quoteH = lines.length * qSize * lh;
   const cardH = padY * 2 + plateH + gapA + quoteH + gapB + srcH;
   const fullH = overhang + cardH;
-  const fitScale = fullH > h ? h / fullH : 1; // last resort only: the compact plan fits every box the meta allows
-  const top = Math.max(0, (h - fullH * fitScale) / 2);
+  // last resort when even the compact plan is too tall (the longest quote, name, role and source); 1.012 leaves room for the drift
+  const fitScale = fullH > h ? h / (fullH * 1.012) : 1;
+  // the card scales about 40 % of its height, so its top moves down by 0.4 x the height it loses
+  const top = (h - fullH * fitScale) / 2 - 0.4 * fullH * (1 - fitScale);
 
   // phrases: each ends after a run of punctuation (Latin punctuation only before a space, so "2,700" stays whole)
   const starts: number[] = [0];
@@ -271,6 +293,10 @@ export default function QuoteCard({ props }: { props: any }) {
   const badgeIn = springAt(f, at + fr(6), { fps, damping: 14, durationInFrames: fr(14) });
   const srcAt = Math.min(qAt + overF + fr(6), Math.max(qAt, dur - Math.round(1.2 * fps)));
   const srcIn = springAt(f, srcAt, { fps, durationInFrames: fr(12) });
+  // the card grows down line by line as the quote reveals, then to the source line, so it never shows empty rows
+  const lineIn = lines.map(([off]) => springAt(f, phraseAt[phraseOf(off)] - fr(3), { fps, durationInFrames: fr(10) }));
+  const srcGrow = source ? springAt(f, srcAt - fr(3), { fps, durationInFrames: fr(10) }) : 1;
+  const cardVis = cardH - (gapB + srcH) * (1 - srcGrow) - lineIn.reduce((s, t) => s + (1 - t) * qSize * lh, 0);
   const life = (f - at) * (30 / fps);
   const drift = 1 + 0.012 * ease(f, at, at + Math.max(30, Math.round(8 * fps)));
   const breathe = 0.5 + 0.5 * Math.sin(life / 14);
@@ -287,7 +313,7 @@ export default function QuoteCard({ props }: { props: any }) {
         transform: `scale(${fitScale * (0.96 + 0.04 * cardIn) * drift}) translateY(${(1 - cardIn) * 24 * u}px)`, opacity: cardIn,
       }}>
         <div style={{
-          position: "absolute", left: cardLeft, top: overhang, width: cardW, height: cardH, borderRadius: 34 * u, background: cardBg,
+          position: "absolute", left: cardLeft, top: overhang, width: cardW, height: cardVis, borderRadius: 34 * u, background: cardBg,
           border: `${1.5 * u}px solid ${dark ? withAlpha(theme.snow, 0.12) : withAlpha(theme.ink, 0.07)}`,
           boxShadow: `0 ${24 * u}px ${60 * u}px rgba(20,14,8,0.30), 0 ${3 * u}px ${10 * u}px rgba(20,14,8,0.14)`,
         }} />

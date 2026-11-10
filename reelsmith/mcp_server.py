@@ -23,7 +23,8 @@ from . import __version__, tools
 
 INSTRUCTIONS = """reelsmith is your video editing app: you edit an NLE-style project (tracks, clips, keyframes, text,
 shapes, components) with edit; reelsmith renders, measures layout and enforces delivery. Any canvas, any language;
-no fixed order and no template. Start with manual (once) and notes. Every tool takes `project` = the folder holding
+no fixed order and no template. Start with notes and manual (once; manual(project) adds the playbook of the
+project's platform: Douyin, Bilibili, YouTube...). Every tool takes `project` = the folder holding
 project.json (new_project makes one, with a profile and a locale). To edit footage, import_asset it and look first
 (probe, frames, scenes, silences, transcribe), then cut with ripple_delete and trim_clip at "src:<clip>@<seconds>"
 Times. To make a film from a script, gather assets with speak, capture, draw, animate and import_asset. Loop: edit

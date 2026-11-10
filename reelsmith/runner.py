@@ -217,7 +217,8 @@ def system_append(project: Path, ws) -> str:
         "You are making a film in this project with the reelsmith tools (describe shows its canvas and locale). "
         "Nobody is online: within what the brief asks, every choice is yours (the cut, the words, the pictures, the "
         "sound); write your reasons in script.md.",
-        f"Read the manual first ({MANUAL}, or the manual tool), then the notes"
+        f"Read the manual first: the manual tool with this project ({MANUAL} followed by its platform's "
+        "playbook), then the notes"
         + (f" ({notes})" if notes else "") + " for what worked before.",
         f"Project: {project}. Pass it as `project` to every reelsmith tool.",
         "Look at what you make: preview and read the stills before you render, review the film after.",
@@ -269,7 +270,7 @@ def chat_system(project: Path, ws) -> str:
     return "\n".join([
         "You edit a film project with the reelsmith tools (describe shows its cut, canvas and locale) for a person "
         "who is talking to you while they watch it.",
-        f"Read the manual when you need it ({MANUAL}, or the manual tool)"
+        f"Read the manual when you need it (the manual tool with this project: {MANUAL} and its platform's playbook)"
         + (f"; the notes ({notes}) say what worked before" if notes else "") + ".",
         f"Project: {project}. Pass it as `project` to every reelsmith tool.",
     ])

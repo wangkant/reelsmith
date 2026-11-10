@@ -334,7 +334,7 @@ gives `"[level] where: msg"`.
   -> Workspace | None`; `project_paths(project)`; `profile_for(project)`; `locale_for(project)`.
 - `profiles.py`: `Profile` (with `scale`, the canvas's short side / 1080, and `orientation`), `get_profile(name,
   custom)`, `make_profile(spec)`, `build_profiles(specs)`, `choose(value, fallback, custom)`, `parse_canvas(text)`,
-  `PROFILES`, themes `PAPER` and `NIGHT`.
+  `PROFILES`, `PLAYBOOKS` (platform profile → playbook name in `docs/platforms/`), themes `PAPER` and `NIGHT`.
 - `locales.py`: `check(tag)`, `is_cjk`, `is_chinese`, `caption_chars(tag)`, `accept_language(tag)`.
 - `timeexpr.py`: `parse(value)`, `resolve(value, ctx) -> seconds`, `to_frame(seconds, fps)`.
 - `library.py`: `components(project) -> dict[name, Component]` (presets from `renderer/src/presets/*.meta.json`,
@@ -595,8 +595,8 @@ project needs.
 holding `match`, in the PNG's pixels), `site`, `url`, `line` and `around`. The browser is the installed Microsoft Edge, else the
 installed Google Chrome, else the Chromium that `python -m playwright install chromium` downloads. `viewport`
 `phone` loads the page at 430 CSS px wide and 3× device scale with a phone's user agent (the PNG is 1290 px wide);
-`desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone for vertical
-and portrait canvases, desktop for landscape and square ones. The browser speaks the project's locale
+`desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone on a canvas
+taller than wide, desktop on a wide or square one. The browser speaks the project's locale
 (`navigator.language`, `Accept-Language`; a Chinese locale also takes the Asia/Shanghai time zone). Fixed and
 sticky overlays are hidden, a text column wider than the viewport is reflowed, and the match grows to its sentence
 (at most 4 lines). The reply says how wide the box must be shown for its text to stand 40 px tall on a canvas with
@@ -730,7 +730,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 
 | tool | does | CLI |
 |---|---|---|
-| `manual()` | the agent manual ([manual.md](manual.md)) | `manual` |
+| `manual(project?)` | the agent manual ([manual.md](manual.md)); with a project, followed by its platform's playbook (`# This film is for <platform>` and the playbook up to its Sources, section 15) | `manual [project]` |
 | `notes(project)` / `note(project, text)` | read / append to the workspace's `library/NOTES.md` | `notes`, `note` |
 | `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag; `from_project` copies another project's film (assets and voice hard-linked, the edit with every pixel box mapped from its safe area to the new one) | `new --profile --canvas --locale --from` |
 | `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
@@ -1148,20 +1148,36 @@ no layout pass, no mastering and no film checks, and leaves `out/` and both repo
 | `youtube` | as `landscape` | as `landscape` | as `landscape` | any | none | none | −14 LUFS | required | any |
 | `douyin` | 1080×1920, 30 fps | 120, 240, 760, 1220 | 120, 1260, 760, 200 | 20-90 s | 45-75 s | 80 MB | −10 LUFS | required | ≤ 5 s |
 | `douyin-long` | as `douyin` | as `douyin` | as `douyin` | 60-300 s | 90-180 s | 250 MB | −10 LUFS | required | ≤ 5 s |
-| `tiktok` | 1080×1920, 30 fps | 60, 200, 820, 1260 | 60, 1260, 820, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS | required | ≤ 5 s |
-| `shorts` | 1080×1920, 30 fps | 60, 180, 820, 1300 | 60, 1280, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS | required | ≤ 5 s |
-| `reels` | 1080×1920, 30 fps | 66, 250, 884, 1000 | 66, 1050, 884, 200 | 3-180 s | 15-60 s | 4000 MB | −14 LUFS | required | ≤ 5 s |
+| `tiktok` | 1080×1920, 30 fps | 120, 240, 760, 1220 | 120, 1260, 760, 200 | 15-180 s | 30-75 s | 250 MB | −14 LUFS | required | ≤ 5 s |
+| `shorts` | 1080×1920, 30 fps | 60, 288, 820, 960 | 60, 1048, 820, 200 | 15-180 s | 30-60 s | 250 MB | −14 LUFS | required | ≤ 5 s |
+| `reels` | 1080×1920, 30 fps | 66, 270, 884, 978 | 66, 1048, 884, 200 | 3-180 s | 15-60 s | 300 MB | −14 LUFS | required | ≤ 5 s |
+| `bilibili` | 1920×1080, 30 fps | 96, 54, 1728, 946 | 96, 800, 1728, 200 | any | 180-900 s | none | −14 LUFS | required | ≤ 5 s |
+| `bilibili-story` | 1080×1920, 30 fps | 120, 300, 760, 1100 | 120, 1200, 760, 200 | ≤ 600 s | 30-90 s | none | −14 LUFS | required | ≤ 5 s |
+| `xiaohongshu` | 1080×1920, 30 fps | 120, 240, 840, 1240 | 120, 1280, 840, 200 | ≤ 300 s | 30-90 s | 1000 MB | −14 LUFS | required | ≤ 5 s |
+| `channels` | 1080×1920, 30 fps | 120, 200, 840, 1300 | 120, 1300, 840, 200 | ≤ 3600 s | 60-180 s | 2000 MB | −14 LUFS | required | ≤ 5 s |
 
 On the generic canvases (`landscape`, `vertical`, `square`, `portrait`) and `youtube` the safe area is a title-safe
 margin, 5 % of the width and of the height in from each edge; on the platform profiles it is where the platform's
 own UI (status bar, tabs, the button rail, title and music) does not cover the picture and a tall phone does not crop
-it away (Douyin fills a 20:9 screen and loses 50-110 px at each side): on Instagram Reels Meta keeps
-the top 14 % and the bottom 35 % free, and the action rail takes more than its 6 % at the right. Words must stay
-inside the safe area; backgrounds may bleed to the edges. The captions band is the safe area's bottom 200 px at a
-1080 px short side (scaled with the canvas). YouTube normalises playback to about −14 LUFS and its own upload caps
-(12 h, 256 GB) are beyond anything rendered here, so `youtube` sets no length or size limit. Every profile renders
+it away (Douyin fills a 20:9 screen and loses 50-110 px at each side). TikTok's own In-Feed template keeps 120 px at
+the sides and 240 px at the top; Google's vertical safe zone for Shorts keeps the top 288 px, the bottom 672 px and
+the right 192 px; on Instagram Reels Meta keeps the top 14 % and the bottom 35 % free, and the action rail takes more
+than its 6 % at the right. Bilibili, Xiaohongshu and WeChat Channels (`channels`, 视频号) publish no template, so
+their safe areas are conservative until measured: `bilibili` a 5 % margin with the bottom 80 px left to the progress
+bar, the vertical ones Douyin's 120 px sides with their own top and bottom bars. `xiaohongshu` is 9:16 because the
+player is; its feed tile is a separate 3:4 cover. Words must stay inside the safe area; backgrounds may bleed to the
+edges. The captions band is the safe area's bottom 200 px at a 1080 px short side (scaled with the canvas). YouTube
+normalises playback to about −14 LUFS and its own upload caps (12 h, 256 GB) are beyond anything rendered here, so
+`youtube` sets no length or size limit; nor does `bilibili`, whose caps are not established. Every profile renders
 h264/aac with true peak −1 dBTP and at most 10 % black. Advice `"target_s": true` (section 2.2) checks the length
 against the profile's `target`.
+
+Each platform profile has a playbook, `docs/platforms/<name>.md` (`profiles.PLAYBOOKS`): `youtube` and `shorts`
+youtube.md, `douyin` and `douyin-long` douyin.md, `tiktok` tiktok.md, `reels` reels.md, `bilibili` and
+`bilibili-story` bilibili.md, `xiaohongshu` xiaohongshu.md, `channels` channels.md. Each covers the frame and what to
+hand over beside the mp4, the first seconds, pace and length, words on screen, sound, the ending, title, cover and
+tags, what gets a film limited (AI labelling first) and what is not known, every number graded official, reported,
+practice or unsure with its source.
 
 | token | `paper` (default) | `night` | for |
 |---|---|---|---|
@@ -1193,9 +1209,11 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | `max_black_ratio` | 0-1 |
 | `require_audio` | false: a silent film is delivered |
 | `ui` | true: outside the safe area is the platform's UI (the layout message says so), and frame 0 is checked as the feed's cover (section 14) |
+| `cover` | `[{"name": "cover", "crop": [w, h, x, y]}, ...]`: render writes frame 0 of the delivered film cut to each crop as `out/<name>.png`, and the layout pass warns about words on frame 0 outside a crop; `[]` for none |
 
 A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
-new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.
+new safe area's bottom band, and without `cover` it has none.
+A custom name may not be a built-in one; an inline profile is named `custom`.
 `new_project(canvas="1920x1080@25")` writes such an inline profile (`"@29.97"` writes `"fps": "30000/1001"`; `describe`
 prints the rate as 29.97). Unknown fields, sizes, boxes outside the canvas
 and loops of `base` are refused with the field named (workspace.json profiles when the workspace loads, an inline

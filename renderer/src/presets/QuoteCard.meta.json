@@ -1,6 +1,6 @@
 {
   "name": "QuoteCard",
-  "description": "One person's words typeset as a quote card, for a scene about what someone said (use it instead of a screenshot of the quote): a speaker plate (round silhouette avatar, bold name, muted role) lands first, a gold quotation badge drops onto the card's top-right corner, then the quote reveals phrase by phrase in a big serif (up to 112 px for a short line, never under 40); hot substrings turn accent with a band sweeping under them, and a small source line closes. The card hugs its content and centres in the box: give it about 760-840 wide x 620-900 tall (it works from 600 x 500 up to wide boxes; a quote at the length limit wants h >= 700).",
+  "description": "One person's words typeset as a quote card, for a scene about what someone said (use it instead of a screenshot of the quote): a speaker plate (round silhouette avatar, bold name, muted role) lands first, a gold quotation badge drops onto the card's top-right corner, then the quote reveals phrase by phrase in a big serif (up to 112 px for a short line, never under 44); hot substrings turn accent with a band sweeping under them, and a small source line closes. The card grows to its box, line by line as the quote reveals, and centres in it: give it about 760-840 wide x 620-900 tall (it works from 600 x 500 up to wide boxes; a quote at the length limit wants h >= 700).",
   "props": {
     "type": "object",
     "additionalProperties": false,

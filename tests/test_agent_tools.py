@@ -113,8 +113,8 @@ def test_every_tool_has_a_chat_completions_spec(demo):
 
 # ------------------------------------------------------------------ reelsmith tools
 def test_free_reelsmith_tools_run_through_the_tool(demo):
-    r = call(demo.box, "manual")
-    assert not r.error and "reelsmith" in r.text.lower() and len(r.text) > 1000
+    r = call(demo.box, "manual")                          # project left out: this run's, a douyin film
+    assert not r.error and r.text.startswith("# reelsmith manual") and "# This film is for Douyin" in r.text
     r = call(demo.box, "library")
     assert not r.error and "component(s)" in r.text and "Receipt" in r.text
     r = call(demo.box, "describe", project=str(demo.project))

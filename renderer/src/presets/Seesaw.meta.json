@@ -22,7 +22,7 @@
               "additionalProperties": false,
               "required": ["text"],
               "properties": {
-                "text": {"type": "string", "minLength": 1, "maxLength": 28, "description": "one gain or loss, 40-46 px, two lines when long"},
+                "text": {"type": "string", "minLength": 1, "maxLength": 28, "description": "one gain or loss, 40-52 px, two lines when long"},
                 "at": {"type": ["number", "string"], "description": "Time the chip drops: \"line:3\" or seconds from the clip start. Default: staggered from 0.6 s, left side first"}
               }
             }
@@ -60,7 +60,7 @@
         "required": ["text"],
         "description": "one line under the pivot that lands last",
         "properties": {
-          "text": {"type": "string", "minLength": 1, "maxLength": 40, "description": "the takeaway, e.g. Savers pay for the rate cut (44-60 px on one line, two lines down to 40 px when long)"},
+          "text": {"type": "string", "minLength": 1, "maxLength": 40, "description": "the takeaway, e.g. Savers pay for the rate cut (44-68 px on one line, two lines down to 40 px when long)"},
           "at": {"type": ["number", "string"], "description": "Time it lands: \"line:6\" or seconds from the clip start. Default: 0.8 s after the tilt"}
         }
       },

@@ -154,6 +154,10 @@ def run_tree(cmd: list, cwd: str | Path | None = None, env: dict | None = None,
             out, err = b"", b""
     except BaseException:
         kill_tree(proc)
+        try:
+            proc.wait(timeout=5)                        # reaped: a killed child is otherwise left a zombie
+        except (subprocess.TimeoutExpired, OSError):
+            pass
         raise
     finally:
         _release(proc)
@@ -299,9 +303,9 @@ def reverse_span(src: Path, start: float, end: float, dst: Path, margin: int = 0
         for first in range(f0, f0 + total, step):
             part = work / f"{first:07d}.mp4"
             # half a frame early: the seek lands on that frame, not one past it; trim ends the input there, or reverse
-            # would take in the rest of the file
+            # would take in the rest of the file; timestamps from zero, or an older ffmpeg doubles the first frame
             at, n = max(0.0, (first - 0.5) / fps), min(step, f0 + total - first)
-            r = run(ff + ["-ss", f"{at:.6f}", "-i", str(src), "-map", "0:v:0", "-vf", f"trim=end_frame={n},reverse",
+            r = run(ff + ["-ss", f"{at:.6f}", "-i", str(src), "-map", "0:v:0", "-vf", f"trim=end_frame={n},reverse,setpts=PTS-STARTPTS",
                           "-frames:v", str(n), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-g",
                           "30", "-pix_fmt", "yuv420p", str(part)], 900)
             if r.returncode != 0 or not part.is_file():

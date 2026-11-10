@@ -294,7 +294,7 @@ def launch_browser(chromium, proxy: str):
 
 
 def default_viewport(profile) -> str:
-    """phone for vertical and portrait canvases, desktop for landscape and square ones."""
+    """phone on a canvas taller than wide, desktop on a wide or square one."""
     return "phone" if profile.orientation == "portrait" else "desktop"
 
 

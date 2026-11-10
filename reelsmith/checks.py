@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import media
 from .issues import Issue
-from .profiles import REFERENCE_SIDE, Profile, fps_label
+from .profiles import DEFAULT_PROFILE, PLAYBOOKS, PROFILES, REFERENCE_SIDE, Profile, fps_label
 from .workspace import PROJECT_FILE, WorkspaceError, default_rules, find_workspace, profile_for, project_root
 
 TITLE_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
@@ -663,6 +663,37 @@ def sound_issues(resolved: dict, root: Path) -> list[Issue]:
                                       "clips to be heard (edit op set), or add narration or music")]
 
 
+def platform_of(root: Path) -> str:
+    """The built-in profile a project's canvas comes from, followed through inline and workspace profiles' `base`:
+    an inline {"base": "douyin", "fps": 25} is still a Douyin film."""
+    ws = find_workspace(root)
+    specs = (ws.config.get("profiles") if ws else None) or {}
+    try:
+        value = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig")).get("profile")
+    except (OSError, ValueError, AttributeError):
+        value = None
+    if value in (None, "", {}):
+        value = ws.config.get("profile") if ws else None
+    for _ in range(len(specs) + 2):
+        if isinstance(value, dict):
+            value = value.get("base")
+        elif isinstance(value, str) and value not in PROFILES and isinstance(specs.get(value), dict):
+            value = specs[value]
+        else:
+            break
+    return value if isinstance(value, str) and value in PROFILES else DEFAULT_PROFILE
+
+
+def sources_issues(root: Path, meta: dict) -> list[Issue]:
+    """A platform film's playbook asks for its sources in the handover."""
+    book = PLAYBOOKS.get(platform_of(root))
+    if not book or meta.get("sources"):
+        return []
+    return [Issue("advice", "meta.sources", f"empty: the {book} playbook (docs/platforms/{book}.md) asks for the "
+                                            "sources in the handover; add each as {\"title\": ..., \"url\": "
+                                            "\"https://...\"} (edit op set, path meta.sources)")]
+
+
 def check_project(project: str | Path) -> list[Issue]:
     """document validation + the owner's hard rules (errors) + advice; errors first."""
     root = project_root(project)
@@ -674,7 +705,10 @@ def check_project(project: str | Path) -> list[Issue]:
     doc, issues = load_and_validate(root)
     if doc is None:
         return sort_issues(issues)
-    issues += rule_issues(doc.meta.model_dump(), rules)
+    meta = doc.meta.model_dump()
+    issues += rule_issues(meta, rules)
+    if not any(i.where == "meta.sources" for i in issues):
+        issues += sources_issues(root, meta)
     if any(i.level == "error" and not i.where.startswith("meta") for i in issues):
         return sort_issues(issues)          # advice needs a project that resolves
     try:
@@ -880,10 +914,10 @@ def check_layout(inspect: dict, profile: Profile, resolved: dict | None = None,
                  ignore: set | None = None) -> list[Issue]:
     """Visible text outside the safe area or cut by the canvas edge (errors), text overflowing its clip box
     (warning), text under 28 px (warning; under 20 px an error; both at a 1080 px short side, scaled to the canvas),
-    text of one clip over text of another (warning)
-    and text on a background of about its own brightness (warning, sampled from the frame's still); one issue per
-    clip and problem. With `resolved`, frames inside enter/exit animations are skipped; `ignore` = clip ids not
-    measured (a crashed component's error box)."""
+    text of one clip over text of another (warning), words on frame 0 outside one of the profile's cover crops
+    (warning) and text on a background of about its own brightness (warning, sampled from the frame's still); one
+    issue per clip and problem. With `resolved`, frames inside enter/exit animations are skipped; `ignore` = clip ids
+    not measured (a crashed component's error box)."""
     measure = LayoutCheck(profile, resolved, ignore)
     measure.add(inspect)
     return measure.issues()
@@ -898,6 +932,7 @@ class LayoutCheck:
         self.canvas = (0.0, 0.0, float(profile.width), float(profile.height))
         s = profile.safe
         self.safe = (float(s.x), float(s.y), float(s.w), float(s.h))
+        self.covers = [c for c in profile.cover if c.crop != (profile.width, profile.height, 0, 0)]
         self.small, self.tiny = profile.px(SMALL_TEXT_PX), profile.px(TINY_TEXT_PX)
         self.transitions = transition_windows(resolved)
         self.ignore = set(ignore or ())
@@ -948,6 +983,12 @@ class LayoutCheck:
                     px, side = _sticks_out(rect, safe)
                     if px > tol:
                         note("unsafe", who, frame, px, side, text)
+                    elif frame == 0:            # frame 0 is the cover the profile grid shows
+                        for c in self.covers:
+                            px, side = _sticks_out(rect, c.rect)
+                            if px > tol:
+                                note(f"cover:{c.name}", who, frame, px, side, text, cover=c,
+                                     outside=not _overlaps(rect, c.rect))
                 box = boxes.get(clip)
                 if box is not None:
                     px, side = _sticks_out(rect, box)
@@ -998,6 +1039,12 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
                                    f"{profile.width}x{profile.height} canvas"
                                    f"{' and render refuses under ' + tiny if kind == 'tiny' else ''}"
                                    "; give it a bigger box or a bigger size, or say less")
+    if kind.startswith("cover:"):
+        label = e["cover"].label(profile.width, profile.height)
+        how = f"lies outside the {label}" if e["outside"] else f"is cut by the {label} ({px} px past its {side} edge)"
+        return Issue("warning", where, f"{quote} {how}: frame 0 is the cover, the first thing a viewer sees in the "
+                                       "feed or on the profile grid; move the words inside it or start them after "
+                                       "frame 0")
     if kind.startswith("overlap"):
         other = f"text \"{e['other_text']}\" of {e['other']}" if e.get("other_text") else e["other"]
         return Issue("warning", where, f"{quote} overlaps {other}{also}: move one of them (captions sit at the bottom "
