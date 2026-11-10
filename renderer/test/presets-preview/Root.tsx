@@ -82,6 +82,8 @@ const VARIANTS = [
   { id: "small", w: 320, h: 320, dark: false },
 ];
 const M = 40;
+const ZH = "国家统计局发布最新数据显示城镇居民人均可支配收入继续增长同比上涨百分之五点二个百分点全国各地区居民消费支出";
+const zh = (n: number) => ZH.slice(0, n);
 
 /** Something to highlight, so the Highlighter preview shows what it does. */
 const SAMPLE = "You keep $960";
@@ -267,6 +269,36 @@ const EXTRAS: { id: string; Comp: Comp; props: Record<string, unknown>; w: numbe
   // docs/kit.md's complete component, kept in step by check.mjs
   { id: "x-RingStat-doc", Comp: RingStat, w: 600, h: 700, props: { pct: 62, label: "live in cities", at: 0.3 } },
   { id: "x-RingStat-doc-dark", Comp: RingStat, w: 600, h: 700, dark: true, props: { pct: 62, label: "live in cities", ground: "dark" } },
+  // Chinese at the schemas' longest: wraps rather than shrink under the floor
+  {
+    id: "x-Receipt-zh-max", Comp: Receipt, w: 900, h: 900, locale: "zh-CN",
+    props: { header: zh(40), title: zh(32), rows: [
+      { label: zh(28), value: "¥1,200", sub: zh(48) }, { label: zh(28), value: "包邮" }, { label: zh(28), value: "-¥240", tone: "bad" },
+    ], total: { label: zh(20), value: "¥960" } },
+  },
+  { id: "x-CountUp-zh-max", Comp: CountUp, w: 900, h: 900, locale: "zh-CN", props: { value: 12860, suffix: "人", label: zh(48) } },
+  {
+    id: "x-BarCompare-zh-max", Comp: BarCompare, w: 900, h: 900, locale: "zh-CN",
+    props: { unit: zh(12), items: [{ label: zh(24), value: 140 }, { label: zh(24), value: 7500 }, { label: zh(24), value: 2700 }] },
+  },
+  {
+    id: "x-Parties-zh-max", Comp: Parties, w: 900, h: 900, locale: "zh-CN",
+    props: { ...PartiesMeta.example, links: PartiesMeta.example.links.map((l) => ({ ...l, label: zh(16) })) },
+  },
+  {
+    id: "x-Parties-zh-wide", Comp: Parties, w: 1100, h: 760, locale: "zh-CN",
+    props: { ...PartiesMeta.example, links: PartiesMeta.example.links.map((l) => ({ ...l, label: zh(8) })) },
+  },
+  {
+    id: "x-StoryBeats-mid-labels", Comp: StoryBeats, w: 800, h: 900,
+    props: { beats: [
+      { when: "Two weeks later", text: "The company cut a fifth of its staff in R&D", at: 0 },
+      { when: "A month on", text: "The laid-off workers took it to arbitration", at: 1.2 },
+      { when: "The next spring", text: "The panel ruled against the firm every time", at: 2.4 },
+      { when: "That summer", text: "The appeal failed; the company paid in full", at: 3.6 },
+      { when: "Today", text: "Most work in the same industry again now", at: 4.8 },
+    ] },
+  },
   { id: "x-Arrow-empty", Comp: Arrow, w: 840, h: 300, props: { from: [0.5, 0.5], to: [0.5, 0.5] } },
   { id: "x-BarCompare-empty", Comp: BarCompare, w: 840, h: 300, props: { items: [] } },
   { id: "x-EvidenceCard-missing", Comp: EvidenceCard, w: 840, h: 300, props: { asset: "nope" } },

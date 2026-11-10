@@ -181,6 +181,24 @@ def test_component_props_get_frames_and_asset_refs(demo):
     assert rclip(r, "bill")["content"]["props"]["total"]["at"] == 342 - 169       # line:4.end at 11.40 s
 
 
+def test_evidence_line_measures_reach_the_crop_and_components(demo):
+    data = raw(demo)
+    data["assets"]["ev"].update(line=58, around=[89, 58])
+    data["tracks"].append({"id": "cards", "kind": "visual", "clips": [
+        {"id": "card", "type": "component", "name": "EvidenceCard", "start": "line:6", "end": "line:7",
+         "props": {"asset": "ev"}}]})
+    write(demo, data)
+    r = R.resolve(demo)
+    proof = rclip(r, "proof")["content"]
+    assert proof["line"] == 58 and proof["around"] == [89, 58]
+    asset = rclip(r, "card")["content"]["props"]["asset"]
+    assert asset["line"] == 58 and asset["around"] == [89, 58]
+    data["assets"]["ev"]["around"] = [89]
+    write(demo, data)
+    with pytest.raises(Exception, match="above, below"):
+        R.resolve(demo)
+
+
 def test_motion_becomes_keyframes_and_explicit_keyframes_win(demo):
     data = raw(demo)
     open_ = data["tracks"][0]["clips"][0]

@@ -129,8 +129,10 @@ Unknown keys are refused everywhere. Ids (assets, tracks, clips) and marker name
 `-`; clip ids are unique in the project. Paths are relative to the project folder.
 
 **Asset**: `{"path": "assets/x.png", "kind": "image"|"video"|"audio"|"evidence", "box": [x, y, w, h], "site": "",
-"url": "", "note": "", "transcript": "assets/x.transcript.json"}`. `box` (pixels in the image: the proving
-sentence), `site` and `url` belong to evidence. `transcript` (video and audio; written by `transcribe`, section 9.8)
+"url": "", "note": "", "line": 58, "around": [89, 58], "transcript": "assets/x.transcript.json"}`. `box` (pixels in
+the image: the proving sentence), `site` and `url` belong to evidence, and so do `line` (the text's line pitch) and
+`around` (how far above and below the box the gaps past its neighbouring lines lie), image pixels both, which
+`capture` measures so a crop cuts between lines. `transcript` (video and audio; written by `transcribe`, section 9.8)
 names the asset's word timing: `{"version": 1, "asset", "source", "duration_s", "language", "provider", "text",
 "words": [{"word", "start", "end"}], "segments": [{"start", "end", "text"}]}`, times in source seconds. A missing
 or unreadable transcript is a warning (an error when captions follow it).
@@ -239,7 +241,8 @@ Types and their fields:
   pixels), `draw` (the stroke draws on along `progress`, by default over the first 0.6 s). A line or arrow with
   only `fill` is stroked in that colour.
 - `evidence`: `asset` (kind evidence). The capture's `box` is scaled to the clip width (at most 2×) with context
-  above and below; the panel hugs its content (the rest of the box is transparent) and cut edges fade.
+  above and below (one whole line each way when the asset has `line` and `around`: the edges fall between lines and
+  only that gap fades); the panel hugs its content (the rest of the box is transparent) and cut edges fade.
   `highlight`: `{"at": Time?, "dur": 0.8, "color": "gold"}` sweeps across the proving sentence.
 - `component`: `name`, `props` (validated against the component's meta schema)
 
@@ -486,7 +489,7 @@ content by type:
              "reversed"?: true (src is the reversed proxy, trimIn 0)}
   text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
   shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
-  evidence  {"src", "size", "box", "site", "highlight": {"at" frames, "dur" frames, "color"} | null}
+  evidence  {"src", "size", "box", "site", "line"?, "around"?, "highlight": {"at" frames, "dur" frames, "color"} | null}
   component {"name", "props" (Times → frames, asset ids → refs)}
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
@@ -577,7 +580,7 @@ project needs.
 ### 9.2 capture
 
 `capture(project, url, id, match?, viewport?)` → `assets/<id>.png`, an evidence asset with `box` (the sentence
-holding `match`, in the PNG's pixels), `site` and `url`. The browser is the installed Microsoft Edge, else the
+holding `match`, in the PNG's pixels), `site`, `url`, `line` and `around`. The browser is the installed Microsoft Edge, else the
 installed Google Chrome, else the Chromium that `python -m playwright install chromium` downloads. `viewport`
 `phone` loads the page at 430 CSS px wide and 3× device scale with a phone's user agent (the PNG is 1290 px wide);
 `desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone for vertical

@@ -696,7 +696,7 @@ def test_openrouter_speech_reads_a_cost_header_when_there_is_one():
 
 # ------------------------------------------------------------------ capture
 FOUND = {"found": True, "title": "示例日报：汽油每吨上调 205 元", "site": "示例日报", "excerpt": "汽油每吨上调 205 元，柴油…",
-         "sentence": "汽油每吨上调 205 元，柴油每吨上调 195 元。", "font_px": 16,
+         "sentence": "汽油每吨上调 205 元，柴油每吨上调 195 元。", "font_px": 16, "line_px": 24, "around": [30.2, 28],
          "crop": {"x": 0, "y": 300.5, "width": 430, "height": 260},
          "match": {"x": 20.4, "y": 101.2, "width": 180.3, "height": 24.0}}
 
@@ -824,6 +824,7 @@ def test_capture_on_a_fake_page_registers_evidence_with_the_box(env):
     entry = read_project(env.project)["assets"]["ev_price"]
     assert entry["kind"] == "evidence" and entry["path"] == "assets/ev_price.png"
     assert entry["box"] == [61, 304, 541, 72]                       # match x3, rounded
+    assert entry["line"] == 72 and entry["around"] == [91, 84]      # the line pitch and the gaps past it, x3
     assert entry["site"] == "示例日报" and entry["url"] == "https://www.example.org/x"
     assert "[61, 304, 541, 72]" in text and "meta.sources" in text
     assert "the sentence that holds the match" in text and "whole lines" in text

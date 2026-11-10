@@ -8,8 +8,8 @@ const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.
 export const wordSegments = (text: string): string[] =>
   segmenter ? [...segmenter.segment(text)].map((x) => x.segment) : text.split(/(\s+)/).filter(Boolean);
 
-const CLOSING = /^[，、：；？！。,.:;?!）)\]】》」』”’〉%‰℃°…—]+$/u;
-const OPENING = /^[（(\[【《「『“‘〈¥$€£￥＄]+$/u;
+const CLOSING = /^[，、：；？！。,.:;?!）)\]】》」』”’〉%‰‱％℃℉°…—]+$/u;
+const OPENING = /^[（(\[【《「『“‘〈¥$€£￥＄￡￠₩₹₽]+$/u;
 const NUMERIC = /^[+\-−]?[0-9０-９]+(?:[.,:：/][0-9０-９]+)*$/u;
 const CN_NUM = /^[零〇一二三四五六七八九十百千万亿两几]+$/u;
 const CN_LEAD = /^[零〇一二三四五六七八九十百千万亿两几]+/u;
@@ -23,8 +23,10 @@ const UNITS = new Set([
   "名", "人", "次", "倍", "成", "年", "月", "日", "天", "周", "岁", "吨", "斤", "克", "升", "米", "亩", "套", "台", "辆",
   "部", "家", "所", "款", "项", "杯", "瓶", "箱", "包", "页", "层", "楼", "度", "秒", "折", "股", "份", "篇", "本", "批",
   "颗", "粒", "口", "碗", "盒", "袋", "点", "时", "钱",
+  "円", "億", "個", "枚", "歳", "回", "メートル", "キロメートル", "センチ", "ミリ", "キロ", "グラム", "キログラム", "リットル",
+  "ドル", "ユーロ", "パーセント", "ポイント",
 ]);
-const isUnit = (s: string) => UNITS.has(s) || /^(?:[%‰℃°]|[A-Za-z]{1,3})$/u.test(s);
+const isUnit = (s: string) => UNITS.has(s) || /^(?:[%‰‱％℃℉°]|[A-Za-z]{1,3})$/u.test(s);
 const APPROX = /^[多余]$/u;
 const PREFER = /[，。！？；：,.!?;:、…][”’」』)）]*$/u;
 
@@ -49,6 +51,13 @@ export const pieces = (text: string): Array<{ text: string; space: boolean }> =>
     const unit = isUnit(seg);
     const open = OPENING.test(seg) || BEFORE_NUM.test(seg);
     if (last && !last.space) {
+      // "COVID-19", "GPT-5": a hyphen inside a Latin or digit run joins both sides, and no line starts with it
+      if (/^[-‐‑]$/u.test(seg) && /[A-Za-z0-9]$/u.test(last.text)) {
+        last.text += seg;
+        last.num = false;
+        last.open = true;
+        continue;
+      }
       // "百分" + "之" + "五"
       if (seg === "之" && /分$/u.test(last.text)) {
         last.text += seg;
@@ -188,13 +197,52 @@ export const balanced = (u: Unit[], k: number, fits: Fits): Range[] | null => {
 };
 
 /** `text` broken into lines no wider than `width` (widths from `measure`), greedy or balanced: the same rules the
- *  text clip uses, for components that lay out their own labels. A piece wider than `width` gets a line of its own. */
-export const breakLines = (text: string, width: number, measure: (s: string) => number, balance = false): string[] => {
+ *  text clip uses, for components that lay out their own labels. A piece wider than `width` gets a line of its own.
+ *  `han`: Han text may also break between characters (as Chinese is set), taken when that saves a line or keeps a
+ *  long word inside `width`. */
+export const breakLines = (text: string, width: number, measure: (s: string) => number, balance = false, han = false): string[] => {
   const u = unitsOf(text, measure);
   if (!u.length) return [text];
   const widest = Math.max(width, ...u.map((x) => x.w));
   const fits: Fits = (w) => w <= widest;
   const g = greedy(u, fits) ?? [[0, u.length] as Range];
   const ranges = balance && g.length > 1 ? balanced(u, g.length, fits) ?? g : g;
-  return ranges.map(([a, b]) => u.slice(a, b).map((x) => x.text).join(""));
+  const byWord = ranges.map(([a, b]) => u.slice(a, b).map((x) => x.text).join(""));
+  if (!han || !/\p{Script=Han}/u.test(text)) return byWord;
+  const byChar = hanLines(text, width, measure);
+  return byChar.length < byWord.length || widest > width ? byChar : byWord;
+};
+
+const HAN_UNIT = /[（(\[【《「『“‘〈]*[^\s（(\[【《「『“‘〈][，、：；？！。,.:;?!）)\]】》」』”’〉…—]*/gu;
+
+/** Han text broken between characters into the fewest lines `width` allows, evened out. Numbers and Latin words stay
+ *  whole (with their units), closing punctuation stays with the character before it, opening with the one after. */
+export const hanLines = (text: string, width: number, measure: (s: string) => number): string[] => {
+  const units: string[] = [];
+  for (const p of pieces(text.trim())) {
+    if (p.space) {
+      if (units.length) units[units.length - 1] += p.text;
+    } else if (/[0-9０-９A-Za-z]/u.test(p.text)) units.push(p.text);
+    else units.push(...(p.text.match(HAN_UNIT) ?? [p.text]));
+  }
+  const fill = (limit: number) => {
+    const out: string[] = [];
+    let cur = "";
+    for (const unit of units) {
+      if (cur && measure((cur + unit).trimEnd()) > limit) {
+        out.push(cur.trimEnd());
+        cur = "";
+      }
+      cur += unit;
+    }
+    if (cur.trim()) out.push(cur.trimEnd());
+    return out;
+  };
+  const least = fill(width);
+  const even = measure(text.trim()) / least.length;
+  for (let limit = even; limit < width; limit += (width - even) / 8 + 0.01) {
+    const lines = fill(limit);
+    if (lines.length <= least.length) return lines;
+  }
+  return least;
 };

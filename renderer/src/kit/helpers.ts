@@ -3,7 +3,7 @@ import { Easing, interpolate, spring } from "remotion";
 import type { SpringConfig } from "remotion";
 import { fitText, measureText } from "@remotion/layout-utils";
 import { fontFamily as cssFamily, FONTS } from "../fonts";
-import { pieces, wordSegments } from "../elements/linebreak";
+import { breakLines, pieces, wordSegments } from "../elements/linebreak";
 import { srcUrl } from "../elements/util";
 import type { MediaRef } from "../types";
 
@@ -116,6 +116,53 @@ export const fitLines = (
   if (split.length < 2) return { size: one, lines: [s] };
   const two = Math.min(...split.map((l) => fit(l, width, max, family, weight)));
   return two > one ? { size: two, lines: split } : { size: one, lines: [s] };
+};
+
+export type BlockOptions = {
+  max: number; min?: number; maxLines?: number; family?: string; weight?: string | number; lineHeight?: number;
+};
+
+const blocks = new Map<string, { size: number; lines: string[] }>();
+
+/** `text` in a w x h block: one line at the largest size (<= max) that fits, while that is at least `min`; else
+ *  wrapped (breakLines, balanced, Han between characters) into up to `maxLines` lines at the largest size >= `min`
+ *  that fits both ways; only when even that fails, smaller. Render `lines.join("\n")` with whiteSpace "pre" and the
+ *  same lineHeight. */
+export const fitBlock = (text: string, w: number, h: number, opts: BlockOptions): { size: number; lines: string[] } => {
+  const { max, min = 0, maxLines = 2, family = SANS, weight = 400, lineHeight = 1.2 } = opts;
+  const s = (text ?? "").trim();
+  const key = [s, w, h, max, min, maxLines, family, weight, lineHeight].join("\u0001");
+  const hit = blocks.get(key);
+  if (hit) return hit;
+  const one = Math.min(fit(s, w, max, family, weight), Math.floor(h / lineHeight));
+  let out = { size: one, lines: [s] };
+  if (one < min && maxLines > 1 && s && w > 0 && h > 0) {
+    const w100 = (t: string) => textWidth(t, 100, family, weight);
+    const at = (size: number) => {
+      const lines = breakLines(s, (w * 100) / size, w100, true, true).map((l) => l.trim()).filter(Boolean);
+      const ok = lines.length <= maxLines && lines.length * size * lineHeight <= h && lines.every((l) => (w100(l) * size) / 100 <= w);
+      return ok ? lines : null;
+    };
+    // a smaller size never needs more lines, so the sizes that fit are all those under some limit: bisect for it
+    const search = (lo: number, hi: number) => {
+      let best: { size: number; lines: string[] } | null = null;
+      while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const lines = at(mid);
+        if (lines) {
+          best = { size: mid, lines };
+          lo = mid + 1;
+        } else hi = mid - 1;
+      }
+      return best;
+    };
+    const top = Math.floor(Math.min(max, h / lineHeight));
+    const wrapped = search(Math.ceil(min), top) ?? search(one + 1, Math.ceil(min) - 1);
+    if (wrapped && wrapped.size > one) out = wrapped;
+  }
+  if (blocks.size > 2000) blocks.clear();
+  blocks.set(key, out);
+  return out;
 };
 
 /** "12,345.6" style number text; non-finite values print as they are. */

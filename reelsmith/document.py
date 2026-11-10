@@ -86,6 +86,13 @@ def _quad(v):
     return v
 
 
+def _pair(v):
+    if not (isinstance(v, list) and len(v) == 2 and all(isinstance(n, (int, float)) and not isinstance(n, bool) and n >= 0
+                                                        for n in v)):
+        raise PydanticCustomError("around_type", "should be [above, below] in the image's pixels, each >= 0")
+    return v
+
+
 def _box_tag(v):
     return "name" if isinstance(v, str) else "box"
 
@@ -101,6 +108,7 @@ Time = Annotated[Union[float, str], PlainValidator(_time)]
 Size = Annotated[Union[float, str], PlainValidator(_size)]
 Shadow = Annotated[Optional[Union[bool, str]], PlainValidator(_shadow)]
 Quad = Annotated[list, PlainValidator(_quad)]
+Pair = Annotated[list, PlainValidator(_pair)]
 Unit = Annotated[float, Field(ge=0, le=1)]
 
 
@@ -139,6 +147,8 @@ class Asset(_M):
     site: str = ""
     url: str = ""
     note: str = ""
+    line: Optional[float] = Field(None, gt=0)     # evidence: the text's line pitch in image pixels (capture)
+    around: Optional[Pair] = None           # evidence: how far past the box the gaps beyond its neighbouring lines lie
     transcript: Optional[str] = None        # assets/<id>.transcript.json (transcribe)
 
 

@@ -990,6 +990,10 @@ class _Resolver:
         if a.kind == "evidence":
             ref["box"] = list(a.box) if a.box else None
             ref["site"] = a.site
+            if a.line:
+                ref["line"] = a.line
+            if a.around:
+                ref["around"] = list(a.around)
         if a.kind in ("video", "audio"):
             ref["duration"] = media_duration(path)
         return ref
@@ -1105,8 +1109,12 @@ class _Resolver:
             if c.highlight:
                 at = self.rel_frame(c.highlight.at, start) if c.highlight.at is not None else None
                 hl = {"at": at, "dur": max(1, self.frame(c.highlight.dur)), "color": c.highlight.color}
-            return {"src": ref["src"], "size": ref.get("size"), "box": ref.get("box"), "site": ref.get("site", ""),
-                    "highlight": hl}
+            out = {"src": ref["src"], "size": ref.get("size"), "box": ref.get("box"), "site": ref.get("site", ""),
+                   "highlight": hl}
+            for k in ("line", "around"):
+                if ref.get(k):
+                    out[k] = ref[k]
+            return out
         return {"name": c.name, "props": self.props(c.props, start)}
 
     def retime(self, c, start: int, dur: int, out: dict) -> None:

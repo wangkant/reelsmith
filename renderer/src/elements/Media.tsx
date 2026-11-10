@@ -86,12 +86,14 @@ const VideoBody: React.FC<{
   const fitCss = (objectFit as VideoObjectFit | undefined) ?? "cover";
   const srcFrames = m.duration && m.duration > 0 ? Math.floor(m.duration * fps) : null;
   if (hold !== null || (rateKeys && rateKeys.length)) {
-    // the source frame for this clip frame, through a Freeze: the element seeks to it (frame-accurate) and is muted
+    // the source frame for this clip frame, as the trim of a video frozen on its first frame (a Freeze frame past the
+    // sequence's end is capped at the frames left in the film); muted
     const want = hold !== null ? hold : trimIn + walkedAt(rateKeys as Keyframe[], f, fps);
     const last = srcFrames === null ? want : Math.max(0, srcFrames - 1);
+    const at = Math.max(0, Math.min(want, last));
     return (
-      <Freeze frame={Math.max(0, Math.min(want, last))}>
-        <Video src={src} muted objectFit={fitCss} style={css} />
+      <Freeze frame={0}>
+        <Video src={src} muted trimBefore={at > 0 ? at : undefined} objectFit={fitCss} style={css} />
       </Freeze>
     );
   }
