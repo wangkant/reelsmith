@@ -20,7 +20,8 @@ const Stage: React.FC<{ r: Resolved; mode: RenderMode }> = ({ r, mode }) => {
   const safe: Box = r.safe ?? { x: 0, y: 0, w: r.width, h: r.height };
   const locale = r.locale || "en";
   return (
-    <div ref={root} style={{ position: "absolute", left: 0, top: 0, width: r.width, height: r.height, overflow: "hidden" }}>
+    // lang picks the Han glyph forms (Japanese, Korean, Chinese) for shared code points
+    <div ref={root} lang={locale} style={{ position: "absolute", left: 0, top: 0, width: r.width, height: r.height, overflow: "hidden" }}>
       {r.tracks.map((track) => {
         if (!track || track.hidden) return null;
         if (track.kind === "visual") {

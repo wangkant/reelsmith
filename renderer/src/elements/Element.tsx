@@ -44,7 +44,7 @@ const Content: React.FC<ContentProps> = ({ clip, w, h, progress, theme, mode, ra
       const ev = c as EvidenceContent;
       return (
         <EvidenceCrop
-          ev={{ src: ev.src, size: ev.size, box: ev.box, site: ev.site }} w={w} h={h} highlight={ev.highlight ?? null} radius={radius}
+          ev={{ src: ev.src, size: ev.size, box: ev.box, site: ev.site, line: ev.line, around: ev.around }} w={w} h={h} highlight={ev.highlight ?? null} radius={radius}
         />
       );
     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -357,9 +358,10 @@ def _evidence_refs(value, key: str = ""):
             yield from _evidence_refs(v, key)
 
 
-def evidence_panel(size, cap, w: float, h: float) -> tuple[float, float, float, float]:
+def evidence_panel(size, cap, w: float, h: float, line=None, around=None) -> tuple[float, float, float, float]:
     """(x, y, w, h) in the clip box of the panel the renderer's evidenceLayout draws for a capture of `size` cropped
-    to `cap` in a w x h box (EvidenceCrop.tsx); the whole box when the capture's size is unknown."""
+    to `cap` in a w x h box (EvidenceCrop.tsx; `line` and `around` as the capture measured them); the whole box when
+    the capture's size is unknown."""
     if not (isinstance(size, (list, tuple)) and len(size) == 2 and all(isinstance(v, (int, float)) for v in size)
             and size[0] > 0 and size[1] > 0 and w > 0 and h > 0):
         return 0.0, 0.0, float(w), float(h)
@@ -372,10 +374,30 @@ def evidence_panel(size, cap, w: float, h: float) -> tuple[float, float, float, 
     margin = max(10.0, min(40.0, bh * 0.35))
     x0, x1 = max(0.0, bx - margin), min(W, bx + bw + margin)
     s = min(w / (x1 - x0), h / bh, EVIDENCE_MAX_ZOOM)
-    want = max(40.0, min(240.0, bh * 0.35))
+    pitch = float(line) if isinstance(line, (int, float)) and line > 0 else 0.0
+    near = [max(0.0, float(v)) for v in around] if isinstance(around, (list, tuple)) and len(around) == 2 else None
+    gap = (pitch - (bh - (max(1, round(bh / pitch)) - 1) * pitch)) / 2 if pitch else 0.0
+    want = near if near else [pitch + gap] * 2 if pitch else [max(40.0, min(240.0, bh * 0.35))] * 2
     room = max(0.0, h / s - bh)
-    above, below = min(want, by), min(want, H - by - bh)
-    if above + below > room:
+    above, below = min(want[0], by), min(want[1], H - by - bh)
+    if near or pitch:
+        def snap(v: float, i: int) -> float:
+            if near:
+                return near[i] if near[i] > 0 and v >= near[i] - 0.5 else 0.0
+            return math.floor((v - gap + 0.5) / pitch) * pitch + gap if v >= pitch + gap - 0.5 else 0.0
+
+        def less(v: float) -> float:
+            return 0.0 if near or v < 2 * pitch + gap - 0.5 else v - pitch
+        if above < by:
+            above = snap(above, 0)
+        if below < H - by - bh:
+            below = snap(below, 1)
+        while above + below > room + 0.5:
+            if above >= below:
+                above = less(above)
+            else:
+                below = less(below)
+    elif above + below > room:
         half = room / 2
         if above < half:
             below = room - above
@@ -403,7 +425,8 @@ def evidence_issues(resolved: dict, root: Path, profile: Profile | None = None) 
         w, h = float(box.get("w") or 0) * scale, float(box.get("h") or 0) * scale
         if profile is not None and c.get("type") == "evidence" and w > 0 and h > 0:
             bw0, bh0 = float(box.get("w") or 0), float(box.get("h") or 0)
-            px_, py_, pw_, ph_ = evidence_panel(content.get("size"), content.get("box"), bw0, bh0)
+            px_, py_, pw_, ph_ = evidence_panel(content.get("size"), content.get("box"), bw0, bh0, content.get("line"),
+                                            content.get("around"))
             cx, cy = float(box.get("x") or 0) + bw0 / 2, float(box.get("y") or 0) + bh0 / 2
             # the panel in canvas px, grown by style.scale about the box's centre
             panel = (cx + (px_ - bw0 / 2) * scale, cy + (py_ - bh0 / 2) * scale, pw_ * scale, ph_ * scale)

@@ -238,6 +238,17 @@ def test_an_evidence_box_outside_the_safe_area_is_an_error(tmp_path):
     assert C.evidence_issues(resolved([full]), tmp_path, DOUYIN) == []
 
 
+def test_evidence_panel_cuts_between_lines_when_the_capture_measured_them():
+    cap = [42, 300, 300, 60]
+    # one whole line each way, to the gaps the capture found (89 above: a paragraph break), x2 zoom
+    assert C.evidence_panel([1200, 684], cap, 1080, 1920, 58, [89, 58]) == (198.0, 753.0, 684.0, 414.0)
+    # a short window drops whole lines (the larger side first) instead of cutting one in half
+    assert C.evidence_panel([1200, 684], cap, 1080, 150, 58, [89, 58]) == (198.0, 15.0, 684.0, 120.0)
+    # the pitch alone: one line of 58 each way, edges half a gap (here -1) past the box
+    assert C.evidence_panel([1200, 684], cap, 1080, 1920, 58) == (198.0, 786.0, 684.0, 348.0)
+    assert C.evidence_panel([1200, 684], cap, 1080, 1920) == (198.0, 820.0, 684.0, 280.0)
+
+
 def test_advice_slides_measures_words_over_stills():
     rules = merge_rules({"advice": {"max_slide_share": 0.6}})
     full = {"x": 0, "y": 0, "w": 1080, "h": 1920}

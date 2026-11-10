@@ -32,7 +32,7 @@ export type EvidenceLayout = {
   context: boolean;
 };
 
-type EvidenceLike = Pick<MediaRef, "size" | "box">;
+type EvidenceLike = Pick<MediaRef, "size" | "box" | "line" | "around">;
 
 /** How a capture sits in a w x h window. The sentence plus a margin of about a third of a line on each side (where the
  *  neighbouring characters fade out) is scaled to the window's width, or its height when the window is short, at most
@@ -51,17 +51,37 @@ export const evidenceLayout = (ev: EvidenceLike, w: number, h: number, context?:
   const x0 = Math.max(0, bx - margin);
   const x1 = Math.min(W, bx + bw + margin);
   const s = Math.min(w / (x1 - x0), h / bh, MAX_ZOOM);
-  // context: what was asked, what the page has, and what the window's height leaves, shared above and below
-  const want = Math.max(0, context ?? Math.max(40, Math.min(240, bh * 0.35)));
+  // context: what was asked, what the page has, and what the window's height leaves, shared above and below. Where the
+  // capture measured the lines (`around`: the cut past the neighbouring line on each side; `line`: the line pitch) it
+  // is whole lines, one by default, and the panel's edges fall in the gaps between lines, so no edge crosses a glyph.
+  const pitch = ev.line && ev.line > 0 ? ev.line : 0;
+  const near = Array.isArray(ev.around) && ev.around.length === 2 ? ev.around.map((v) => Math.max(0, Number(v) || 0)) : null;
+  const gap = pitch ? (pitch - (bh - (Math.max(1, Math.round(bh / pitch)) - 1) * pitch)) / 2 : 0;
+  const lines = !!near || pitch > 0;
+  const snap = (v: number, i: number) =>
+    near ? (near[i] > 0 && v >= near[i] - 0.5 ? near[i] : 0)
+      : v >= pitch + gap - 0.5 ? Math.floor((v - gap + 0.5) / pitch) * pitch + gap : 0;
+  const want = (i: number) =>
+    Math.max(0, context ?? (near ? near[i] : pitch ? pitch + gap : Math.max(40, Math.min(240, bh * 0.35))));
   const room = Math.max(0, h / s - bh);
-  let above = Math.min(want, by);
-  let below = Math.min(want, H - by - bh);
-  if (above + below > room) {
+  let above = Math.min(want(0), by);
+  let below = Math.min(want(1), H - by - bh);
+  if (lines) {
+    // the capture's own edge is no cut; past the room, whole lines go, the larger side first
+    if (above < by) above = snap(above, 0);
+    if (below < H - by - bh) below = snap(below, 1);
+    const less = (v: number) => (near || v < 2 * pitch + gap - 0.5 ? 0 : v - pitch);
+    while (above + below > room + 0.5) {
+      if (above >= below) above = less(above);
+      else below = less(below);
+    }
+  } else if (above + below > room) {
     const half = room / 2;
     if (above < half) below = room - above;
     else if (below < half) above = room - below;
     else above = below = half;
   }
+  const outer = (pitch || bh) * 0.18;
   const y0 = by - above;
   const y1 = by + bh + below;
   const pw = (x1 - x0) * s;
@@ -74,8 +94,9 @@ export const evidenceLayout = (ev: EvidenceLike, w: number, h: number, context?:
     fade: {
       left: x0 > 0 ? (bx - x0) * s : 0,
       right: x1 < W ? (x1 - bx - bw) * s : 0,
-      top: y0 > 0 ? above * s * 0.85 : 0,
-      bottom: y1 < H ? below * s * 0.85 : 0,
+      // on whole lines only the outer gap fades
+      top: y0 > 0 ? (lines ? Math.min(above, outer) : above * 0.85) * s : 0,
+      bottom: y1 < H ? (lines ? Math.min(below, outer) : below * 0.85) * s : 0,
     },
     context: above + below > 8,
   };

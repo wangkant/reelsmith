@@ -90,6 +90,10 @@ export type MediaRef = {
   size?: [number, number] | null;
   box?: [number, number, number, number] | null;
   site?: string;
+  /** evidence, when the capture measured them: the text's line pitch, and how far past the box (above, below) the gap
+   *  beyond the neighbouring line lies, in image pixels */
+  line?: number | null;
+  around?: [number, number] | null;
   duration?: number | null;
   /** an image that moves (GIF, APNG, animated WebP): it plays, looping */
   animated?: boolean;
@@ -138,6 +142,8 @@ export type EvidenceContent = {
   size?: [number, number] | null;
   box?: [number, number, number, number] | null;
   site?: string;
+  line?: number | null;
+  around?: [number, number] | null;
   highlight?: Highlight | null;
 };
 

@@ -127,6 +127,7 @@ FIND_JS = r"""
     tb = tb.parentElement;
   let mr = target.getBoundingClientRect();
   let fontPx = parseFloat(getComputedStyle(target).fontSize) || 0;
+  let linePx = 0;                     // the text's line pitch, so a crop can cut between lines
   let sentence = "", cut = false;
   if (want) {
     const units = [];
@@ -199,6 +200,9 @@ FIND_JS = r"""
         if (right > left && bottom > top) mr = {left, top, width: right - left, height: bottom - top};
       }
       fontPx = parseFloat(getComputedStyle(units[a].n.parentElement).fontSize) || fontPx;
+      const lh = parseFloat(getComputedStyle(units[a].n.parentElement).lineHeight);
+      linePx = lines.length > 1 ? (lines[lines.length - 1].top - lines[0].top) / (lines.length - 1)
+        : lh > 0 ? lh : fontPx * 1.2;
     }
   }
   const sx = window.scrollX, sy = window.scrollY;
@@ -206,6 +210,41 @@ FIND_JS = r"""
   while (block.parentElement && block.parentElement !== document.body &&
          block.getBoundingClientRect().width < vw * 0.6) block = block.parentElement;
   const br = block.getBoundingClientRect();
+  // where a crop may cut above and below the box: in the gap past the neighbouring text line on each side (CSS px
+  // from the box's edges, 0 with no line near), found among the page's lines, so a paragraph break counts
+  const around = [0, 0];
+  if (linePx > 0) {
+    const rects = [], near = 4 * linePx;
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (!n.textContent.trim()) continue;
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      const all = r.getBoundingClientRect();
+      if (all.bottom < mr.top - near || all.top > mr.top + mr.height + near) continue;
+      for (const q of r.getClientRects())
+        if (q.width > 0 && q.height > 0 && q.right > mr.left && q.left < mr.left + mr.width) rects.push(q);
+    }
+    rects.sort((p, q) => p.top - q.top);
+    const rows = [];
+    for (const r of rects) {
+      const last = rows[rows.length - 1];
+      if (last && Math.min(last.bottom, r.bottom) - Math.max(last.top, r.top) > 0.5 * Math.min(last.bottom - last.top, r.height)) {
+        last.top = Math.min(last.top, r.top); last.bottom = Math.max(last.bottom, r.bottom);
+      } else rows.push({top: r.top, bottom: r.bottom});
+    }
+    const slack = 0.25 * linePx, reach = 2.5 * linePx, mb = mr.top + mr.height;
+    const up = rows.filter(l => l.bottom <= mr.top + slack && mr.top - l.bottom < reach).pop();
+    const down = rows.find(l => l.top >= mb - slack && l.top - mb < reach);
+    if (up) {
+      const prev = rows[rows.indexOf(up) - 1];
+      around[0] = mr.top - (up.top - Math.max(0, prev ? up.top - prev.bottom : mr.top - up.bottom) / 2);
+    }
+    if (down) {
+      const next = rows[rows.indexOf(down) + 1];
+      around[1] = down.bottom + Math.max(0, next ? next.top - down.bottom : down.top - mb) / 2 - mb;
+    }
+  }
   const docW = br.right <= vw + 1 ? vw : Math.max(document.documentElement.scrollWidth, vw);
   const docH = document.documentElement.scrollHeight;
   const x0 = Math.max(0, Math.min(br.left, mr.left) + sx - pad);
@@ -230,7 +269,7 @@ FIND_JS = r"""
     const pos = raw ? flatText.indexOf(raw) : -1;
     if (pos > 90) excerpt = "…" + flatText.slice(pos - 90, pos + raw.length + 110);
   }
-  return {found: true, title: document.title, site, excerpt, sentence, cut, fitted, font_px: fontPx,
+  return {found: true, title: document.title, site, excerpt, sentence, cut, fitted, font_px: fontPx, line_px: linePx, around,
           layout_width: vw, crop: {x: x0, y: y0, width: W, height: y1 - y0},
           match: {x: mr.left + sx - x0, y: mr.top + sy - y0, width: mr.width, height: mr.height}};
 }
@@ -393,6 +432,10 @@ def capture(project, url, match="", id="", viewport=None, *, sync_playwright=Non
                                   str(info.get("excerpt") or "").strip()[:240]) if x)
     entry = {"path": rel(ctx, out), "kind": "evidence", "box": box, "site": str(info.get("site") or "")[:80],
              "url": url, "note": note}
+    line = round(float(info.get("line_px") or 0) * scale)
+    if line > 0:
+        entry["line"] = line
+        entry["around"] = [round(max(0.0, float(v)) * scale) for v in (info.get("around") or [0, 0])[:2]]
     reg = register_asset(ctx, asset_id, entry)
     final = info.get("final_url") or url
     moved = f" (landed on {final})" if final != url else ""
