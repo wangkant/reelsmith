@@ -316,6 +316,7 @@ def test_preview(project, monkeypatch):
     assert "4 still(s) of a 3.0 s film" in r and "contact sheet" in r
     assert (project.path / "build" / "stills" / "contact.png").is_file()
     assert "t1 @ 1.2s" in r and "outside the safe area (top)" in r and "would block render" in r
+    assert "note: 99 s is past the film's end at 3.00 s: showing the last frame" in r and "'end'" not in r
 
 
 def test_preview_frames_round_as_the_timeline_does(project, monkeypatch):
@@ -445,6 +446,11 @@ def test_review_watches_the_film_a_second_at_a_time_with_the_voice(project, monk
     assert "- 0 s: [1] 一" in rv and "- 1 s: (no voice)" in rv and "- 2 s: [2] 二" in rv
     assert "- 3-9 s: (no voice)" in rv
     assert "the picture does not change" in rv and "- 0-9 s" in rv          # one colour throughout
+    # the film check's own frozen stretches, when the report has them: review says what it measured
+    (project.path / "out" / "report.json").write_text(json.dumps({"film_check": {"still_spans": [[4.0, 7.0]]}}),
+                                                      encoding="utf-8")
+    rv = T.review(str(project.path))
+    assert "the picture does not change" in rv and "- 4-7 s" in rv and "0-9 s" not in rv
     quick = T.review(str(project.path), 3)                                   # n: the quick look, as before
     assert quick.ok and "contact sheet" in quick and not list(review.glob("sheet_*.png"))
 

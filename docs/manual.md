@@ -44,7 +44,9 @@ All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise
 area is a title-safe margin; on the platform ones (douyin, douyin-long, tiktok, shorts, reels) it is where the
 phone's UI does not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and
 music at the bottom), and there a film needs sound and nothing may stand still for more than 5 s (`youtube` needs
-sound only). Backgrounds may bleed to the edges; **words must stay inside the safe area** — render measures the
+sound only); `check` already refuses a stretch where nothing can move, and gaps where nothing is on screen (black)
+add up against 10 % of the film on every canvas. Backgrounds may bleed to the edges; **words must stay inside the
+safe area** — render measures the
 film and refuses text outside it. The owner may define other canvases (workspace.json `profiles`, or an inline
 `"profile": {"base": "landscape", "width": 1280, "height": 720, "fps": 25}`); `new_project(p,
 canvas="1920x1080@25")` makes one. NTSC rates work too: `"fps": 29.97` (or 23.976, 59.94,
@@ -447,7 +449,9 @@ transcript. No narration: the film lasts until `a_2` ends.
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
   `update_asset`. A capture comes back in the project's language (the browser's locale).
 - Music: there is no music generator. `import_asset` an audio file you are allowed to use, put it on an audio
-  track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film.
+  track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film. Without a voice,
+  mastering brings the whole mix up to the platform's loudness: a bed's volume then sets its balance against other
+  sound, not its level (render notes a gain over 12 dB).
 - `preview` is cheap (one bundle, a few seconds a still): use it after every meaningful edit and look at the PNGs.
   In the contact sheet (tiles in your canvas's shape) the dark bands are outside the safe area (the platform's UI,
   or the title-safe margin), the yellow line is the safe area's edge and each tile shows its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures the film exactly
@@ -457,7 +461,8 @@ transcript. No narration: the film lasts until `a_2` ends.
   (0.1-1) sets the size. Use it to watch joins, pacing and sound on a long film before the real render.
 - Subtitles and chapters ship with the film: every captions track, hidden ones too, becomes
   `out/captions/<track>.srt` and `.vtt` (a hidden track with its own `items` and `"language": "es"` is a Spanish
-  subtitle file that is never burned in); `export_captions` writes them without rendering. Project `chapters`
+  subtitle file that is never burned in); `export_captions` writes them without rendering (to `build/captions`
+  once the cut has changed since the delivered film, which keeps its own). Project `chapters`
   become `out/chapters.txt` (`0:00 Intro` lines for a YouTube description) and chapter marks in the mp4; YouTube
   shows them when the first is at 0:00, there are at least 3 and each lasts 10 s or more.
 

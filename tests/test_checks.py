@@ -299,6 +299,90 @@ def test_duration_outside_platform_limits_is_an_error():
     assert C.duration_issues(resolved([], seconds=50), DOUYIN) == []
 
 
+def zoom(frames):
+    return {"zoom": [{"f": 0, "v": 1.02}, {"f": frames - 1, "v": 1.12}]}
+
+
+def test_holes_in_the_picture_warn_and_too_much_black_is_an_error():
+    # 0-5.6 s, a hole to 11.6 s, then to 21.8 s: what the film check calls 28% black
+    r = resolved([clip("c1", "image", 0, 168, keyframes=zoom(168)), clip("c2", "image", 348, 306, keyframes=zoom(306))],
+                 seconds=21.8)
+    found = C.screen_issues(r, DOUYIN)
+    msgs = {(i.level, i.where): i.msg for i in found}
+    assert "nothing on screen 5.6-11.6 s, between c1 and c2" in msgs[("warning", "screen @ 5.6s")]
+    assert "28% of the film" in msgs[("error", "screen")]
+    assert "nothing moves 5.6-11.6 s" in msgs[("error", "screen @ 5.6s")]          # black does not move either
+    short = resolved([clip("c1", "image", 0, 300, keyframes=zoom(300)), clip("c2", "image", 330, 270,
+                                                                           keyframes=zoom(270))], seconds=20)
+    assert [(i.level, i.where) for i in C.screen_issues(short, DOUYIN)] == [("warning", "screen @ 10.0s")]
+    hidden = resolved([clip("c1", "image", 0, 600, keyframes=zoom(600))], seconds=20)
+    hidden["tracks"].insert(0, {"id": "off", "kind": "visual", "hidden": True, "clips": [clip("x", "video", 0, 600)]})
+    hidden["tracks"][1]["clips"][0]["style"] = {"opacity": 0}
+    assert ("error", "screen") in {(i.level, i.where) for i in C.screen_issues(hidden, DOUYIN)}
+
+
+def test_a_stretch_where_nothing_can_move_is_an_error_only_where_the_profile_limits_it():
+    still = [clip("a", "image", 0, 654), text_clip("t1", 0, 654)]
+    found = [i for i in C.screen_issues(resolved(still, 21.8), DOUYIN) if i.level == "error"]
+    assert len(found) == 1 and found[0].where == "a @ 0.0s"
+    assert "nothing moves 0.0-21.8 s" in found[0].msg and "on screen: a, t1" in found[0].msg
+    from reelsmith.profiles import LANDSCAPE
+    assert C.screen_issues(resolved(still, 21.8), replace(LANDSCAPE, max_still_s=None)) == []
+    # a change every few seconds splits it: a cut, a reveal, an enter, a caption, a keyframed move
+    cuts = [clip("a", "image", 0, 120), clip("b", "image", 120, 120), clip("c", "image", 240, 120)]
+    assert C.screen_issues(resolved(cuts, 12), DOUYIN) == []
+    moving = [
+        [clip("a", "image", 0, 654, keyframes=zoom(654))],
+        [clip("a", "image", 0, 654, content={"animated": True})],
+        [clip("a", "video", 0, 654)],
+        [clip("a", "component", 0, 654, content={"name": "X", "props": {}})],
+        [clip("a", "evidence", 0, 654)],
+        [clip("a", "image", 0, 654), text_clip("t", 0, 654)] + [text_clip(f"r{n}", n * 120, 120) for n in range(6)],
+    ]
+    for clips in moving:
+        assert C.screen_issues(resolved(clips, 21.8), DOUYIN) == [], clips
+    held = [clip("a", "video", 0, 654, content={"hold": 30})]
+    assert [i.level for i in C.screen_issues(resolved(held, 21.8), DOUYIN)] == ["error"]
+    revealed = [clip("a", "image", 0, 210), clip("t", "text", 0, 210, content={"reveal": {"mode": "chars", "dur": 2}})]
+    assert C.screen_issues(resolved(revealed, 7), DOUYIN) == []         # typed to 2 s, then 5 s still
+    revealed[1]["content"]["reveal"]["dur"] = 0.5
+    assert [i.where for i in C.screen_issues(resolved(revealed, 7), DOUYIN)] == ["a @ 0.5s"]
+    captions = [{"from": n * 90, "to": n * 90 + 90, "runs": []} for n in range(8)]
+    assert C.screen_issues(resolved([clip("a", "image", 0, 654)], 21.8, captions=captions[:3]), DOUYIN)
+    assert C.screen_issues(resolved([clip("a", "image", 0, 720)], 24, captions=captions), DOUYIN) == []
+
+
+def video(cid, start, dur, **content):
+    return clip(cid, "video", start, dur, content={"src": "assets/v.mp4", "duration": 8.0, "trimIn": 0, "rate": 1,
+                                                    "loop": False, "volume": 0, **content})
+
+
+def test_a_clip_running_past_its_source(tmp_path):
+    r = resolved([video("a_3", 0, 300), video("ok", 300, 240), video("fast", 540, 180, rate=2),
+                  video("past", 720, 30, trimIn=270), video("looped", 750, 300, loop=True),
+                  video("held", 1050, 300, hold=15), video("curve", 1350, 300, rateKeys=[{"f": 0, "v": 2}])], 60)
+    found = {i.where: i for i in C.overrun_issues(r, tmp_path)}
+    assert set(found) == {"a_3", "fast", "past"}
+    assert found["a_3"].level == "warning" and "its source ends at 8.0 s, film 8.0 s" in found["a_3"].msg
+    assert "film 22.0 s" in found["fast"].msg                     # from 18 s, 8 s of source at double speed
+    assert found["past"].level == "error" and "trim_in 9.00 s" in found["past"].msg
+
+
+@needs_ffmpeg
+def test_footage_with_sound_in_a_film_where_nothing_is_heard(tmp_path):
+    make_film(tmp_path / "v.mp4", seconds=2)
+    shutil.copy(tmp_path / "v.mp4", tmp_path / "bed.mp4")
+    muted = resolved([video("v1", 0, 60, duration=2.0, src="v.mp4")], 2)
+    found = C.sound_issues(muted, tmp_path)
+    assert [i.where for i in found] == ["sound"] and "volume defaults to 0" in found[0].msg and "v1" in found[0].msg
+    assert C.sound_issues(resolved([video("v1", 0, 60, src="v.mp4", volume=1)], 2), tmp_path) == []
+    voiced = dict(muted, audio=[{"id": "voice", "src": "voice/voice.wav", "from": 0, "dur": 60, "volume": 1}])
+    assert C.sound_issues(voiced, tmp_path) == []
+    bed = dict(muted, audio=[{"id": "m", "src": "bed.mp4", "from": 0, "dur": 90, "trimIn": 0, "volume": 0.1}])
+    assert C.sound_issues(bed, tmp_path) == []
+    assert [i.msg[:40] for i in C.overrun_issues(bed, tmp_path)] == ["its source ends at 2.0 s, film 2.0 s; fr"]
+
+
 # ------------------------------------------------------------------ check_project with fake neighbours
 @pytest.fixture
 def project(tmp_path):
@@ -405,7 +489,7 @@ def test_check_project_uses_workspace_rules(monkeypatch, tmp_path):
     p = tmp_path / "projects" / "a"
     p.mkdir(parents=True)
     fake_doc(monkeypatch)
-    fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "image", 0, 200), text_clip("t")], 50))
+    fake_module(monkeypatch, "resolve", resolve=lambda p: resolved([clip("bg", "image", 0, 1500), text_clip("t")], 50))
     found = C.check_project(p)
     assert [i.msg for i in found if i.level == "error"] == ["contains the banned word '油价': reword it"]
 
@@ -583,6 +667,39 @@ def test_check_film_problems(tmp_path):
 def test_check_film_still_picture_fails(tmp_path):
     res = C.check_film(make_film(tmp_path / "f.mp4", seconds=4, still=True), TINY)
     assert not res["ok"] and any("without any motion" in p for p in res["problems"])
+    film = resolved([clip("a", "image", 0, 120)], 4)
+    film.update(width=108, height=192)
+    res = C.check_film(tmp_path / "f.mp4", TINY, film)
+    assert res["still_spans"] == [[0.0, 4.0]]
+    assert any(p.startswith("4.0 s without any motion (max 2 s) at 0.0-4.0 s (on screen: a):") for p in res["problems"])
+
+
+@needs_ffmpeg
+def test_check_film_says_where_the_black_is(tmp_path):
+    path = tmp_path / "f.mp4"
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc2=s=108x192:r=30:d=6", "-f", "lavfi", "-i", "sine=frequency=440:duration=6", "-vf",
+                    "drawbox=c=black:t=fill:enable='gte(t,2)*lt(t,4)'", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-shortest", str(path)], check=True, capture_output=True)
+    film = resolved([clip("c1", "video", 0, 60), clip("c2", "video", 120, 60)], 6)
+    res = C.check_film(path, TINY, film)
+    assert res["black_spans"] == [[2.0, 4.0]]
+    assert any(p.startswith("2.0 s of black (33%; max 10%) at 2.0-4.0 s (on screen: nothing)") for p in res["problems"])
+
+
+@needs_ffmpeg
+def test_mastering_cuts_the_sound_to_the_picture_and_says_the_gain(tmp_path):
+    src, out = tmp_path / "raw.mp4", tmp_path / "out.mp4"
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc2=s=108x192:r=30:d=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2.5", "-af",
+                    "volume=-40dB", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src)],
+                   check=True, capture_output=True)
+    gain = C.media.master(src, out, -16.0)
+    assert gain > 12                                        # a -40 dB tone brought up to -16 LUFS
+    streams = C.media.probe(out)["streams"]
+    sound = next(s for s in streams if s["codec_type"] == "audio")
+    assert float(sound["duration"]) == pytest.approx(2.0, abs=0.03)
+    assert C.check_film(src, replace(TINY, max_still_s=None))["duration_s"] == 2.0      # the picture's length
 
 
 @needs_ffmpeg

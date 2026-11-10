@@ -34,6 +34,9 @@ INK_PER_EM = 0.85              # a CJK glyph's ink is about this much of its fon
 SILENT_LUFS = -45.0
 LUFS_TOLERANCE = 3.0
 MAX_LIST = 25
+HOLE_S = 0.5                   # an empty stretch this long is called out
+BLACK_MIN_S = 0.2              # media.BLACK_FILTER's d: shorter black is not counted
+REVEAL_S, DRAW_S, CAPTION_POP = 0.8, 0.6, 8     # Text.tsx's default reveal, Shape.tsx's draw, Captions.tsx's pop
 
 
 def _mod(name: str):
@@ -450,6 +453,185 @@ def duration_issues(resolved: dict, profile: Profile) -> list[Issue]:
     return []
 
 
+def _shown(clip: dict) -> bool:
+    keys = (clip.get("keyframes") or {}).get("opacity") or []
+    return _visible(clip) or any(isinstance(k.get("v"), (int, float)) and k["v"] > 0 for k in keys)
+
+
+def _screen_clips(resolved: dict) -> list[dict]:
+    return [c for t in resolved.get("tracks") or [] if t.get("kind") == "visual" and not t.get("hidden")
+            for c in t.get("clips") or []]
+
+
+def screen_holes(resolved: dict) -> list[tuple[int, int, str | None, str | None]]:
+    """[(from, to) frames where no visual clip is on screen, the clip before, the clip after]."""
+    total = int(resolved.get("durationInFrames") or 0)
+    spans = sorted(((c.get("from") or 0), (c.get("from") or 0) + (c.get("dur") or 0), c.get("id"))
+                   for c in _screen_clips(resolved) if _shown(c))
+    holes, reach, last = [], 0, None
+    for a, b, cid in spans:
+        if a > reach:
+            holes.append((reach, a, last, cid))
+        if b > reach:
+            reach, last = b, cid
+    if total > reach:
+        holes.append((reach, total, last, None))
+    return holes
+
+
+def _changes(resolved: dict) -> list[int]:
+    """Frames where the picture may change from the frame before; anything that cannot be known counts as one."""
+    fps = _fps(resolved)
+    total = int(resolved.get("durationInFrames") or 0)
+    moving = bytearray(total + 1)
+
+    def mark(a, b=None):
+        a, b = max(0, int(a)), min(total, int(a if b is None else b))
+        if a <= b:
+            moving[a:b + 1] = b"\x01" * (b - a + 1)
+
+    for c in _screen_clips(resolved):
+        a = c.get("from") or 0
+        e = a + (c.get("dur") or 0)
+        content = c.get("content") or {}
+        mark(a)
+        mark(e)
+        kind = c.get("type")
+        if (kind == "video" and content.get("hold") is None) or (kind == "image" and content.get("animated")) \
+                or kind not in ("video", "image", "text", "shape"):
+            mark(a, e)
+        for key in ("enter", "transition"):
+            if c.get(key):
+                mark(a, a + (c[key].get("dur") or 0))
+        if c.get("exit"):
+            mark(e - (c["exit"].get("dur") or 0), e)
+        if c.get("transitionOut"):
+            at = a + (c["transitionOut"].get("at") or 0)
+            mark(at, at + (c["transitionOut"].get("dur") or 0))
+        reveal = content.get("reveal") or {}
+        if kind == "text" and reveal.get("mode") not in (None, "none"):
+            mark(a, a + round((reveal.get("dur") or REVEAL_S) * fps))
+        keys = c.get("keyframes") or {}
+        if kind == "shape" and content.get("draw") and not keys.get("progress"):
+            mark(a, a + round(DRAW_S * fps))
+        for frames in keys.values():
+            ks = sorted(frames or [], key=lambda k: k.get("f") or 0)
+            for k0, k1 in zip(ks, ks[1:]):
+                if k0.get("v") != k1.get("v"):
+                    mark(a + (k0.get("f") or 0), a + (k1.get("f") or 0))
+    for t in resolved.get("tracks") or []:
+        if t.get("kind") != "captions" or t.get("hidden"):
+            continue
+        for it in t.get("items") or []:
+            a, b = it.get("from") or 0, it.get("to") or 0
+            mark(a, a + CAPTION_POP)
+            mark(b)
+            if t.get("mode") not in (None, "phrase"):
+                mark(a, b)
+    return [f for f in range(total + 1) if moving[f]]
+
+
+def still_stretches(resolved: dict) -> list[tuple[int, int]]:
+    """[(from, to) frames] in which nothing on screen can move or change, longest first."""
+    total = int(resolved.get("durationInFrames") or 0)
+    points = sorted({0, total, *_changes(resolved)})
+    return sorted(((p, q) for p, q in zip(points, points[1:]) if q > p), key=lambda s: s[0] - s[1])
+
+
+def on_screen(resolved: dict, a: int, b: int) -> list[str]:
+    """Ids of the visual clips on screen at some time in frames [a, b)."""
+    return [str(c.get("id")) for c in _screen_clips(resolved) if _shown(c)
+            and (c.get("from") or 0) < b and (c.get("from") or 0) + (c.get("dur") or 0) > a]
+
+
+def _between(before: str | None, after: str | None) -> str:
+    if before and after:
+        return f"between {before} and {after}"
+    return f"before {after}" if after else f"after {before}" if before else "in the whole film"
+
+
+def screen_issues(resolved: dict, profile: Profile) -> list[Issue]:
+    """Stretches with nothing on screen (black) and, where the profile limits stillness, stretches in which nothing
+    can move: the film check refuses both after the encode."""
+    fps = _fps(resolved)
+    total = (resolved.get("durationInFrames") or 0) / fps
+    out: list[Issue] = []
+    black = 0.0
+    for a, b, before, after in screen_holes(resolved):
+        secs = (b - a) / fps
+        black += secs if secs >= BLACK_MIN_S else 0.0
+        if secs >= HOLE_S:
+            out.append(Issue("warning", f"screen @ {a / fps:.1f}s",
+                             f"nothing on screen {a / fps:.1f}-{b / fps:.1f} s, {_between(before, after)}: black; "
+                             "stretch a clip over it or put one there"))
+    if total and round(black / total, 3) > profile.max_black_ratio:      # as the film check rounds
+        out.append(Issue("error", "screen", f"{black:.1f} s with nothing on screen ({black / total:.0%} of the film; "
+                                            f"{profile.name} allows {profile.max_black_ratio:.0%} black): the film "
+                                            "check refuses it; fill the holes listed"))
+    limit = profile.max_still_s
+    if limit is None:
+        return out
+    for p, q in still_stretches(resolved):
+        if (q - p - 1) / fps <= limit:
+            break
+        on = on_screen(resolved, p, q)
+        out.append(Issue("error", f"{on[0] if on else 'screen'} @ {p / fps:.1f}s",
+                         f"nothing moves {p / fps:.1f}-{q / fps:.1f} s ({(q - p) / fps:.1f} s; {profile.name} allows "
+                         f"{limit:g} s without motion; on screen: {', '.join(on) or 'nothing'}): the film check "
+                         "refuses it; move something there (motion or keyframes on a picture, a reveal, a video)"))
+    return out
+
+
+def overrun_issues(resolved: dict, root: Path) -> list[Issue]:
+    """Video and audio clips that run past the end of their source (a frozen last frame, or silence)."""
+    fps = _fps(resolved)
+    rows = [(c.get("id"), "video", c.get("from") or 0, c.get("dur") or 0, c.get("content") or {})
+            for c in _screen_clips(resolved) if c.get("type") == "video"]
+    rows += [(a.get("id"), "audio", a.get("from") or 0, a.get("dur") or 0, a)
+             for a in resolved.get("audio") or [] if a.get("id") != "voice"]
+    out: list[Issue] = []
+    for cid, kind, start, dur, src in rows:
+        if src.get("loop") or src.get("hold") is not None or src.get("rateKeys") or src.get("reversed"):
+            continue
+        length = src.get("duration") if kind == "video" else media.stream_facts(root / str(src.get("src") or ""))[0]
+        if not length:
+            continue
+        rate = float(src.get("rate") or 1)
+        trim = (src.get("trimIn") or 0) / fps
+        frozen = "its last frame" if kind == "video" else "silence"
+        if trim >= length - 0.5 / fps:
+            out.append(Issue("error", str(cid), f"trim_in {trim:.2f} s is at or past the end of its source "
+                                                f"({length:.2f} s): the clip is {frozen} throughout; set trim_in "
+                                                f"under {length:.2f}"))
+            continue
+        runs_out = start / fps + (length - trim) / rate
+        if (start + dur) / fps - runs_out > 1 / fps:
+            out.append(Issue("warning", str(cid), f"its source ends at {length:.1f} s, film {runs_out:.1f} s; from "
+                                                  f"there to {(start + dur) / fps:.1f} s it is {frozen}: end the "
+                                                  "clip there, or loop"))
+    return out
+
+
+def _audible(item: dict) -> bool:
+    return (item.get("volume") or 0) > 0 or any((k.get("v") or 0) > 0 for k in item.get("volumeKeys") or [])
+
+
+def sound_issues(resolved: dict, root: Path) -> list[Issue]:
+    """Footage with sound in a film where nothing is heard: video clips are muted unless given a volume."""
+    videos = [c for c in _screen_clips(resolved) if c.get("type") == "video"]
+    if any(_audible(a) for a in resolved.get("audio") or []) or any(
+            _audible(c.get("content") or {}) and (c.get("content") or {}).get("hold") is None
+            and not (c.get("content") or {}).get("rateKeys") for c in videos):
+        return []
+    loud = [str(c.get("id")) for c in videos
+            if media.stream_facts(root / str((c.get("content") or {}).get("src") or ""))[1]]
+    if not loud:
+        return []
+    return [Issue("warning", "sound", f"nothing on the timeline makes sound, and the footage of {', '.join(loud[:6])} "
+                                      "has sound: a video clip's volume defaults to 0 (muted); set volume 1 on the "
+                                      "clips to be heard (edit op set), or add narration or music")]
+
+
 def check_project(project: str | Path) -> list[Issue]:
     """document validation + the owner's hard rules (errors) + advice; errors first."""
     root = project_root(project)
@@ -473,6 +655,7 @@ def check_project(project: str | Path) -> list[Issue]:
     except Exception as exc:  # noqa: BLE001 - a render would stop at the same place
         return sort_issues(issues + [Issue("error", "resolve", f"the project does not resolve: {exc}")])
     issues += duration_issues(resolved, profile) + advice_issues(resolved, rules, profile)
+    issues += screen_issues(resolved, profile) + overrun_issues(resolved, root) + sound_issues(resolved, root)
     issues += (cover_issues(resolved) if cover_matters(profile, rules) else []) + \
         evidence_issues(resolved, root, profile)
     return sort_issues(issues)
@@ -788,8 +971,9 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
 
 
 # ------------------------------------------------------------------ the delivered film
-def check_film(path: str | Path, profile: Profile) -> dict:
-    """Delivery checks on a rendered film: frame, fps, codecs, length, size, loudness, black and frozen stretches."""
+def check_film(path: str | Path, profile: Profile, resolved: dict | None = None) -> dict:
+    """Delivery checks on a rendered film: frame, fps, codecs, length, size, loudness, black and frozen stretches
+    (with `resolved`, the clips on screen in them)."""
     path = Path(path)
     out: dict = {"ok": False, "path": str(path), "problems": [], "notes": []}
     problems = out["problems"]
@@ -806,8 +990,8 @@ def check_film(path: str | Path, profile: Profile) -> dict:
     streams = info.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    try:
-        length = float((info.get("format") or {}).get("duration") or 0)
+    try:        # the picture's length: the container's may include sound past the last frame
+        length = float((video or {}).get("duration") or (info.get("format") or {}).get("duration") or 0)
     except ValueError:
         length = 0.0
     out.update(duration_s=round(length, 2), size_mb=round(path.stat().st_size / 1e6, 1))
@@ -827,7 +1011,7 @@ def check_film(path: str | Path, profile: Profile) -> dict:
         problems.append(f"{out['size_mb']:.0f} MB; the upload limit is {profile.max_mb:g} MB (a shorter film, or less "
                         "noise and grain in the picture)")
     if video and length > 0:
-        _check_motion(path, length, profile, out)
+        _check_motion(path, length, profile, out, resolved)
     out["ok"] = not problems
     out["why"] = "; ".join(problems)
     return out
@@ -863,7 +1047,18 @@ def _check_audio(path: Path, audio: dict, profile: Profile, out: dict) -> None:
         out["notes"].append(f"loudness {lufs:.1f} LUFS; mastered for {profile.lufs:g}")
 
 
-def _check_motion(path: Path, length: float, profile: Profile, out: dict) -> None:
+def _spans_text(spans: list, resolved: dict | None, least: float = 0.0) -> str:
+    """The longest spans as "at 5.6-11.6 s (on screen: c1)", up to three."""
+    fps = _fps(resolved or {})
+    rows = []
+    for a, b in sorted((s for s in spans if s[1] - s[0] > least), key=lambda s: s[0] - s[1])[:3]:
+        on = f" (on screen: {', '.join(on_screen(resolved, round(a * fps), round(b * fps))) or 'nothing'})" \
+            if resolved else ""
+        rows.append(f"{a:.1f}-{b:.1f} s{on}")
+    return f" at {'; '.join(rows)}" if rows else ""
+
+
+def _check_motion(path: Path, length: float, profile: Profile, out: dict, resolved: dict | None = None) -> None:
     try:
         found = media.scan(path, length)
     except Exception as exc:  # noqa: BLE001 - unmeasured is not passed
@@ -872,7 +1067,8 @@ def _check_motion(path: Path, length: float, profile: Profile, out: dict) -> Non
     out.update(found)
     if found["black_ratio"] > profile.max_black_ratio:
         out["problems"].append(f"{found['black_s']} s of black ({found['black_ratio']:.0%}; max "
-                               f"{profile.max_black_ratio:.0%})")
+                               f"{profile.max_black_ratio:.0%}){_spans_text(found['black_spans'], resolved)}")
     if profile.max_still_s is not None and found["longest_still_s"] > profile.max_still_s:
-        out["problems"].append(f"{found['longest_still_s']} s without any motion (max {profile.max_still_s:g} s): "
-                               "move something in that stretch (keyframes, motion, a reveal)")
+        out["problems"].append(f"{found['longest_still_s']} s without any motion (max {profile.max_still_s:g} s)"
+                               f"{_spans_text(found['still_spans'], resolved, profile.max_still_s)}: move something "
+                               "in that stretch (keyframes, motion, a reveal)")
