@@ -193,6 +193,10 @@ def proxy_address(url: str) -> tuple[str, int]:
 
 def _close(sock) -> None:
     try:
+        sock.shutdown(socket.SHUT_RDWR)                 # close alone does not wake a thread waiting on it (Linux)
+    except OSError:
+        pass
+    try:
         sock.close()
     except OSError:
         pass
@@ -264,10 +268,6 @@ class GuardProxy:
 
     def close(self) -> None:
         self._closed = True
-        try:
-            self._server.shutdown(socket.SHUT_RDWR)     # Linux: close alone leaves a blocked accept listening
-        except OSError:
-            pass
         _close(self._server)
         with self._lock:
             socks, self._socks = list(self._socks), set()
