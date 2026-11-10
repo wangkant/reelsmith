@@ -8,7 +8,8 @@ from pathlib import Path
 
 SIZE = (1440, 900)
 MIN_SIZE = (1100, 680)
-GROUND = "#0e0f11"              # the window's own ground, so it never flashes white while the page loads
+# the window's own ground (the page's --bg in each theme), so it never flashes another colour while the page loads
+GROUND = {"dark": "#121211", "light": "#f4f3f0"}
 ICON = Path(__file__).resolve().parent / "static" / "icon.ico"
 APP_ID = "reelsmith.watch"
 # Microsoft Edge WebView2 Runtime, then its Beta, Dev and Canary channels (the keys pywebview looks at)
@@ -56,11 +57,45 @@ def _own_taskbar_entry() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
 
 
+def system_theme() -> str:
+    """"light" or "dark", as the system shows its apps (read on Windows; dark elsewhere)."""
+    if os.name != "nt":
+        return "dark"
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
+    except OSError:
+        return "light"
+
+
+def _title_bar(window, theme: str) -> None:
+    """The native title bar in the page's theme (Windows 10 2004 and later; a no-op anywhere else)."""
+    if os.name != "nt" or theme not in GROUND:
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.c_void_p(int(window.native.Handle.ToInt64()))
+        on = ctypes.c_int(1 if theme == "dark" else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))   # immersive dark
+        ctypes.windll.user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0027)       # no move, size or z-order: redraw the frame
+    except Exception:           # an older Windows or another pywebview backend: the title bar keeps the system's look
+        pass
+
+
 def open_window(url: str, title: str, ready=None) -> None:
     """Show `url` in a desktop window and return when it is closed. `ready(window)` runs beside it once it is up."""
     import webview
     _own_taskbar_entry()
     width, height = _fitted(webview.screens)
-    window = webview.create_window(title, url, width=width, height=height, min_size=MIN_SIZE, background_color=GROUND)
+    theme = system_theme()
+    window = webview.create_window(title, url, width=width, height=height, min_size=MIN_SIZE,
+                                   background_color=GROUND[theme])
+
+    def set_theme(name):        # the page calls this (pywebview.api.set_theme) whenever its theme is set
+        _title_bar(window, str(name))
+    window.expose(set_theme)
+    window.events.shown += lambda *a: _title_bar(window, theme)
     icon = str(ICON) if ICON.is_file() else None
     webview.start(ready, window, icon=icon) if ready else webview.start(icon=icon)

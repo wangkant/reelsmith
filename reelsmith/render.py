@@ -640,6 +640,8 @@ def _post_meta(root: Path, report: dict, profile: Profile) -> dict:
     if side.get("chapters"):
         meta["chapters"] = side["chapters"]
         meta["chapters_file"] = "chapters.txt"
+    if side.get("covers"):
+        meta["covers"] = [f"{c['name']}.png" for c in side["covers"]]
     return meta
 
 
@@ -678,9 +680,18 @@ def hdr_sources(root: Path) -> list[str]:
     return rows
 
 
-def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float) -> dict:
-    """out/captions/* and out/chapters.txt for the film just delivered (stale ones removed)."""
+def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float, profile: Profile) -> dict:
+    """out/captions/*, out/chapters.txt and the profile's covers for the film just delivered (stale ones removed),
+    and a note while handover.md still has TODO lines."""
     out: dict = {"notes": [], "captions": sidecar.write_captions(root, resolved, paths.out / "captions")}
+    try:
+        out["covers"] = sidecar.write_covers(paths.film, profile, paths.out)
+    except RuntimeError as exc:
+        out["notes"].append(f"the cover could not be cut ({exc}): render again")
+    todo = sidecar.handover_todo(root)
+    if todo:
+        out["notes"].append(f"{root / sidecar.HANDOVER_FILE} still has {todo} {sidecar.TODO} line(s): fill them "
+                            "before handing over (the playbook's \"Hand over\" says what goes there)")
     txt = paths.out / "chapters.txt"
     txt.unlink(missing_ok=True)
     if chapters:
@@ -696,10 +707,11 @@ def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float
 @_one_at_a_time
 def render(project: str | Path, progress=_quiet) -> dict:
     """The film into <project>/out/film.mp4, mastered and checked, with its captions as out/captions/<track>.srt and
-    .vtt and its chapters as out/chapters.txt (and in the mp4). Every attempt's report goes to build/report.json
-    (the latest attempt, delivered or not); a delivered one also to out/report.json. On any failure the previous
-    film stays. Returns the report: {ok, stage, film, issues, layout, film_check, timings, ...}. `progress(stage,
-    fraction or None)` hears each stage (check, layout, film, master, film check) as it starts and moves."""
+    .vtt, its chapters as out/chapters.txt (and in the mp4) and the profile's covers as out/<name>.png. Every
+    attempt's report goes to build/report.json (the latest attempt, delivered or not); a delivered one also to
+    out/report.json. On any failure the previous film stays. Returns the report: {ok, stage, film, issues, layout,
+    film_check, timings, ...}. `progress(stage, fraction or None)` hears each stage (check, layout, film, master,
+    film check) as it starts and moves."""
     started = time.time()
     root = project_root(project)
     paths = project_paths(root)
@@ -845,7 +857,7 @@ def render(project: str | Path, progress=_quiet) -> dict:
         return finish("deliver", f"{paths.film} is held open by another program (a video player?): close it and "
                                  f"render again (the finished film waits at {mastered})")
     report["film_check"]["path"] = str(paths.film)
-    side = _sidecars(root, paths, resolved, chapters, length)
+    side = _sidecars(root, paths, resolved, chapters, length, profile)
     report["sidecars"] = {k: v for k, v in side.items() if k != "notes"}
     report["notes"] = report.get("notes", []) + side["notes"]
     _write_json(paths.meta, _post_meta(root, report, profile))
@@ -942,8 +954,8 @@ def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE, progress
 def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dict:
     """The delivered film as a viewer meets it: a frame every `every` seconds from 0 (spread out past
     WATCH_MAX_FRAMES), on phone-size sheets in order with the platform's UI bands darkened, each frame with the
-    voice line heard then and whether the picture changed since the frame before. n > 0: n evenly spaced frames on
-    one contact sheet instead (a quick look)."""
+    voice line heard then (without narration, the caption on screen then) and whether the picture changed since the
+    frame before. n > 0: n evenly spaced frames on one contact sheet instead (a quick look)."""
     root = project_root(project)
     paths = project_paths(root)
     if not paths.film.is_file():
@@ -965,6 +977,7 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
     shots = [{"t": t, "png": str(p)} for t, p in media.frames_every(paths.film, every, paths.review)
              if t < length]
     lines = _voice_lines(root)
+    shown = [] if lines else _caption_cues(root)
     still = _unchanged([s["png"] for s in shots])
     spans = _still_spans(paths)
     if spans is not None:       # the film check's frozen spans, and the pictures for runs too short for it to report
@@ -973,6 +986,8 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
     for s, same in zip(shots, still):
         ln = next((x for x in lines if x.t0 <= s["t"] < x.t1), None)
         s.update(line=ln.i if ln else None, said=ln.text if ln else "", same=same)
+        if shown:
+            s["shown"] = next((text for a, b, text in shown if a <= s["t"] < b), "")
     per, cols = _watch_grid(profile)
     sheets = []
     for k in range(0, len(shots), per):
@@ -983,12 +998,20 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
             sheets.append({"from_s": part[0]["t"], "to_s": part[-1]["t"], "png": sheet})
     return {"ok": bool(shots) and len(sheets) == -(-len(shots) // per), "film": str(paths.film),
             "duration_s": round(length, 2), "every_s": every, "frames": shots, "sheets": sheets,
-            "voice": bool(lines)}
+            "voice": bool(lines), "captions": bool(shown)}
 
 
 def _voice_lines(root: Path) -> list:
     voice, _ = _mod("document").load_voice(root, _mod("document").load(root).voice)
     return list(voice.lines) if voice else []
+
+
+def _caption_cues(root: Path) -> list:
+    """(start, end, text) of the shown captions tracks: what a viewer reads in a film without narration."""
+    resolved = _mod("resolve").resolve(root)
+    fps, frames = float(resolved.get("fps") or 30), int(resolved.get("durationInFrames") or 0)
+    return sorted(c for t in resolved.get("tracks") or [] if t.get("kind") == "captions" and not t.get("hidden")
+                  for c in sidecar.cues(t, fps, frames))
 
 
 def _still_spans(paths) -> list | None:

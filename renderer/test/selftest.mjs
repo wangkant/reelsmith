@@ -21,11 +21,18 @@ const OUT = keepAt > 0 ? path.resolve(process.argv[keepAt + 1]) : fs.mkdtempSync
 fs.mkdirSync(OUT, { recursive: true });
 
 let failures = 0;
+let lastRun = null;
 const check = (cond, what) => {
   if (cond) console.log(`  ok   ${what}`);
   else {
     failures++;
     console.log(`  FAIL ${what}`);
+    // the last renderer run's own words, or a failure on another machine says nothing
+    if (lastRun) {
+      console.log(`       exit ${lastRun.code}`);
+      console.log(`       stdout: ${lastRun.stdout.slice(-900)}`);
+      console.log(`       stderr: ${lastRun.stderr.slice(-900)}`);
+    }
   }
 };
 
@@ -41,7 +48,8 @@ const run = (args, env = {}) => {
   } catch {
     result = null;
   }
-  return { code: r.status, result, stdout: r.stdout || "", stderr: r.stderr || "", s: ((Date.now() - t0) / 1000).toFixed(1) };
+  lastRun = { code: r.status, result, stdout: r.stdout || "", stderr: r.stderr || "", s: ((Date.now() - t0) / 1000).toFixed(1) };
+  return lastRun;
 };
 
 const lastJson = (stdout) => {

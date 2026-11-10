@@ -85,7 +85,7 @@ export default function Seesaw({ props }: { props: any }) {
     // verdict: one line down to 44 px, else two (or more) balanced lines down to the floor
     const vMax = IW - 80;
     let vLines = vText ? [vText] : [];
-    let vSize = vText ? Math.min(Math.max(60, floor), natural(vText, vMax, FONTS.display, 400)) : 0;
+    let vSize = vText ? Math.min(Math.max(68, floor), natural(vText, vMax, FONTS.display, 400)) : 0;
     if (vText && vSize < Math.max(44, floor)) {
       vSize = Math.max(52, floor);
       vLines = linesAt(vText, vSize, vMax, FONTS.display, 400);
@@ -97,26 +97,31 @@ export default function Seesaw({ props }: { props: any }) {
     }
     const vH = vText ? vLines.length * vSize * 1.2 + 26 : 0;
     const textOk = vLines.every((l) => textWidth(l, vSize, FONTS.display, 400) <= vMax + 1);
-    const plateW = Math.min(IW * 0.46, 340);
+    const plateW = Math.min(IW * 0.46, 380);
     const half = IW / 2 - plateW / 2;
     const rise = half * Math.sin(maxAng + 0.012) + 6;
     const beamT = Math.max(16, Math.round(IW * 0.03));
     const pivotBase = h - P - (vH ? vH + 22 : 6);
-    let lay = { pivH: 64, size: floor, chips: [[], []] as Chip[][] };
+    let lay = { pivH: 64, size: floor, chips: [[], []] as Chip[][], room: 0 };
     let ok = false;
     let slack = -Infinity;
+    // a larger size that wraps a chip the floor size keeps on one line is no gain
+    const nLines = (cs: Chip[][]) => cs.flat().reduce((a, c) => a + c.lines.length, 0);
+    const fewest = nLines(items.map((its) => chipsFor(its, Math.max(READ, chipFloor) / k, IW / 2 - 14)));
     for (const pivH of [150, 125, 100, 80, 64]) {
-      for (const s of [46, 43, 40, 37, 34, 31]) {
+      // chips as large as the room allows, a step under the titles and the verdict
+      for (const s of [52, 49, 46, 43, 40, 37, 34, 31]) {
         if (s < chipFloor) break;
         const size = Math.max(s, chipFloor / k);
         const chips = items.map((its) => chipsFor(its, size, IW / 2 - 14));
         const stackH = Math.max(0, ...chips.map((cs) => cs.reduce((a, c) => a + c.h + 8, 0)));
         const plateTop = pivotBase - pivH - beamT / 2 - post - plateH;
-        lay = { pivH, size, chips };
+        lay = { pivH, size, chips, room: 0 };
+        if (size > Math.max(READ, chipFloor) / k && nLines(chips) > fewest) continue;
         const wide = chips.every((cs) => cs.every((c) => c.w <= IW / 2 - 14));
         const room = plateTop - stackH - rise - (titleBottom + 14);
         slack = Math.max(slack, room * k);
-        if (wide && textOk && titleOk && room >= 0) { ok = true; break; }
+        if (wide && textOk && titleOk && room >= 0) { ok = true; lay.room = room; break; }
       }
       if (ok) break;
     }
@@ -138,7 +143,16 @@ export default function Seesaw({ props }: { props: any }) {
     if (g.ok) { G = g; k = kk; }
   }
   if (!G.ok) ({ G, k } = best);
-  const w = bw0 / k, h = bh0 / k;
+  // a tall box would leave a void between the titles and the stacks: the panel hugs the scene and centres
+  let y0 = 0;
+  if (k === 1 && G.ok && G.lay.room > 60) {
+    const g = layoutAt(bw0, bh0 - (G.lay.room - 60), 1);
+    if (g.ok) {
+      y0 = (bh0 - (bh0 - (G.lay.room - 60))) / 2;
+      G = g;
+    }
+  }
+  const w = bw0 / k, h = bh0 / k - 2 * y0;
   const { P, IW, titleSize, tLines, titleBottom, vSize, vLines, vH, plateW, half, beamT, pivotBase, lay } = G;
   const cx = w / 2;
   const yc = pivotBase - lay.pivH;
@@ -263,7 +277,7 @@ export default function Seesaw({ props }: { props: any }) {
 
   const S = unit * k;
   return (
-    <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, transform: S !== 1 ? `scale(${S})` : undefined, transformOrigin: "0 0" }}>
+    <div style={{ position: "absolute", left: 0, top: y0 * unit, width: w, height: h, transform: S !== 1 ? `scale(${S})` : undefined, transformOrigin: "0 0" }}>
       <div style={{ position: "absolute", inset: 0, borderRadius: 36, background: C.panel, boxShadow: `0 24px 60px ${C.shadow}`,
         opacity: Math.min(1, baseS * 1.5), transform: `scale(${0.96 + 0.04 * baseS})` }} />
       {out}

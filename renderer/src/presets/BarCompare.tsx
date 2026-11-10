@@ -42,7 +42,7 @@ export default function BarCompare({ props }: { props: any }) {
   const textColorOf = (it: Item, i: number) => (it.tone || i === hl ? colorOf(it, i) : ink.ink);
   const finals = items.map((it) => valueText(it, 1));
   const labelIn = (i: number) => ease(f, ats[i] - 4, ats[i] + 6);
-  const floor = (28 * Math.min(width, height)) / 1080;
+  const floor = (30 * Math.min(width, height)) / 1080;
   const lineBreak = (s: string, bw: number, size: number, weight: number) =>
     breakLines(s, bw, (t) => textWidth(t, size, FONTS.sans, weight), true, true).map((l) => l.trim()).filter(Boolean);
 
@@ -84,7 +84,9 @@ export default function BarCompare({ props }: { props: any }) {
     const wrapped = labelFit(useTwo ? two : one, bw, cap, 3, 1.2, h * 0.3);
     const labelSize = wrapped ? wrapped.size : useTwo ? two : one;
     const rows = wrapped ? wrapped.rows : useTwo ? split : items.map((it) => [it.label]);
-    return { gap, bw, value, valueSize, labelSize, rows, score: Math.min(valueSize, labelSize) };
+    // labels stacked three deep under narrow columns read worse than the same size in rows
+    const deep = Math.max(...rows.map((r) => r.length)) >= 3 ? 0.8 : 1;
+    return { gap, bw, value, valueSize, labelSize, rows, score: Math.min(valueSize, labelSize) * deep };
   })();
 
   // ---- rows, labels in a left column
@@ -129,7 +131,7 @@ export default function BarCompare({ props }: { props: any }) {
         {items.map((it, i) => {
           const g = grow[i];
           const y = y0 + pitch * i + (pitch - block) / 2;
-          const len = Math.max(it.value ? 4 : 0, (Math.abs(it.value) / max) * w * g);
+          const len = g > 0 && it.value ? Math.max(4, (Math.abs(it.value) / max) * w * g) : 0;
           return (
             <React.Fragment key={i}>
               <div style={{
@@ -165,7 +167,7 @@ export default function BarCompare({ props }: { props: any }) {
         <div style={{ position: "absolute", left: barX - 2, top: 0, width: 4, height: h, background: ink.ink, opacity: 0.5 }} />
         {items.map((it, i) => {
           const g = grow[i];
-          const len = Math.max(it.value ? 4 : 0, (Math.abs(it.value) / max) * room * g);
+          const len = g > 0 && it.value ? Math.max(4, (Math.abs(it.value) / max) * room * g) : 0;
           const cy = rowH * (i + 0.5);
           const vLines = valueLines(it, g, value, w * 0.3);
           return (
@@ -207,7 +209,7 @@ export default function BarCompare({ props }: { props: any }) {
       {items.map((it, i) => {
         const g = grow[i];
         const x = i * (bw + gap);
-        const bar = Math.max(it.value ? 4 : 0, (Math.abs(it.value) / max) * maxBar * g);
+        const bar = g > 0 && it.value ? Math.max(4, (Math.abs(it.value) / max) * maxBar * g) : 0;
         const cx = x + bw / 2;
         const vLines = valueLines(it, g, value, vw);
         const vBox = over(cx, Math.max(...valueLines(it, 1, value, vw).map((t) => textWidth(t, valueSize, FONTS.sans, 900, true))));

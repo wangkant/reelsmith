@@ -3,7 +3,8 @@
 reelsmith's MCP server is the way in for every coding agent: the agent edits, previews and renders through the same
 tools a person uses from the CLI. `reelsmith setup <agent>` writes the server into the agent's own config and
 installs the reelsmith skill where that agent loads skills; `reelsmith run --engine <agent>` lets an agent make a
-film headless. The full contract of the tools is [manual.md](manual.md); the platform reference is
+film headless. The full contract of the tools is [manual.md](manual.md), which `manual(project)` follows with the project's
+platform playbook from [platforms/](platforms/); the full reference is
 [editor-spec.md](editor-spec.md) (setup and transports in section 10, the runner in section 11).
 
 To have an agent install, check and attach reelsmith by itself, point it at [setup-for-agents.md](setup-for-agents.md).
@@ -43,7 +44,7 @@ cloned repository can carry one). The installed skill is a copy: run setup again
 `skills/reelsmith/SKILL.md` (the Agent Skills format) tells an agent what reelsmith is (an editor it drives, not a
 text-to-video model), when to use it (any request to make or edit a video), the working loop (manual, notes, new
 project, assets, edit, preview, check, render, review) and the rules that save a render. It is short and
-sends the agent to the `manual` tool for the contract.
+sends the agent to the `manual` tool (with the project, to get its platform's playbook) for the contract.
 
 ## Claude Code
 

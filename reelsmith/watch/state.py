@@ -223,6 +223,7 @@ def assets_of(root: Path, doc: D.Document, base: str) -> list[dict]:
     for aid, a in doc.assets.items():
         path = project_file(root, a.path)
         row = {"id": aid, "kind": a.kind, "path": a.path, "url": project_url(root, a.path, base),
+               "note": a.note or None, "site": a.site or None,
                "width": None, "height": None, "duration": None, "missing": path is None or not path.is_file()}
         if not row["missing"]:
             if a.kind in ("image", "evidence"):
@@ -266,7 +267,124 @@ def _row_issue(row: str, source: str, film: Film | None) -> dict:
     where = m.group("where") + (f" @ {m.group('t')}s" if t is not None else "")
     issue = _issue(m.group("level"), m.group("where"), m.group("msg"), source, film, t)
     issue["text"] = f"{where}: {m.group('msg')}"
+    coded = layout_code(m.group("msg"))
+    if coded:
+        issue.update(code=coded["code"], params=coded["params"], message=coded["text"])
     return issue
+
+
+# ------------------------------------------------------------------ strings as codes
+# English fallbacks of every code the server composes from known parts; the page translates by code.
+TEXTS = {
+    "result.none": "No film has been delivered",
+    "result.current": "The delivered film matches the current cut",
+    "result.stale": "The delivered film predates the current cut",
+    "render.refused": "The last render was refused: {error}",
+    "render.refused.check": "The last render was refused: the project has errors",
+    "render.refused.layout": "The last render was refused: text lies where it cannot be read",
+    "render.refused.film_check": "The last render was refused: the film failed its delivery checks",
+    "render.refused.component": "The last render was refused: a component failed",
+    "render.refused.infra": "The last render was refused: the renderer failed",
+    "layout.cut_by_edge": "Text \"{text}\" is cut by the {side} edge of the canvas ({px} px)",
+    "layout.outside_safe": "Text \"{text}\" lies {px} px outside the safe area ({side})",
+    "layout.text_tiny": "Text \"{text}\" is {px} px high, below the minimum of {min} px",
+    "layout.text_small": "Text \"{text}\" is {px} px high, below the recommended {min} px",
+    "layout.overlap": "Text \"{text}\" overlaps {other}",
+    "layout.cut_by_card": "Text \"{text}\" is partly hidden by its own card ({share} %)",
+    "layout.low_contrast": "Text \"{text}\" has a contrast of {ratio}:1 against its background",
+    "layout.overflow_box": "Text \"{text}\" overflows its box by {px} px ({side})",
+    "busy.action": "Another action is running",
+    "busy.chat": "The agent is working on a request",
+    "busy.render": "A render or preview of this project is running",
+    "project.invalid": "The project does not load",
+    "render.current": "The delivered film already matches the current cut",
+    "undo.empty": "There is no change to undo",
+    "redo.empty": "There is no undone change to restore",
+    "stop.idle": "Nothing is running",
+    "stop.pending": "The request is being stopped",
+    "stop.unsupported": "A render started from the window cannot be interrupted; it ends by itself",
+    "accept.not_current": "Only a delivered film that matches the current cut can be accepted",
+    "reveal.no_film": "No film has been delivered",
+    "frame.failed": "The frame could not be rendered: {error}",
+    "action.unknown": "Unknown action \"{action}\"; use render, check, undo, redo or stop",
+    "action.render.ok": "The film was rendered and delivered",
+    "action.render.failed": "The render was refused",
+    "action.check.ok": "The check found no errors",
+    "action.check.failed": "The check found errors",
+    "action.undo.ok": "The last change was undone",
+    "action.undo.failed": "Nothing was undone",
+    "action.redo.ok": "The undone change was restored",
+    "action.redo.failed": "Nothing was restored",
+}
+STAGES = {"check": ("stage.check", "checking the project"), "layout": ("stage.layout", "measuring layout"),
+          "film": ("stage.film", "rendering frames"), "master": ("stage.master", "mastering loudness"),
+          "film check": ("stage.film_check", "checking the film"), "sweep": ("stage.sweep", "measuring the whole film"),
+          "stills": ("stage.stills", "rendering stills")}
+VERBS = {"render": "rendering the film", "preview": "rendering stills", "check": "checking the project",
+         "edit": "editing the cut", "undo": "undoing the last change", "redo": "restoring the undone change",
+         "review": "reviewing the film", "speak": "recording the narration", "draw": "generating a picture",
+         "animate": "animating a picture", "capture": "capturing a web page", "transcribe": "transcribing audio",
+         "import_asset": "importing an asset", "frames": "extracting frames", "scenes": "finding scene changes",
+         "silences": "finding silences", "typecheck": "checking the components", "new_project": "creating the project",
+         "export_captions": "exporting the captions", "probe": "inspecting a file", "note": "recording a note"}
+
+
+def say(code: str, english: str | None = None, /, **params) -> dict:
+    """{"code", "params", "text"}: the English is TEXTS[code] filled in, unless given."""
+    return {"code": code, "params": params, "text": english if english is not None else TEXTS[code].format(**params)}
+
+
+def running_view(row: dict | None, by: str) -> dict | None:
+    """presence.running's row with what it means: by "window" (an action of this window), "chat" (its agent) or
+    "agent" (any other caller); a code, its parameters and the English sentence."""
+    if row is None:
+        return None
+    tool = str(row.get("tool") or "")
+    verb = VERBS.get(tool, f"running {tool}")
+    stage = STAGES.get(row.get("stage") or "")
+    pct = None if row.get("progress") is None else round(row["progress"] * 100)
+    text = verb[0].upper() + verb[1:] if by == "window" else f"The agent is {verb}"
+    if stage:
+        text += f": {stage[1]}"
+    if pct is not None:
+        text += f" ({pct} %)"
+    params = {"tool": tool, "by": by, "stage": stage[0] if stage else None, "percent": pct}
+    return {**row, "by": by, "code": f"running.{tool}" if tool in VERBS else "running.tool",
+            "stage_code": params["stage"], "percent": pct, "params": params, "text": text}
+
+
+_QUOTE = r'^text(?: "(?P<text>.*?)")? '
+_ALSO = re.compile(r"\(also at ([^)]*)\)")
+_LAYOUT_CODES = (
+    ("layout.cut_by_edge", re.compile(_QUOTE + r"is cut by the canvas edge \((?P<side>\w+), (?P<px>\d+) px\)", re.S)),
+    ("layout.outside_safe", re.compile(_QUOTE + r"sits (?P<px>\d+) px outside the safe area \((?P<side>\w+)\)", re.S)),
+    ("layout.text_size", re.compile(_QUOTE + r"is (?P<px>[\d.]+) px.*?: under (?P<min>[\d.]+) px is hard to read",
+                                    re.S)),
+    ("layout.cut_by_card", re.compile(_QUOTE + r"is cut by its own card: (?P<share>\d+)% of it", re.S)),
+    ("layout.low_contrast", re.compile(_QUOTE + r"\((?P<color>[^)]*)\) on a background of about (?P<bg>\S+) has "
+                                                r"contrast (?P<ratio>[\d.]+):1", re.S)),
+    ("layout.overflow_box", re.compile(_QUOTE + r"overflows its clip box by (?P<px>\d+) px \((?P<side>\w+)\)", re.S)),
+    ("layout.overlap", re.compile(_QUOTE + r"overlaps (?P<other>.+?)(?: \(also at [^)]*\))?: move one", re.S)),
+)
+
+
+def layout_code(msg: str) -> dict | None:
+    """A layout row's message (checks._layout_issue) as a code with its parameters; None for any other text."""
+    for code, pattern in _LAYOUT_CODES:
+        m = pattern.match(msg)
+        if not m:
+            continue
+        params = {k: v for k, v in m.groupdict().items()}
+        params["text"] = params.get("text") or ""
+        for key in ("px", "min", "share", "ratio"):
+            if params.get(key) is not None:
+                params[key] = float(params[key]) if "." in params[key] else int(params[key])
+        if code == "layout.text_size":
+            code = "layout.text_tiny" if "render refuses" in msg else "layout.text_small"
+        also = _ALSO.search(msg)
+        params["also"] = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)s", also.group(1))] if also else []
+        return say(code, **params)
+    return None
 
 
 def issues_of(root: Path, film: Film | None, cut: str | None) -> list[dict]:
@@ -302,13 +420,62 @@ def render_of(root: Path, base: str, cut: str | None) -> dict:
     return out
 
 
-def spend_of(root: Path) -> dict | None:
+def spend_of(root: Path) -> dict:
+    """The project's provider spend and the chat's model spend, each against its own budget (null when unknown)."""
+    from .. import runner
+    out = {"project_usd": None, "project_budget_usd": None, "chat_usd": None, "chat_budget_usd": None}
     try:
         from ..providers.config import context
         ctx = context(root)
-        return {"project_usd": ctx.ledger().spent(ctx.project_key), "budget_usd": ctx.budget.get("per_project_usd")}
+        out.update(project_usd=ctx.ledger().spent(ctx.project_key),
+                   project_budget_usd=ctx.budget.get("per_project_usd"))
     except Exception:  # noqa: BLE001 - spend is a side panel; a bad workspace config shows as no spend
-        return None
+        pass
+    chat = runner.read_json(root / runner.CHAT_STATE_FILE, {}) or {}
+    out["chat_usd"] = round(float(chat.get("cost_usd") or 0), 4)
+    try:
+        out["chat_budget_usd"] = runner.settings_for(find_workspace(root)).budget_usd
+    except WorkspaceError:
+        pass
+    return out
+
+
+def result_of(root: Path, render: dict, cut: str | None, film: Film | None, base: str = "") -> dict:
+    """The film's standing: none, current, stale (delivered from another cut) or refused (the last render of this
+    cut stopped), with the reason as a code."""
+    delivered = render["delivered"]
+    out = {"state": "none", "reason_code": "result.none", "params": {}, "reason": TEXTS["result.none"], "stage": None,
+           "t": None, "clip": None, "beat": None, "film": delivered, "frame": None, "accepted": None}
+    path = root / "build" / "report.json"
+    rep = _read_json(path)
+    film_mtime = (root / "out" / "film.mp4").stat().st_mtime if delivered else 0
+    if (isinstance(rep, dict) and not rep.get("ok") and cut and (rep.get("inputs") or {}).get("cut") == cut
+            and path.stat().st_mtime >= film_mtime):
+        stage = str(rep.get("stage") or "")
+        coded = None
+        if stage == "layout":
+            rows = [_row_issue(r, "layout", film) for r in rep.get("layout") or []]
+            first = next((r for r in rows if r["level"] == "error"), rows[0] if rows else None)
+            if first is not None:
+                out.update(t=first["t"], clip=first["clip"])
+                coded = say(first["code"], **first["params"]) if first.get("code") else None
+        key = f"render.refused.{stage.replace(' ', '_')}"
+        coded = coded or (say(key) if key in TEXTS else say("render.refused", error=str(rep.get("error") or "")))
+        out.update(state="refused", stage=stage, reason_code=coded["code"], params=coded["params"],
+                   reason=coded["text"])
+        for shot in rep.get("layout_frames") or []:
+            rel = str(shot).replace("\\", "/")
+            rel = "build/" + rel.split("/build/", 1)[1] if "/build/" in rel else rel
+            out["frame"] = project_url(root, rel, base)
+            break
+    elif delivered:
+        current = delivered.get("matches_cut") is True
+        code = "result.current" if current else "result.stale"
+        out.update(state="current" if current else "stale", reason_code=code, reason=TEXTS[code])
+        mark = _read_json(root / "out" / "accepted.json")
+        if current and isinstance(mark, dict) and mark.get("cut") == cut:
+            out["accepted"] = {"at": mark.get("at")}
+    return out
 
 
 def summary_of(state: dict) -> dict:
@@ -331,6 +498,330 @@ def summary_of(state: dict) -> dict:
     levels = [i["level"] for i in state["issues"]]
     return {"clips": len(clips), "tracks": len(tracks), "narrated_s": round(narrated, 1), "covered": covered,
             "errors": levels.count("error"), "warnings": levels.count("warning"), "batches": len(state["history"])}
+
+
+# ------------------------------------------------------------------ beats: the film told line by line
+EPS = 0.05                          # an overlap shorter than this does not carry a clip into the next beat
+PAUSE_S = 0.3                       # without narration: a caption pause this long, or a cut this near, ends a beat
+GROUP_S = 8.0                       # and a caption group this long ends at its next phrase
+PRESETS = {   # built-in components: (kind, name code, English name)
+    "StoryBeats": ("card", "card.steps", "Step-by-step card"),
+    "CountUp": ("figure", "figure.count", "Large figure"),
+    "BarCompare": ("figure", "figure.bars", "Bar chart"),
+    "DotGrid": ("figure", "figure.dots", "Dot grid"),
+    "Versus": ("card", "card.versus", "Comparison"),
+    "Seesaw": ("card", "card.seesaw", "Gains and losses"),
+    "Receipt": ("card", "card.receipt", "Itemised receipt"),
+    "QuoteCard": ("card", "card.quote", "Quotation card"),
+    "NewsBrief": ("card", "card.news", "News summary card"),
+    "Parties": ("card", "card.parties", "Parties diagram"),
+    "TimelineRule": ("card", "card.timeline", "Timeline"),
+    "Stamp": ("card", "card.stamp", "Verdict stamp"),
+    "EvidenceCard": ("evidence", "evidence.card", "Evidence card"),
+    "Arrow": ("shape", "shape.arrow", "Arrow"),
+    "Highlighter": ("shape", "shape.highlight", "Highlight stroke"),
+}
+SHAPES = {"ellipse": ("shape.circle", "Circle mark"), "line": ("shape.line", "Line"), "arrow": ("shape.arrow", "Arrow"),
+          "path": ("shape.path", "Drawn mark")}
+SHOTS = {"shot.footage": "Footage", "shot.still": "Still image", "shot.inset": "Inset picture"}
+SOUNDS = {"sound.bed": "Sound bed", "sound.effect": "Sound effect"}
+MOTIONS = {"push": "slow push-in", "pull": "slow pull-out", "pan_left": "pan left", "pan_right": "pan right",
+           "rise": "rise"}
+_READABLE = ("title", "header", "headline", "quote", "who", "role", "name", "when", "text", "label", "display",
+             "source", "date", "label_lit", "label_rest")
+_SENTENCE_END = tuple(".?!。？！…")
+
+
+def element_name(c: dict, canvas: dict | None) -> tuple[str, str, str]:
+    """(kind, name code, English name) of a visual clip that is not a picture."""
+    raw = c["raw"]
+    if c["type"] == "component":
+        return PRESETS.get(c["label"]) or ("component", "component.custom", c["label"])
+    if c["type"] == "evidence":
+        return "evidence", "evidence.card", "Evidence card"
+    if c["type"] == "shape":
+        shape = raw.get("shape") or "rect"
+        if shape == "rect":
+            return ("shape", "shape.plate", "Backing plate") if raw.get("fill") else ("shape", "shape.frame", "Frame")
+        return ("shape", *SHAPES.get(shape, ("shape.path", "Drawn mark")))
+    size = (raw.get("style") or {}).get("size") if isinstance(raw.get("style"), dict) else None
+    big = size == "fit" or (isinstance(size, (int, float)) and canvas and size >= 0.06 * canvas["height"])
+    return ("title", "text.title", "Title") if big else ("text", "text.overlay", "Overlay text")
+
+
+def _props_words(value) -> list[str]:
+    """What a person reads in a component's props, in their order (lists of bare values are positions or word
+    lists to highlight, not words to read)."""
+    if isinstance(value, dict):
+        own = [value[k].strip() for k in _READABLE if isinstance(value.get(k), str) and value[k].strip()]
+        if isinstance(value.get("value"), (int, float, str)) and not isinstance(value["value"], bool):
+            figure = f"{value.get('prefix') or ''}{value['value']}{value.get('suffix') or ''}"
+            # a figure with its unit leads ("¥5 gross margin"); a row's value follows its label ("Tea ¥2.5")
+            own = [figure, *own] if value.get("prefix") or value.get("suffix") else [*own, figure]
+        rest = [w for v in value.values() if isinstance(v, (dict, list)) for w in _props_words(v)]
+        return ([" ".join(own)] if own else []) + rest
+    if isinstance(value, list):
+        return [w for v in value if isinstance(v, (dict, list)) for w in _props_words(v)][:12]
+    return []
+
+
+def _one_line(text: str, limit: int = 140) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def element_summary(c: dict, assets: dict) -> str | None:
+    if c["type"] == "text":
+        return _one_line(c["label"]) or None
+    if c["type"] == "component":
+        words = _props_words(c["raw"].get("props") or {})
+        return _one_line(" · ".join(w for w in words if w)) or None
+    if c["type"] == "evidence":
+        a = assets.get(c["asset"]) or {}
+        return _one_line(a.get("note") or a.get("site") or c["asset"]) or None
+    return None
+
+
+def picture_subject(note: str) -> str | None:
+    """A short subject from an asset's note (often a generation prompt): its first clause."""
+    note = re.sub(r"^from [\w.-]+:\s*", "", str(note or "").strip())
+    first = re.split(r"[.,;:|。，；：]", note, maxsplit=1)[0].strip()
+    return _one_line(first, 60) or None
+
+
+def shot_notes(c: dict) -> list[dict]:
+    raw, out = c["raw"], []
+    rate = c.get("rate")
+    if isinstance(rate, (int, float)) and rate != 1:
+        out.append(say("shot.speed", f"{rate:g}x speed", rate=rate))
+    if c.get("reverse"):
+        out.append(say("shot.reversed", "reversed"))
+    if c.get("hold") is not None:
+        out.append(say("shot.held", "held frame"))
+    if c.get("loop"):
+        out.append(say("shot.looped", "looped"))
+    if c.get("transition"):
+        kind = c["transition"]["type"]
+        out.append(say("shot.transition_in", f"{kind.replace('_', ' ')} in", type=kind))
+    if raw.get("motion") in MOTIONS:
+        out.append(say("shot.motion", MOTIONS[raw["motion"]], motion=raw["motion"]))
+    return out
+
+
+def _source_t(c: dict, at: float) -> float:
+    """The asset second a video clip shows at film second `at` (thumbnails only: loops and reverse are ignored)."""
+    if c.get("hold") is not None:
+        return float(c["hold"])
+    rate = c.get("rate") or 1.0
+    return round(float(c["raw"].get("trim_in") or 0) + max(0.0, at - c["start"]) * rate, 2)
+
+
+def beat_windows(state: dict) -> list[dict]:
+    """[{start, end, line, line_i, kind}]: one per voice line (to the next line's start; the first from 0, the last
+    to the end); without narration one per caption phrase group, else one per full-frame shot."""
+    end = state["duration"]
+    if not end:
+        return []
+    voice = state["voice"]
+    if voice and voice["lines"]:
+        lines = sorted((ln for ln in voice["lines"] if ln["start"] < end), key=lambda ln: ln["start"])
+        starts = [0.0] + [ln["start"] for ln in lines[1:]]
+        return [{"start": round(a, _ROUND), "end": round(b, _ROUND), "line": ln["text"], "line_i": ln["i"],
+                 "kind": "line"} for ln, a, b in zip(lines, starts, starts[1:] + [end])]
+    starts, cuts = [], []
+    for c in sorted(_visible(state, ("image", "video")), key=lambda c: c["start"]):
+        if c["box"] == "full" and (not cuts or c["start"] - cuts[-1] > EPS):
+            cuts.append(c["start"])
+    phrases = _phrases(state)
+    if phrases:
+        # a group of phrases ends at a pause, a sentence's end, a cut to another shot since the last phrase began,
+        # or once GROUP_S long
+        prev = None
+        for p in phrases:
+            if (prev is None or p["start"] - prev["end"] > PAUSE_S or prev["text"].rstrip().endswith(_SENTENCE_END)
+                    or any(prev["start"] + PAUSE_S < cut <= p["start"] + PAUSE_S for cut in cuts)
+                    or p["start"] - starts[-1] >= GROUP_S):
+                starts.append(p["start"])
+            prev = p
+        kind = "phrase"
+    else:
+        starts, kind = cuts, "shot"
+    starts = [0.0] + [s for s in starts if EPS < s < end] if starts else [0.0]
+    return [{"start": round(a, _ROUND), "end": round(b, _ROUND), "line": None, "line_i": None, "kind": kind}
+            for a, b in zip(starts, starts[1:] + [end])]
+
+
+def _phrases(state: dict) -> list[dict]:
+    cap = next((t for t in state["tracks"] if t["kind"] == "captions" and not t["hidden"]), None)
+    return [i for i in (cap or {}).get("items") or [] if i["end"] > i["start"]]
+
+
+def _visible(state: dict, types: tuple) -> list[dict]:
+    return [c for t in state["tracks"] if t["kind"] != "captions" and not t["hidden"] for c in t["clips"]
+            if c["type"] in types and c["start"] is not None and c["end"] is not None]
+
+
+def _home(windows: list[dict], t: float) -> int:
+    for i, w in enumerate(windows):
+        if t < w["end"]:
+            return i
+    return len(windows) - 1
+
+
+def _spread(windows: list[dict], start: float, end: float) -> list[tuple[int, bool]]:
+    """(window index, continues) for a span: its home window, then every later one it reaches into."""
+    home = _home(windows, start)
+    out = [(home, False)]
+    for i in range(home + 1, len(windows)):
+        if end - windows[i]["start"] <= EPS:
+            break
+        out.append((i, True))
+    return out
+
+
+def beats_of(state: dict, base: str = "") -> list[dict]:
+    windows = beat_windows(state)
+    if not windows:
+        return []
+    beats = [{"n": i + 1, "start": w["start"], "end": w["end"], "line": w["line"], "line_i": w["line_i"],
+              "kind": w["kind"], "phrases": [], "shots": [], "elements": [], "sound": [], "issues": [],
+              "changed": False, "frame": f"{base}/api/frame?t={round((w['start'] + w['end']) / 2, 3):g}&h=180"}
+             for i, w in enumerate(windows)]
+    by_line = {w["line_i"]: i for i, w in enumerate(windows) if w["line_i"] is not None}
+    for p in _phrases(state):
+        i = by_line.get(p.get("line"), _home(windows, p["start"]))      # a phrase belongs to its own line's beat
+        beats[i]["phrases"].append({"start": p["start"], "end": p["end"], "text": p["text"]})
+    assets = {a["id"]: a for a in state["assets"]}
+    canvas = state["canvas"]
+    for c in sorted(_visible(state, ("image", "video", "text", "shape", "evidence", "component", "audio")),
+                    key=lambda c: (c["start"], c["end"])):
+        if c["type"] in ("image", "video"):
+            code = "shot.inset" if c["box"] != "full" else "shot.footage" if c["type"] == "video" else "shot.still"
+            notes = shot_notes(c)
+            row = {"clip": c["id"], "asset": c["asset"], "start": c["start"], "end": c["end"], "name_code": code,
+                   "name": SHOTS[code], "subject": picture_subject((assets.get(c["asset"]) or {}).get("note")),
+                   "notes": [n["text"] for n in notes], "note_codes": [{k: n[k] for k in ("code", "params")}
+                                                                       for n in notes]}
+            group = "shots"
+        elif c["type"] == "audio":
+            long = c.get("loop") or (c["end"] - c["start"]) >= 0.5 * state["duration"]
+            code = "sound.bed" if long else "sound.effect"
+            row = {"clip": c["id"], "asset": c["asset"], "start": c["start"], "end": c["end"], "name_code": code,
+                   "name": SOUNDS[code]}
+            group = "sound"
+        else:
+            kind, code, name = element_name(c, canvas)
+            row = {"clip": c["id"], "kind": kind, "name_code": code, "name": name,
+                   "summary": element_summary(c, assets), "start": c["start"], "end": c["end"]}
+            group = "elements"
+        for i, cont in _spread(windows, max(0.0, c["start"]), c["end"]):
+            item = dict(row, continues=cont)
+            if group == "shots":
+                mid = (max(c["start"], windows[i]["start"]) + min(c["end"], windows[i]["end"])) / 2
+                item["thumb"] = None if c["thumb"] is None else c["thumb"] + (
+                    f"&t={_source_t(c, mid):g}" if c["type"] == "video" else "")
+            beats[i][group].append(item)
+    for k, issue in enumerate(state["issues"]):
+        issue["beat"] = n = beat_of(beats, issue.get("clip"), issue.get("t"))
+        if n is not None:
+            beats[n - 1]["issues"].append(k)
+    return beats
+
+
+def beat_of(beats: list[dict], clip: str | None, t: float | None) -> int | None:
+    """The beat a problem belongs to: of the beats its clip is in, the one at t (times in messages are rounded to
+    0.1 s, so a clip's own beats win over a neighbour); else the beat at t."""
+    if not beats:
+        return None
+    mine = [b["n"] for b in beats if clip and any(c["clip"] == clip for g in ("shots", "elements", "sound")
+                                                  for c in b[g])]
+    at = _home(beats, t) + 1 if t is not None else None
+    if mine:
+        return at if at in mine else mine[0]
+    return at
+
+
+# ------------------------------------------------------------------ what each batch touched
+_TOUCHED: dict[tuple, dict] = {}
+
+
+def _clip_index(raw) -> tuple[dict, dict]:
+    """({clip id: (track id, canonical json)}, {track id: canonical json without its clips})."""
+    clips, tracks = {}, {}
+    for t in (raw or {}).get("tracks") or [] if isinstance(raw, dict) else []:
+        if not isinstance(t, dict):
+            continue
+        tracks[t.get("id")] = json.dumps({k: v for k, v in t.items() if k != "clips"}, sort_keys=True)
+        for c in t.get("clips") or []:
+            if isinstance(c, dict):
+                clips[c.get("id")] = (t.get("id"), json.dumps(c, sort_keys=True))
+    return clips, tracks
+
+
+def _spans(root: Path, raw, ids: set) -> list[tuple[float, float]]:
+    try:
+        film = Film(root, raw)
+    except Exception:  # noqa: BLE001 - an old snapshot may not fit today's format: no times from it
+        return []
+    out = []
+    for _, c in D.clips_of(film.doc):
+        if c.id in ids:
+            span = film.span(c)
+            if span:
+                out.append((_sec(span[0], film.fps), _sec(span[1], film.fps)))
+    return out
+
+
+def batch_changes(root: Path, n: int) -> dict | None:
+    """{"clips", "tracks", "spans"} that batch n changed: its snapshot (the cut before it) against the next one (or
+    project.json for the last); None once its snapshot is gone."""
+    from ..ops import snapshots
+    files = dict(snapshots(root))
+    if n not in files:
+        return None
+    later = [k for k in files if k > n]
+    after_path = files[min(later)] if later else root / D.PROJECT_FILE
+    key = (str(root), n, _stamp(files[n]), str(after_path), _stamp(after_path))
+    if key not in _TOUCHED:
+        before, after = _read_json(files[n]), _read_json(after_path)
+        (bc, bt), (ac, at) = _clip_index(before), _clip_index(after)
+        tracks = sorted(str(t) for t in set(bt) | set(at) if bt.get(t) != at.get(t))
+        clips = {c for c in set(bc) | set(ac) if bc.get(c) != ac.get(c)}
+        clips |= {c for c, (t, _) in list(bc.items()) + list(ac.items()) if str(t) in tracks}
+        spans = _spans(root, before, clips) + _spans(root, after, clips) if clips else []
+        _TOUCHED[key] = {"clips": sorted(str(c) for c in clips), "tracks": tracks, "spans": spans}
+        if len(_TOUCHED) > 2000:
+            _TOUCHED.pop(next(iter(_TOUCHED)))
+    return _TOUCHED[key]
+
+
+def touched_beats(windows: list[dict], spans: list[tuple[float, float]]) -> list[int]:
+    found = set()
+    for a, b in spans:
+        found |= {i + 1 for i, _ in _spread(windows, max(0.0, a), max(b, a + EPS))}
+    return sorted(found)
+
+
+def with_touched(activity: list[dict], root: Path, beats: list[dict]) -> int | None:
+    """Every row with a batch gains "touched": {"clips", "tracks", "beats"}; the latest batch's beats are marked
+    changed. Returns that batch's number."""
+    windows = [{"start": b["start"], "end": b["end"]} for b in beats]
+    latest = None
+    for row in activity:
+        n = row.get("batch")
+        if not isinstance(n, int) or isinstance(n, bool):
+            continue
+        got = batch_changes(root, n)
+        if got is None:
+            row["touched"] = None
+            continue
+        row["touched"] = {"clips": got["clips"], "tracks": got["tracks"],
+                          "beats": touched_beats(windows, got["spans"]) if windows else []}
+        latest = row if latest is None or n >= latest["batch"] else latest
+    if latest is not None:
+        for n in latest["touched"]["beats"]:
+            beats[n - 1]["changed"] = True
+    return latest["batch"] if latest else None
 
 
 def tidier(root: Path):
@@ -522,6 +1013,13 @@ def build_state(root: str | Path, base: str = "") -> dict:
     state["spend"] = spend_of(root)
     state["history"] = history_of(root)
     state["activity"] = with_batches(activity_of(root), state["history"])
+    state["beats"] = beats_of(state, base) if film is not None else []
+    state["latest_batch"] = with_touched(state["activity"], root, state["beats"])
+    state["result"] = result_of(root, state["render"], cut, film, base)
+    state["result"]["beat"] = beat_of(state["beats"], state["result"]["clip"], state["result"]["t"])
+    state["cut"] = cut
+    state["can_undo"] = bool(state["history"])
+    state["can_redo"] = (root / ".history" / "redo.json").is_file()
     state["summary"] = summary_of(state)
     # the components draw the picture: an edit to one is a change the window must hear of
     parts = sorted(p for p in ws.components_dir.rglob("*") if p.is_file()) if ws and ws.components_dir.is_dir() else []
@@ -541,7 +1039,8 @@ def watched(root: Path) -> list[Path]:
     files = [root / D.PROJECT_FILE, root / "voice" / "voice.json", root / "voice", root / "assets",
              root / ".history" / "log.jsonl", root / ".history" / ACTIVITY,
              root / "build" / "report.json", root / "out" / "report.json", root / "out" / "film.mp4",
-             root / "build" / "draft.mp4", root / "ledger.jsonl"]
+             root / "out" / "accepted.json", root / "build" / "draft.mp4", root / "build" / "chat_state.json",
+             root / ".history" / "redo.json", root / "ledger.jsonl"]
     if ws is not None:
         files += [ws.ledger_path, ws.root / "workspace.json", ws.root / "rules.json", ws.components_dir]
         if ws.components_dir.is_dir():     # a component edited in place changes the picture, not the folder

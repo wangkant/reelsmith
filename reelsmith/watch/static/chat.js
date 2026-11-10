@@ -1,10 +1,13 @@
+import { BASE, post as act } from "./api.js";
+import { kindName } from "./beats.js";
 import { t } from "./i18n.js";
-import { busy, clamp, clock, disable, elapsed, h, isOff, note, pressable, storage, store, timecode, tip } from "./util.js";
-import { BASE, disclosure, emptyState, icon, money, rove, toolIcon, toolName } from "./panel.js";
+import { busy, clamp, clock, disable, elapsed, h, icon, isOff, lowerFirst, note, pressable, storage, store, timecode, tip } from "./util.js";
+import { disclosure, emptyState, money, rove, toolName } from "./panel.js";
 
 const MAX_MESSAGE = 8000;
-const KEPT_ROWS = 600;                  // rows the log keeps in the page; older ones scroll out of memory
+const KEPT_ROWS = 600;                  // chat rows the thread keeps in the page; older ones scroll out of memory
 const SUGGESTIONS = ["chat.try1", "chat.try2", "chat.try3"];
+const RENDER_STAGES = ["check", "layout", "film", "master", "film check"];
 
 // Light Markdown for the agent's replies: paragraphs, lists, fenced code, inline code, bold and italics.
 function inline(text) {
@@ -19,7 +22,7 @@ function inline(text) {
   out.push(text.slice(last));
   return out;
 }
-export function markdown(text) {
+function markdown(text) {
   const out = [];
   const src = String(text || "").replace(/\r/g, "").split("\n");
   const LIST = /^\s*([-*•]|\d+[.)])\s+(.*)$/;
@@ -55,42 +58,27 @@ export function markdown(text) {
   return out;
 }
 
+// The session: one thread of the person's requests, the agent's steps and its replies, and the composer under it.
 export function createChat(app, panel) {
   const $ = (id) => document.getElementById(id);
   const log = $("chatLog"), input = $("chatInput"), form = $("composer"), send = $("sendBtn");
   const engineBtn = $("engineBtn"), menu = $("engineMenu"), ctxRow = $("ctxRow"), hint = $("composeHint");
-  const errLine = $("composeErr"), pill = $("chatNew"), dot = $("chatDot");
+  const errLine = $("composeErr"), pill = $("chatNew");
 
   const S = {
     loaded: false, gone: false, busy: false, turn: null, stopping: false, engines: [], fallback: null, session: null,
     spent: 0, budget: null, rows: new Map(), sending: false, stopAsked: false,
   };
   let picked = storage("engine", null);
-  const els = new Map();           // row id -> its element in the log
 
   // ---------------------------------------------------------------- talking to the server
-  let token = null;
-  async function getToken() {
-    if (!token) {
-      const r = await fetch(`${BASE}/api/session`, { cache: "no-store" });
-      if (!r.ok) throw Object.assign(new Error(`${r.status}`), { status: r.status });
-      token = (await r.json()).token;
+  async function post(path, body) {
+    try {
+      return { status: 200, data: await act(path, body) };
+    } catch (e) {
+      if (e.status == null) throw e;
+      return { status: e.status, data: { error: e.message, code: e.code, params: e.params } };
     }
-    return token;
-  }
-  async function post(path, body, again = true) {
-    const r = await fetch(`${BASE}${path}`, {
-      method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json", "X-Reelsmith-Token": await getToken() },
-      body: JSON.stringify(body),
-    });
-    let data = null;
-    try { data = await r.json(); } catch { /* not JSON */ }
-    if (r.status === 403 && again && /header/.test(data?.error || "")) {      // a restarted server has a new token
-      token = null;
-      return post(path, body, false);
-    }
-    return { status: r.status, data };
   }
 
   let loadTimer = 0;
@@ -107,40 +95,37 @@ export function createChat(app, panel) {
     }
   }
   function apply(st) {
-    const first = !S.loaded;
     S.loaded = true;
     S.gone = false;
     S.busy = !!st.busy; S.turn = st.turn; S.stopping = !!st.stopping;
     S.engines = st.engines || []; S.fallback = st.engine; S.session = st.session_engine;
+    app.noEngine = !S.engines.some((e) => e.available);      // the session head says so instead of "ready"
     S.spent = st.spent_usd || 0; S.budget = st.budget_usd;
     S.rows = new Map((st.messages || []).map((r) => [r.id, r]));
     if (!S.busy) S.stopAsked = false;
-    renderAll();
-    if (first && !S.engines.some((e) => e.available) && !panel.touched()) panel.show(1, false);
+    tellBusy();
+    renderLog(true);
+    renderControls();
   }
   function merge(d) {
     if (d.resync) { load(); return; }
-    const fresh = [];
+    let fresh = 0;
     for (const r of d.rows || []) {
-      const known = S.rows.has(r.id);
+      if (!S.rows.has(r.id) && r.role !== "tool") fresh += 1;
       S.rows.set(r.id, r);
-      if (!known) fresh.push(r);
       if (r.role === "note") {
         if (r.spent_usd != null) S.spent = r.spent_usd;
         if (r.budget_usd != null) S.budget = r.budget_usd;
       }
-      putRow(r);
     }
     if ("busy" in d) S.busy = !!d.busy;
     if ("turn" in d) S.turn = d.turn;
     if ("stopping" in d) S.stopping = !!d.stopping;
     if (!S.busy) S.stopAsked = false;
+    tellBusy();
     trim();
-    renderWorking();
+    renderLog(false, fresh);
     renderControls();
-    afterAppend(fresh.length);
-    if (fresh.some((r) => r.role === "assistant" || r.role === "note") && panel.current() !== 0) unread = true;
-    renderDot();
   }
 
   // an events stream of its own: the chat's rows come on it as "chat" events
@@ -154,182 +139,208 @@ export function createChat(app, panel) {
       if (es.readyState === EventSource.CLOSED) { es.close(); setTimeout(listen, 2000); }
     };
   }
+  // the session head says the agent is at work while a request runs, even between tool calls
+  function tellBusy() {
+    const running = [...S.rows.values()].filter((x) => x.turn === S.turn && x.role === "tool" && x.ok == null).at(-1);
+    const k = running && `run.${running.tool}`;
+    app.chatBusy = !S.busy ? null : k && t(k) !== k ? lowerFirst(t(k)) : running ? toolName(running.tool) : t("chat.thinkingShort");
+    app.emit("chat-busy");
+  }
+  function trim() {
+    if (S.rows.size <= KEPT_ROWS) return;
+    const ids = [...S.rows.keys()].sort((a, b) => a - b);
+    for (const id of ids.slice(0, S.rows.size - KEPT_ROWS)) S.rows.delete(id);
+  }
 
-  // ---------------------------------------------------------------- the log
-  let atBottom = true, unseen = 0, unread = false;
+  // ---------------------------------------------------------------- scrolling
+  let atBottom = true, unseen = 0;
   rove(log, t("list.keys"));
   log.addEventListener("scroll", () => {
     atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 32;
     if (atBottom && unseen) { unseen = 0; renderPill(); }
   });
   new ResizeObserver(() => { if (atBottom) log.scrollTop = log.scrollHeight; }).observe(log);
+  // a picture that arrives after the entry grows the thread: the newest entry stays in view
+  log.addEventListener("load", () => { if (atBottom) log.scrollTop = log.scrollHeight; }, true);
   function toBottom(smooth = false) {
     log.scrollTo({ top: log.scrollHeight, behavior: smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
     atBottom = true;
     unseen = 0;
     renderPill();
   }
-  function afterAppend(n) {
-    if (atBottom) toBottom();
-    else if (n) { unseen += n; renderPill(); }
-  }
   function renderPill() {
     pill.hidden = !unseen;
     $("chatNewText").textContent = t("chat.newRows", { n: unseen });
   }
   pressable(pill, () => { toBottom(true); input.focus(); });
-  function renderDot() {
-    dot.hidden = !(S.busy || unread);
-    dot.classList.toggle("is-busy", S.busy);
-    tip($("tab-chat"), S.busy ? t("chat.tabBusy") : unread ? t("chat.tabUnread") : t("tab.chatTip"), "1", t("tab.chat"));
-  }
-  app.on("panel", (name) => {
-    if (name !== "chat") return;
-    unread = false;
-    renderDot();
-    requestAnimationFrame(() => { if (atBottom) toBottom(); });
-  });
+  tip(pill, t("chat.toLatest"));
 
-  function contextText(c) {
-    if (!c) return null;
-    const fps = app.fps();
-    const parts = [];
-    if (c.clip) parts.push(c.start != null && c.end != null
-      ? t("chat.about", { id: c.clip, a: timecode(c.start, fps), b: timecode(c.end, fps) }) : t("chat.aboutClip", { id: c.clip }));
-    if (c.playhead != null) parts.push(t("chat.at", { t: timecode(c.playhead, fps) }));
-    return parts.join(" · ");
+  // ---------------------------------------------------------------- entries
+  const fps = () => app.fps();
+  // what is on screen, in plain words; the id only when the clip is gone from the cut
+  const clipName = (id) => { const c = app.clipById(id, app.state?.tracks); return c ? kindName(c) : id; };
+  function contextChips(c) {
+    if (!c) return [];
+    const out = [];
+    if (c.beat != null) out.push(h("span", { class: "chip is-ctx" }, icon("i-target"),
+      c.start != null ? `${t("beats.n", { n: c.beat })} · ${timecode(c.start, fps())}–${timecode(c.end, fps())}` : t("beats.n", { n: c.beat })));
+    if (c.clip) out.push(h("span", { class: "chip is-ctx" }, icon("i-target"),
+      c.start != null ? t("chat.about", { id: clipName(c.clip), a: timecode(c.start, fps()), b: timecode(c.end, fps()) }) : t("chat.aboutClip", { id: clipName(c.clip) })));
+    if (c.playhead != null) out.push(h("span", { class: "chip" }, icon("i-timer"), t("chat.playheadAt", { t: timecode(c.playhead, fps()) })));
+    return out;
   }
 
+  function tryAgain(r) {
+    const b = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-undo"), h("span", { text: t("chat.tryAgain") }));
+    tip(b, t("chat.tryAgainTip"));
+    pressable(b, () => {
+      const user = [...S.rows.values()].find((x) => x.role === "user" && x.turn === r.turn);
+      if (!user) { note(b, t("chat.noOriginal"), "is-error"); return; }
+      setInput(user.text);
+      input.focus();
+      note(b, t("chat.refilled"));
+    });
+    return b;
+  }
   function noteEl(r) {
     const cost = money(r.cost_usd || 0);
-    const tryAgain = () => {
-      const b = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-undo"), h("span", { text: t("chat.tryAgain") }));
-      tip(b, t("chat.tryAgainTip"));
-      pressable(b, () => {
-        const user = [...S.rows.values()].find((x) => x.role === "user" && x.turn === r.turn);
-        if (!user) { note(b, t("chat.noOriginal"), "is-error"); return; }
-        setInput(user.text);
-        input.focus();
-        note(b, t("chat.refilled"));
-      });
-      return b;
-    };
     const used = r.budget_used_up ? h("p", { class: "c-note-more", text: t("chat.budgetNow", { budget: money(r.budget_usd) }) }) : null;
     switch (r.kind) {
-      case "end":
-        return h("div", { class: "c-end" }, h("span", { text: t("chat.done") }), h("span", { class: "num", text: cost }),
-          h("span", { class: "c-time num", text: clock(r.ts) }), used);
       case "stopped":
         return h("div", { class: "c-end is-warn" }, h("span", { text: t("chat.stopped") }), h("span", { class: "num", text: cost }),
-          h("span", { class: "c-time num", text: clock(r.ts) }), tryAgain());
+          h("span", { class: "c-time num", text: clock(r.ts).slice(0, 5) }), tryAgain(r));
       case "budget":
         return h("div", { class: "c-card is-error" }, h("strong", {}, icon("i-alert"), t("chat.budgetTitle")),
           h("p", { text: t("chat.budgetBody", { spent: money(r.spent_usd), budget: money(r.budget_usd) }) }));
       case "aborted": {
         const why = (/ended early: (.*?)\. It cost/.exec(r.text) || [])[1] || r.text;
         return h("div", { class: "c-card is-warn" }, h("strong", {}, icon("i-alert"), t("chat.aborted")),
-          h("p", { class: "c-detail", text: why }), h("div", { class: "c-card-foot" }, h("span", { class: "num dim", text: cost }), tryAgain()), used);
+          h("p", { class: "c-detail", text: why }), h("div", { class: "c-card-foot" }, h("span", { class: "num dim", text: cost }), tryAgain(r)), used);
       }
       default: {
-        const why = String(r.text || "").replace(/^The turn failed:\s*/, "");
+        const why = String(r.text || "").replace(/^The (turn|request) failed:\s*/, "");
         return h("div", { class: "c-card is-error" }, h("strong", {}, icon("i-alert"), t("chat.failed")),
-          h("p", { class: "c-detail", text: why }), h("div", { class: "c-card-foot" }, h("span", { class: "dim", text: t("chat.failedNext") }), tryAgain()), used);
+          h("p", { class: "c-detail", text: why }), h("div", { class: "c-card-foot" }, h("span", { class: "dim", text: t("chat.failedNext") }), tryAgain(r)), used);
       }
     }
   }
 
-  function toolEl(r) {
-    const state = r.ok == null ? "is-running" : r.ok ? "is-ok" : "is-fail";
-    const status = r.ok == null ? h("span", { class: "spin c-spin", "aria-hidden": "true" })
-      : icon(r.ok ? "i-check" : "i-alert", "c-status");
-    const head = [status, icon(toolIcon(r.tool), "c-tool-ic"), h("span", { class: "c-tool-name", text: toolName(r.tool) }),
-      r.text ? h("span", { class: "c-brief mono", text: r.text }) : null,
-      h("span", { class: "sr-only", text: r.ok == null ? t("chat.toolRunning") : r.ok ? t("chat.toolOk") : t("chat.toolFailed") })];
-    if (!r.detail) {
-      const div = h("div", { class: `c-tool ${state}` }, h("div", { class: "c-tool-head" }, ...head));
-      tip(div, `${toolName(r.tool)}${r.text ? ` · ${r.text}` : ""}`);
-      return div;
-    }
-    const pre = h("pre", { class: "c-result", text: r.detail });
-    const open = r.ok === false && openRows.has(r.id);
-    const btn = disclosure("", pre, open, (on) => { on ? openRows.add(r.id) : openRows.delete(r.id); }, "c-tool-head");
-    btn.replaceChildren(...head.filter(Boolean), icon("i-chev", "disc-chev"));
-    tip(btn, r.ok === false ? t("chat.toolFailedTip") : t("chat.toolResultTip"));
-    return h("div", { class: `c-tool ${state}` }, btn, pre);
+  // The agent's reply carries its turn's length and cost once the turn has ended.
+  function turnFacts(r) {
+    const rows = [...S.rows.values()];
+    const end = rows.find((x) => x.role === "note" && x.turn === r.turn);
+    if (!end) return null;
+    const last = rows.filter((x) => x.role === "assistant" && x.turn === r.turn).at(-1);
+    if (last?.id !== r.id) return null;
+    const user = rows.find((x) => x.role === "user" && x.turn === r.turn);
+    const secs = user ? (Date.parse(end.ts) - Date.parse(user.ts)) / 1000 : null;
+    return [secs != null && secs >= 0 ? elapsed(secs) : null, money(end.cost_usd || 0)].filter(Boolean).join(" · ");
   }
-  const openRows = new Set();
-
   function rowEl(r) {
     if (r.role === "user") {
-      const ctx = contextText(r.context);
+      const chips = contextChips(r.context);
       return h("div", { class: "c-row c-user", "data-id": r.id },
-        h("div", { class: "c-bubble" }, h("div", { class: "c-text", text: r.text })),
-        h("div", { class: "c-meta" },
-          ctx ? h("span", { class: "c-ctx" }, icon("i-target"), ctx) : null,
-          h("span", { class: "num", text: clock(r.ts) })));
+        h("div", { class: "c-head" }, h("span", { class: "c-who", text: t("chat.request") }), h("span", { class: "grow" }),
+          h("span", { class: "c-time num", text: clock(r.ts).slice(0, 5) })),
+        chips.length ? h("div", { class: "c-chips" }, ...chips) : null,
+        h("div", { class: "c-text", text: r.text }));
     }
-    if (r.role === "assistant") return h("div", { class: "c-row c-agent", "data-id": r.id }, h("div", { class: "md" }, ...markdown(r.text)));
-    if (r.role === "tool") return h("div", { class: "c-row c-toolrow", "data-id": r.id }, toolEl(r));
+    if (r.role === "assistant") {
+      const facts = turnFacts(r);
+      return h("div", { class: `c-row c-agent${facts == null ? " is-interim" : ""}`, "data-id": r.id },
+        h("div", { class: "c-head" }, h("span", { class: "c-who", text: t("chat.agent") }),
+          facts ? h("span", { class: "c-facts num", text: facts }) : null, h("span", { class: "grow" }),
+          h("span", { class: "c-time num", text: clock(r.ts).slice(0, 5) })),
+        h("div", { class: "md" }, ...markdown(r.text)));
+    }
     return h("div", { class: "c-row c-noterow", "data-id": r.id }, noteEl(r));
   }
 
-  function putRow(r) {
-    const el = rowEl(r);
-    const old = els.get(r.id);
-    if (old) old.replaceWith(el);
-    else {
-      empty?.remove();
-      empty = null;
-      yieldIntro();
-      log.insertBefore(el, working.isConnected ? working : null);
+  // The live entry at the foot of the thread: what the agent is doing now, with the render's stages when it renders.
+  const live = h("div", { class: "act is-live", role: "status" });
+  let liveKey = "";
+  function renderLive() {
+    const r = app.running;
+    const chatBusy = S.busy;
+    if (!r && !chatBusy) { live.remove(); liveKey = ""; return false; }
+    const rt = app.runText?.();
+    const stopping = S.stopping || S.stopAsked;
+    const running = [...S.rows.values()].filter((x) => x.turn === S.turn && x.role === "tool" && x.ok == null).at(-1);
+    const what = stopping ? t("chat.stopping") : r ? rt.what : running ? t("chat.usingTool", { tool: toolName(running.tool) }) : t("chat.thinking");
+    const since = r ? null : turnStart();
+    const secs = r ? rt.secs : since ? Math.max(0, (Date.now() - since) / 1000) : null;
+    const key = JSON.stringify([what, r?.tool, r?.stage, r?.progress, stopping, Math.floor(secs || 0)]);
+    if (key === liveKey) return live.isConnected;
+    liveKey = key;
+    const head = h("div", { class: "act-head" }, h("span", { class: "act-text", text: what }),
+      h("span", { class: "act-side" }, secs != null ? h("span", { class: "act-time num", text: t("act.elapsed", { d: elapsed(secs) }) }) : null));
+    const body = [head];
+    if (r && /^(render|draft)$/.test(r.tool)) {
+      const at = Math.max(0, RENDER_STAGES.indexOf(r.stage));
+      body.push(h("div", { class: "rail" }, ...RENDER_STAGES.map((st, i) => h("span", { class: `rail-step${i < at ? " is-done" : i === at ? " is-now" : ""}` },
+        h("i", { style: { "--p": i < at ? "100%" : i === at && typeof r.progress === "number" ? `${Math.round(r.progress * 100)}%` : i === at ? "35%" : "0%" } }),
+        h("span", { text: t(`rail.${st.replace(" ", "_")}`) })))));
+      body.push(h("div", { class: "act-sub num", text: rt.short }));
+    } else if (r) {
+      body.push(h("div", { class: "act-sub num", text: rt.text }));
+      if (typeof r.progress === "number") body.push(h("div", { class: "meter is-live", style: { "--fill": `${clamp(r.progress * 100, 0, 100)}%` } }));
     }
-    els.set(r.id, el);
+    const canStop = chatBusy || app.state?.can?.stop;
+    if (r || chatBusy) {
+      const b = h("button", { type: "button", class: "text-btn mini" }, icon("i-stop", "is-filled"), h("span", { text: t(stopping ? "chat.stoppingBtn" : r && /^(render|draft)$/.test(r.tool) ? "act.stopRender" : "chat.stop") }), h("span", { class: "spin", "aria-hidden": "true" }));
+      const why = stopping ? t("chat.stoppingTip") : !canStop ? (app.state?.can?.why?.stop ? whyText(app.state.can.why.stop) : t("stop.unsupported")) : null;
+      disable(b, why, t("chat.stopTip"));
+      busy(b, stopping);
+      pressable(b, () => (chatBusy ? stop() : stopAction(b)));
+      body.push(h("div", { class: "act-actions" }, b));
+    }
+    live.className = `act is-live${rt?.stuck ? " is-stuck" : ""}${stopping ? " is-stopping" : ""}`;
+    live.replaceChildren(h("span", { class: "act-ic" }, h("span", { class: "c-spin" })), h("div", { class: "act-main" }, ...body));
+    return true;
   }
-  function trim() {
-    if (els.size <= KEPT_ROWS) return;
-    const ids = [...els.keys()].sort((a, b) => a - b);
-    for (const id of ids.slice(0, els.size - KEPT_ROWS)) { els.get(id).remove(); els.delete(id); }
-  }
-
-  const working = h("div", { class: "c-working", role: "status" });
-  let empty = null;
   function turnStart() {
     const u = [...S.rows.values()].filter((r) => r.role === "user" && r.turn === S.turn).at(-1);
     return u ? Date.parse(u.ts) : null;
   }
-  function renderWorking() {
-    if (!S.busy) { working.remove(); return; }
-    const since = turnStart();
-    const secs = since ? Math.max(0, (Date.now() - since) / 1000) : null;
-    const running = [...S.rows.values()].filter((r) => r.turn === S.turn && r.role === "tool" && r.ok == null).at(-1);
-    const what = S.stopping || S.stopAsked ? t("chat.stopping") : running ? t("chat.usingTool", { tool: toolName(running.tool) }) : t("chat.thinking");
-    working.replaceChildren(...[h("span", { class: "c-pulse" }), h("span", { text: what }),
-      secs != null ? h("span", { class: "num dim", text: elapsed(secs) }) : null].filter(Boolean));
-    working.classList.toggle("is-stopping", S.stopping || S.stopAsked);
-    if (!working.isConnected) { log.append(working); afterAppend(0); }
+
+  // Requests, replies and the agent's steps in the order they happened; elements are reused while they stay the same.
+  const cache = new Map();
+  let empty = null;
+  function entries() {
+    const out = [];
+    for (const r of [...S.rows.values()].sort((a, b) => a.id - b.id)) {
+      if (r.role === "tool") continue;                     // its step appears in the thread from the activity log
+      if (r.role === "note" && r.kind === "end" && !r.budget_used_up) continue;   // the reply above it carries its cost
+      const sig = JSON.stringify([r, r.role === "assistant" ? turnFacts(r) : null]);
+      let c = cache.get(`c${r.id}`);
+      if (!c || c.sig !== sig) cache.set(`c${r.id}`, c = { sig, el: rowEl(r) });
+      out.push({ ts: r.ts, n: r.id, el: c.el });
+    }
+    for (const s of panel.steps()) out.push({ ts: s.ts, n: 0, el: s.el });
+    return out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.n - b.n)).map((x) => x.el);
   }
-  app.on("tick", () => { if (S.busy) renderWorking(); });
-
-  // someone already talking to the agent does not need the first-run card over the conversation
-  const yieldIntro = () => { const intro = document.getElementById("intro"); if (intro) intro.hidden = true; };
-
-  function renderAll() {
-    els.clear();
-    const rows = [...S.rows.values()].sort((a, b) => a.id - b.id);
-    working.remove();
-    if (!rows.length) {
+  function renderLog(first = false, fresh = 0) {
+    const els = entries();
+    if (renderLive()) els.push(live);
+    if (!els.length) {
       empty = renderEmpty();
       log.replaceChildren(empty);
-    } else {
-      empty = null;
-      yieldIntro();
-      log.replaceChildren(...rows.map((r) => { const el = rowEl(r); els.set(r.id, el); return el; }));
+      return;
     }
-    renderWorking();
-    renderControls();
-    renderDot();
-    requestAnimationFrame(() => toBottom());
+    empty = null;
+    const same = els.length === log.children.length && els.every((el, i) => log.children[i] === el);
+    if (!same) {
+      const top = log.scrollTop;
+      log.replaceChildren(...els);
+      if (atBottom || first) requestAnimationFrame(() => toBottom());
+      else { log.scrollTop = top; unseen += fresh; renderPill(); }
+    }
   }
+  app.on("steps", () => renderLog(false, 1));
+  app.on("running", () => renderLog());
+  app.on("progress", () => renderLog());
+  app.on("tick", () => { if (S.busy || app.running) renderLog(); });
+
   function renderEmpty() {
     if (S.loaded && !S.engines.some((e) => e.available)) {
       return emptyState("i-alert", t("chat.noEngineTitle"), t("chat.noEngineBody"),
@@ -347,7 +358,7 @@ export function createChat(app, panel) {
   // ---------------------------------------------------------------- the composer
   function grow() {
     input.style.height = "auto";
-    input.style.height = `${clamp(input.scrollHeight, 38, 180)}px`;
+    input.style.height = `${clamp(input.scrollHeight, 40, 180)}px`;
   }
   function setInput(text) {
     input.value = text;
@@ -356,7 +367,7 @@ export function createChat(app, panel) {
     input.setSelectionRange(text.length, text.length);
     renderControls();
   }
-  input.placeholder = t("chat.placeholder");
+  app.on("compose", (text) => { app.showPanel("chat"); setInput(text); input.focus(); note(input, t("chat.filled")); });
   input.setAttribute("aria-label", t("chat.inputLabel"));
   input.value = storage("chat-draft", "") || "";
   input.addEventListener("input", () => { store("chat-draft", input.value || null); grow(); renderControls(); hideErr(); });
@@ -382,6 +393,7 @@ export function createChat(app, panel) {
     if (S.gone) return t("chat.gone");
     if (!engine()) return t("chat.noEngine");
     if (budgetGone()) return t("chat.budgetGone", { budget: money(S.budget) });
+    if (app.state?.action) return t("busy.action");
     if (!input.value.trim()) return t("chat.typeFirst");
     if (input.value.length > MAX_MESSAGE) return t("chat.tooLong", { n: MAX_MESSAGE });
     return null;
@@ -395,32 +407,46 @@ export function createChat(app, panel) {
     if (S.busy) disable(send, stopping ? t("chat.stoppingTip") : S.gone ? t("chat.gone") : null, t("chat.stopTip"), "");
     else disable(send, S.sending ? t("chat.sending") : whyNotSend(), t("chat.sendTip"), "Enter");
     form.classList.toggle("is-off", S.gone || (S.loaded && !engine() && !S.busy));
+    const ctx = context();
+    input.placeholder = S.busy ? t("chat.placeholderBusy") : ctx?.beat != null ? t("chat.placeholderBeat", { n: ctx.beat })
+      : ctx?.clip ? t("chat.placeholderClip", { id: lowerFirst(clipName(ctx.clip)) }) : t("chat.placeholder");
 
-    // the line under the box: why it cannot send, how long it is, or the keys
+    // the line under the box: only why it cannot send, or how long the message is
     const len = input.value.length;
     hint.className = "compose-hint";
     if (S.gone) { hint.textContent = t("chat.gone"); hint.classList.add("is-warn"); }
     else if (S.loaded && !engine() && !S.busy) { hint.textContent = t("chat.noEngine"); hint.classList.add("is-warn"); }
     else if (budgetGone() && !S.busy) { hint.textContent = t("chat.budgetGone", { budget: money(S.budget) }); hint.classList.add("is-error"); }
     else if (len > MAX_MESSAGE * 0.85) { hint.textContent = `${len} / ${MAX_MESSAGE}`; if (len > MAX_MESSAGE) hint.classList.add("is-error"); }
-    else hint.textContent = S.busy ? t("chat.busyHint") : document.activeElement === input ? t("chat.keysEsc") : "";
+    else hint.textContent = "";
 
     const e = engine();
     $("engineText").textContent = e ? e.label : S.loaded ? t("chat.noEngineShort") : "…";
     engineBtn.classList.toggle("is-none", !e);
     disable(engineBtn, S.busy ? t("chat.engineBusy") : !S.engines.length ? t("chat.loading") : null,
       e ? t("chat.engineTip", { label: e.label, why: e.why }) : t("chat.engineNone"));
-
-    const sp = $("chatSpend");
-    sp.hidden = !S.loaded || (S.budget == null && !S.spent);
-    $("chatSpendText").textContent = S.budget != null ? `${money(S.spent)} / ${money(S.budget)}` : money(S.spent);
-    const share = S.budget ? S.spent / S.budget : 0;
-    $("chatSpendBar").hidden = !S.budget;
-    $("chatSpendBar").style.setProperty("--fill", `${clamp(share * 100, 0, 100)}%`);
-    sp.classList.toggle("is-high", share > 0.8);
-    tip(sp, S.budget != null ? t("chat.spendTip", { spent: money(S.spent), budget: money(S.budget) }) : t("chat.spendTipNo", { spent: money(S.spent) }));
+    renderSpend();
     renderContext();
     renderBlock();
+    renderQuick();
+  }
+
+  // The spend: the project's paid calls against its budget, the agent's model use beside it in the tooltip.
+  function renderSpend() {
+    const sp = app.state?.spend;
+    const el = $("chatSpend");
+    const proj = sp?.project_usd ?? null, pb = sp?.project_budget_usd ?? null;
+    const chat = sp?.chat_usd ?? S.spent, cb = sp?.chat_budget_usd ?? S.budget;
+    el.hidden = proj == null && chat == null;
+    if (el.hidden) return;
+    const spent = (proj || 0) + (chat || 0), budget = pb != null || cb != null ? (pb || 0) + (cb || 0) : null;
+    $("chatSpendText").textContent = budget ? t("chat.spendOf", { spent: money(spent), budget: money(budget) }) : money(spent);
+    const share = budget ? spent / budget : 0;
+    $("chatSpendBar").hidden = !budget;
+    $("chatSpendBar").style.setProperty("--fill", `${clamp(share * 100, 0, 100)}%`);
+    el.classList.toggle("is-high", share > 0.8);
+    tip(el, [pb != null ? t("chat.spendProject", { spent: money(proj || 0), budget: money(pb) }) : null,
+      cb != null ? t("chat.spendAgent", { spent: money(chat || 0), budget: money(cb) }) : null].filter(Boolean).join(" · ") || money(spent));
   }
 
   // With a conversation on screen the empty state is gone, so the reasons no agent can run sit above the box.
@@ -433,12 +459,12 @@ export function createChat(app, panel) {
     if (!none || key === blockKey) return;
     blockKey = key;
     const list = h("ul", { class: "engine-why" }, ...S.engines.map((x) => h("li", {}, h("strong", { text: x.label }), h("span", { text: x.why }))));
-    el.replaceChildren(h("strong", {}, icon("i-alert"), t("chat.noEngineTitle")),
-      disclosure(t("chat.why"), list, false), list);
+    el.replaceChildren(h("strong", {}, icon("i-alert"), t("chat.noEngineTitle")), disclosure(t("chat.why"), list, false), list);
   }
 
   function showErr(text) { errLine.hidden = false; errLine.textContent = text; }
   function hideErr() { errLine.hidden = true; }
+  const whyText = (w) => (w?.code && t(w.code, w.params || {}) !== w.code ? t(w.code, w.params || {}) : w?.text || "");
 
   async function submit() {
     if (S.sending) return;
@@ -455,24 +481,24 @@ export function createChat(app, panel) {
     hideErr();
     try {
       const { status, data } = await post("/api/chat", body);
-      if (status === 202) {
+      if (status === 200 || status === 202) {
         setInput("");
-        drop = { clip: null, playhead: false };
+        drop = { target: null, playhead: false };
         S.busy = true; S.turn = data.turn;
         note(send, t("chat.sent"));
         toBottom();
       } else if (status === 409) {
-        S.busy = true;
-        showErr(t("chat.err409"));
+        if (data?.code === "busy.chat") S.busy = true;
+        showErr(data?.code ? whyText(data) : t("chat.err409"));
       } else if (status === 413) showErr(t("chat.err413"));
       else if (status === 403) showErr(t("chat.err403"));
-      else showErr(t("chat.err400", { why: data?.error || status }));
+      else showErr(data?.code ? whyText(data) : t("chat.err400", { why: data?.error || status }));
     } catch {
       S.gone = true;
       showErr(t("chat.errGone"));
     } finally {
       S.sending = false;
-      renderWorking();
+      renderLog();
       renderControls();
     }
   }
@@ -480,7 +506,7 @@ export function createChat(app, panel) {
     if (S.stopAsked || S.stopping) return;
     S.stopAsked = true;
     renderControls();
-    renderWorking();
+    renderLog();
     try {
       const { status, data } = await post("/api/chat/stop", {});
       if (status !== 200) throw new Error(data?.error || status);
@@ -492,21 +518,81 @@ export function createChat(app, panel) {
     }
     renderControls();
   }
+  async function stopAction(b) {
+    try {
+      const d = await act("/api/action", { action: "stop" });
+      note(b, d.stopped ? t("chat.stopAsked") : whyText(d) || t("stop.unsupported"), d.stopped ? "" : "is-error");
+    } catch (e) {
+      note(b, e.code ? whyText(e) : e.message, "is-error");
+    }
+  }
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     if (isOff(send)) { note(send, send.dataset.tip || "", "is-error"); return; }
     if (S.busy) stop(); else submit();
   });
 
-  // ---------------------------------------------------------------- what the message is about
-  let drop = { clip: null, playhead: false };           // what the person took off the next message
+  // ---------------------------------------------------------------- quick actions: render, check, undo without typing
+  const QUICK = [["qRender", "render"], ["qCheck", "check"], ["qUndo", "undo"]];
+  const asked = new Set();
+  function renderQuick() {
+    const s = app.state;
+    const can = s?.can || {};
+    const doing = s?.action?.action;
+    for (const [id, a] of QUICK) {
+      const b = $(id);
+      const mine = doing === a || asked.has(a);
+      const why = !s ? t("chat.loading") : app.status !== "connected" ? t("chat.gone") : mine ? t(`q.${a}Busy`) : S.busy ? t("busy.chat") : doing ? t("busy.action")
+        : app.running ? t("busy.render") : can[a] === false ? whyText(can.why?.[a]) || t("q.cannot") : null;
+      busy(b, mine);
+      disable(b, why, t(`q.${a}Tip`));
+    }
+  }
+  let lastSeen = null;
+  for (const [id, a] of QUICK) {
+    const b = $(id);
+    pressable(b, async () => {
+      if (asked.has(a)) return;
+      asked.add(a);
+      renderQuick();
+      try {
+        await act("/api/action", { action: a });
+        note(b, t(`q.${a}Started`));
+      } catch (e) {
+        note(b, e.code ? whyText(e) : t("q.failed", { why: e.message }), "is-error");
+      } finally {
+        asked.delete(a);
+        renderQuick();
+      }
+    });
+  }
+  // how the window's last action ended, said next to the button that started it
+  app.on("state", () => {
+    const la = app.state?.last_action;
+    const k = la ? `${la.action}|${la.at}` : null;
+    if (k && lastSeen && k !== lastSeen) {
+      const b = $(QUICK.find(([, a]) => a === la.action)?.[0] || "qRender");
+      if (b && document.body.contains(b)) note(b, whyText(la) || la.text, la.ok ? "is-ok" : "is-error");
+    }
+    if (app.state) lastSeen = k || "";
+    renderQuick();
+    renderControls();
+  });
+
+  // ---------------------------------------------------------------- what "this" means: the beat or element, the playhead
+  let drop = { target: null, playhead: false };           // what the person took off the next message
   function context() {
     const ctx = {};
     const c = app.selected ? app.clipById(app.selected, app.state?.tracks) : null;
-    if (c && drop.clip !== c.id) {
+    const b = app.beat != null ? (app.beats || []).find((x) => x.i === app.beat) : null;
+    if (c && drop.target !== `c:${c.id}`) {
       ctx.clip = c.id;
       if (c.start != null) ctx.start = +c.start.toFixed(3);
       if (c.end != null) ctx.end = +c.end.toFixed(3);
+    } else if (!c && b && drop.target !== `b:${b.i}`) {
+      ctx.beat = b.i;
+      ctx.start = +b.start.toFixed(3);
+      ctx.end = +b.end.toFixed(3);
     }
     if (app.time > 0 && !drop.playhead) ctx.playhead = +app.time.toFixed(3);
     return Object.keys(ctx).length ? ctx : null;
@@ -514,32 +600,33 @@ export function createChat(app, panel) {
   let ctxKey = "";
   function renderContext() {
     const c = context();
-    const key = JSON.stringify([c?.clip, c?.start, c?.end, c?.playhead != null ? timecode(c.playhead, app.fps()) : null]);
+    const key = JSON.stringify([c?.clip, c?.beat, c?.start, c?.end, c?.playhead != null ? timecode(c.playhead, fps()) : null]);
     if (key === ctxKey) return;
     ctxKey = key;
     ctxRow.hidden = !c;
     if (!c) { ctxRow.replaceChildren(); return; }
-    const fps = app.fps();
-    const chip = (text, label, onDrop) => {
+    const chip = (text, cls, iconName, onDrop) => {
       const x = h("button", { type: "button", class: "ctx-x" }, icon("i-close"));
-      tip(x, t("chat.ctxDrop"), null, `${t("chat.ctxDrop")}: ${label}`);
-      pressable(x, () => { onDrop(); ctxKey = ""; renderContext(); input.focus(); });
-      return h("span", { class: "ctx-chip" }, h("span", { class: "ctx-text", text }), x);
+      tip(x, t("chat.ctxDrop"), null, `${t("chat.ctxDrop")}: ${text}`);
+      pressable(x, () => { onDrop(); ctxKey = ""; renderControls(); input.focus(); });
+      const el = h("span", { class: `ctx-chip ${cls}` }, icon(iconName), h("span", { class: "ctx-text", text }), x);
+      tip(el.querySelector(".ctx-text"), t("chat.ctxTip"));
+      return el;
     };
-    const kids = [h("span", { class: "ctx-k", text: t("chat.ctxLabel") })];
+    const kids = [];
     if (c.clip) {
-      const text = c.start != null && c.end != null ? t("chat.about", { id: c.clip, a: timecode(c.start, fps), b: timecode(c.end, fps) })
-        : t("chat.aboutClip", { id: c.clip });
-      kids.push(chip(text, text, () => { drop.clip = c.clip; }));
+      const text = c.start != null ? t("chat.about", { id: clipName(c.clip), a: timecode(c.start, fps()), b: timecode(c.end, fps()) }) : t("chat.aboutClip", { id: clipName(c.clip) });
+      kids.push(chip(text, "is-sel", "i-target", () => { drop.target = `c:${c.clip}`; }));
     }
-    if (c.playhead != null) {
-      const text = t("chat.at", { t: timecode(c.playhead, fps) });
-      kids.push(chip(text, text, () => { drop.playhead = true; }));
+    if (c.beat != null) {
+      const text = `${t("beats.n", { n: c.beat })} · ${timecode(c.start, fps())}–${timecode(c.end, fps())}`;
+      kids.push(chip(text, "is-sel", "i-target", () => { drop.target = `b:${c.beat}`; }));
     }
+    if (c.playhead != null) kids.push(chip(t("chat.playheadAt", { t: timecode(c.playhead, fps()) }), "", "i-timer", () => { drop.playhead = true; }));
     ctxRow.replaceChildren(...kids);
-    tip(ctxRow.firstChild, t("chat.ctxTip"));
   }
-  app.on("select", () => { if (app.selected !== drop.clip) drop.clip = null; renderContext(); });
+  app.on("select", () => { drop.target = null; renderControls(); });
+  app.on("beat", () => { drop.target = null; renderControls(); });
   let ctxAt = 0;
   app.on("time", () => {                  // a playing film moves the chip four times a second, not every frame
     const now = performance.now();
@@ -548,12 +635,8 @@ export function createChat(app, panel) {
     renderContext();
   });
   app.on("playing", renderContext);
-  app.on("state", renderContext);
-  app.on("ask-about", (id) => {
-    if (drop.clip === id) drop.clip = null;
-    renderContext();
-    input.focus();
-  });
+  app.on("conn", renderControls);
+  app.on("ask-about", () => { drop.target = null; renderControls(); input.focus(); });
 
   // ---------------------------------------------------------------- the engine picker
   let active = 0;
@@ -565,7 +648,7 @@ export function createChat(app, panel) {
         "aria-disabled": String(!e.available) },
       h("span", { class: "engine-opt-head" }, h("span", { class: `engine-dot${e.available ? "" : " is-off"}` }), h("span", { text: e.label }),
         S.session === e.id ? h("span", { class: "chip", text: t("chat.thisConversation") }) : null,
-        cur?.id === e.id ? icon("i-check", "engine-tick") : null),
+        cur?.id === e.id ? icon("i-tick", "engine-tick") : null),
       h("span", { class: "engine-why", text: e.available ? e.why : t("chat.cannot", { why: e.why }) }));
       li.addEventListener("click", () => choose(i));
       li.addEventListener("pointermove", () => focusOpt(i));
@@ -619,10 +702,10 @@ export function createChat(app, panel) {
     if (!menu.hidden && !menu.contains(e.target) && !engineBtn.contains(e.target)) closeMenu(false);
   }, true);
 
-  tip(pill, t("chat.toLatest"));
   input.style.height = "";
   grow();
-  renderAll();
+  renderLog(true);
+  renderControls();
   listen();
   return { load };
 }

@@ -10,6 +10,7 @@ import hmac
 import json
 import math
 import mimetypes
+import os
 import re
 import secrets
 import shutil
@@ -28,6 +29,7 @@ from .. import media
 from .. import render as R
 from .. import resolve as RS
 from .. import timeexpr as T
+from .. import tools as TL
 from ..workspace import PROJECT_FILE, WORKSPACE_FILE, WorkspaceError, find_workspace, project_file
 from . import chat as C
 from . import presence as P
@@ -52,6 +54,10 @@ CHUNK = 256 * 1024
 MAX_BODY = 128 * 1024
 MAX_T = 24 * 3600.0
 CHAT_EVENTS = 256                   # chat payloads an events stream can catch up on
+PUSHED_EVENTS = 64                  # frames and action payloads an events stream can catch up on
+FRAME_BATCH = 12                    # frames one renderer run may take
+FRAME_QUEUE = 240
+ACTIONS = {"render": TL.render, "check": TL.check, "undo": TL.undo, "redo": TL.redo}
 TOKEN_HEADER = "X-Reelsmith-Token"
 TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".json": "application/json",
          ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff",
@@ -68,6 +74,20 @@ class HTTPError(Exception):
     def __init__(self, code: int, body: dict):
         super().__init__(body.get("error"))
         self.code, self.body = code, body
+
+
+def refused(status: int, code: str, **params) -> HTTPError:
+    """An error whose reason is one of state.TEXTS: {"error" (English), "code", "params"}."""
+    return HTTPError(status, {"error": S.say(code, **params)["text"], "code": code, "params": params})
+
+
+def open_folder(folder: Path) -> None:
+    """The system's file manager on `folder`."""
+    if sys.platform.startswith("win"):
+        os.startfile(str(folder))                   # noqa: S606 - a folder of the project, never a program
+        return
+    quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(folder)], **quiet)
 
 
 def content_type(path: Path) -> str:
@@ -229,6 +249,16 @@ class Site:
         self._resolved: tuple[tuple, bytes, str] | None = None
         self._resolved_lock = threading.Lock()
         self.watch_dir = root / "build" / "watch"
+        self.pushed_seq = 0                         # moves with every frames or action payload
+        self.pushed: deque = deque(maxlen=PUSHED_EVENTS)
+        self._frames_lock = threading.Lock()
+        self._frame_queue: list[dict] = []          # {"key", "frame", "h", "t"} waiting for the renderer
+        self._frames_out: set[tuple] = set()        # (key, frame, h) the renderer is drawing now
+        self._frame_thread: threading.Thread | None = None
+        self._frame_failed: dict[tuple, str] = {}   # (still key, frame) -> why it could not be rendered
+        self._action_lock = threading.Lock()
+        self.action: dict | None = None             # the window's action at work: {"action", "since"}
+        self.last_action: dict | None = None
 
     def poll(self) -> None:
         self.poll_running()
@@ -267,13 +297,263 @@ class Site:
         lost = self.chat_seq - seq > len(pending)
         return pending, lost
 
+    def pushed_since(self, seq: int) -> tuple[list[tuple], bool]:
+        """([(name, payload)] after seq, whether some were already dropped); call with self.changed held."""
+        pending = [(n, p) for s, n, p in self.pushed if s > seq]
+        return pending, self.pushed_seq - seq > len(pending)
+
+    def push(self, name: str, payload: dict) -> None:
+        """A "frames" or "action" event for every open events stream."""
+        with self.changed:
+            self.pushed_seq += 1
+            self.pushed.append((self.pushed_seq, name, payload))
+            self.changed.notify_all()
+
     def state(self) -> dict:
         st = self.cache.get()
         if st["revision"] != self.revision:
             with self.changed:
                 self.revision = st["revision"]
                 self.changed.notify_all()
-        return {**st, "running": P.running(self.root)}
+        running = S.running_view(P.running(self.root), self.running_by())
+        return {**st, "running": running, "can": self.can(st), "action": self.action,
+                "last_action": self.last_action}
+
+    def running_by(self) -> str:
+        return "window" if self.action else "chat" if self.chat.busy is not None else "agent"
+
+    def rendering(self) -> bool:
+        return render_busy(self.root) or bool(self.action and self.action["action"] == "render")
+
+    def can(self, st: dict) -> dict:
+        """{"render", "check", "undo", "redo", "stop": bool, "why": {name: {"code", "params", "text"}}}: the
+        actions the window offers, and the reason of each one that cannot run now."""
+        busy = "busy.action" if self.action else "busy.chat" if self.chat.busy is not None else None
+        reasons = {
+            "render": busy or ("busy.render" if self.rendering() else None)
+            or ("project.invalid" if not st["valid"] else None)
+            or ("render.current" if st["result"]["state"] == "current" else None),
+            "check": busy,
+            "undo": busy or (None if st["can_undo"] else "undo.empty"),
+            "redo": busy or (None if st["can_redo"] else "redo.empty"),
+            "stop": ("stop.pending" if self.chat.stopping else None) if self.chat.busy is not None else (
+                "stop.unsupported" if self.action else "stop.idle"),
+        }
+        out: dict = {name: why is None for name, why in reasons.items()}
+        out["why"] = {name: S.say(why) for name, why in reasons.items() if why is not None}
+        return out
+
+    def send_chat(self, message, engine: str | None, context) -> int:
+        """A chat turn, never beside an action (the action lock makes the two checks one)."""
+        with self._action_lock:
+            if self.action:
+                raise refused(409, "busy.action")
+            try:
+                return self.chat.send(message, engine, context)
+            except C.ChatError as exc:
+                raise HTTPError(exc.code, {"error": str(exc), "code": exc.key, "params": exc.params}) from None
+
+    # ---- actions without typing
+    def act(self, name) -> tuple[int, dict]:
+        if name == "stop":
+            if self.chat.stop():
+                return 200, {"stopped": True, "what": "chat"}
+            why = "stop.unsupported" if self.action else "stop.idle"
+            return 200, {"stopped": False, "code": why, "params": {}, "error": S.TEXTS[why]}
+        if name not in ACTIONS:
+            raise refused(400, "action.unknown", action=str(name)[:40])
+        with self._action_lock:
+            why = self.can(self.cache.get())["why"].get(name)
+            if why is not None:
+                raise refused(409, why["code"])
+            self.action = {"action": name, "since": S.datetime.now().isoformat(timespec="seconds")}
+            started = dict(self.action, state="running")
+        threading.Thread(target=self._act, args=(name,), name=f"reelsmith-action-{name}", daemon=True).start()
+        self.push("action", started)
+        return 202, {"action": name, "started": True}
+
+    def _act(self, name: str) -> None:
+        mark = P.set_origin(self.root, action=name)
+        try:
+            result = ACTIONS[name](str(self.root))
+            ok, text = bool(result.ok), str(result)
+        except Exception as exc:  # noqa: BLE001 - tools never raise; this is the last word if one does
+            ok, text = False, f"{type(exc).__name__}: {exc}"
+        finally:
+            P.clear_origin(self.root, mark)
+        said = S.say(f"action.{name}.{'ok' if ok else 'failed'}")
+        done = {"action": name, "state": "done" if ok else "failed", "ok": ok, "code": said["code"], "params": {},
+                "text": said["text"], "detail": S.tidier(self.root)(text)[:2000],
+                "at": S.datetime.now().isoformat(timespec="seconds")}
+        with self._action_lock:
+            self.action, self.last_action = None, done
+        self.push("action", done)
+
+    def wait_action(self, timeout: float = 30) -> bool:
+        """True once no action runs (tests and shutdown)."""
+        until = time.monotonic() + timeout
+        while self.action and time.monotonic() < until:
+            time.sleep(0.05)
+        return self.action is None
+
+    def accept(self) -> dict:
+        st = self.cache.get()
+        if st["result"]["state"] != "current":
+            raise refused(409, "accept.not_current")
+        row = {"at": S.datetime.now().isoformat(timespec="seconds"), "cut": st["cut"]}
+        out = self.root / "out" / "accepted.json"
+        tmp = out.with_name(f".accepted.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(row), encoding="utf-8")
+        os.replace(tmp, out)
+        return {"accepted": {"at": row["at"]}}
+
+    def reveal(self) -> dict:
+        film = self.root / "out" / "film.mp4"
+        if not film.is_file():
+            raise refused(404, "reveal.no_film")
+        open_folder(film.parent)
+        return {"revealed": True, "folder": "out"}
+
+    # ---- frames of the film as it stands
+    def frame(self, t: float, h: int | None, src: str = "auto", w: int | None = None) -> tuple[Path | None, str]:
+        """(the JPEG, "film" or "cut"); the JPEG is None while the engine has yet to render it (it is queued). The
+        size is a height, or a width read as the height of the canvas's shape."""
+        if src not in ("auto", "film", "cut"):
+            raise HTTPError(400, {"error": "src must be auto, film or cut"})
+        st = self.cache.get()
+        if not st["valid"]:
+            raise HTTPError(503, {"error": st["error"], "code": "project.invalid", "params": {}})
+        canvas = st["canvas"]
+        if h is None:
+            h = round(w * canvas["height"] / canvas["width"]) if w is not None else 180
+        h = int(min(max(32, h), canvas["height"]))
+        frame = min(max(0, T.to_frame(min(max(0.0, t), st["duration"]), canvas["fps"])), st["frames"] - 1)
+        delivered = st["render"]["delivered"]
+        if src == "film" or (src == "auto" and delivered and delivered["matches_cut"] is True):
+            if not delivered:
+                raise refused(404, "reveal.no_film")
+            return self.film_frame(frame / canvas["fps"], frame, h), "film"
+        _, key = self.resolved()
+        skey = self.still_key(st, key)
+        out = self._cached("frames", f"cut_{skey}_{frame}_{h}.jpg")
+        if out.is_file():
+            return out, "cut"
+        failed = self._frame_failed.get((skey, frame))
+        if failed:
+            raise refused(503, "frame.failed", error=failed)
+        self.queue_frame({"key": skey, "frame": frame, "h": h, "t": t})
+        return None, "cut"
+
+    def film_frame(self, sec: float, frame: int, h: int) -> Path:
+        film = self.root / "out" / "film.mp4"
+        stamp = hashlib.sha1(f"{film}|{S._stamp(film)}".encode()).hexdigest()[:10]
+        out = self._cached("frames", f"film_{stamp}_{frame}_{h}.jpg")
+        if out.is_file():
+            return out
+        with self._media:
+            for at in (sec, max(0.0, sec - 0.1)):          # the very last frame can sit past the stream's end
+                _ffmpeg(["-y", "-ss", f"{at:.3f}", "-i", str(film), "-frames:v", "1", "-vf", f"scale=-2:{h}",
+                         "-q:v", "4", str(out)])
+                if out.is_file():
+                    _prune(out.parent)
+                    return out
+        raise HTTPError(404, {"error": f"no picture in the delivered film at {sec:g} s"})
+
+    def queue_frame(self, item: dict) -> None:
+        with self._frames_lock:
+            ident = (item["key"], item["frame"], item["h"])
+            if ident not in self._frames_out and not any((q["key"], q["frame"], q["h"]) == ident
+                                                         for q in self._frame_queue):
+                self._frame_queue.append(item)
+                del self._frame_queue[:-FRAME_QUEUE]
+            if self._frame_thread is None:
+                self._frame_thread = threading.Thread(target=self._frame_work, name="reelsmith-frames", daemon=True)
+                self._frame_thread.start()
+
+    def _frame_work(self) -> None:
+        """Renders the queue, at most FRAME_BATCH frames per renderer run and never while a render or preview
+        holds the project; frames of a cut that has changed since are dropped (the page asks again)."""
+        while True:
+            with self._frames_lock:
+                if not self._frame_queue:
+                    self._frame_thread = None
+                    return
+            if self.rendering():
+                time.sleep(1.0)
+                continue
+            try:
+                st = self.cache.get()
+                body, key = self.resolved()
+                skey = self.still_key(st, key)
+            except HTTPError as exc:
+                with self._frames_lock:
+                    failed, self._frame_queue = self._frame_queue, []
+                self.push("frames", {"ready": [], "failed": [self._frame_row(q) for q in failed], "stale": [],
+                                     "error": exc.body.get("error")})
+                continue
+            with self._frames_lock:
+                todo = [q for q in self._frame_queue if q["key"] == skey]
+                stale = [self._frame_row(q) for q in self._frame_queue if q["key"] != skey]
+                # asked again between its check and a batch that has since drawn it
+                drawn = [q for q in todo if self._cut_frame(q).is_file()]
+                todo = [q for q in todo if q not in drawn]
+                frames = list(dict.fromkeys(q["frame"] for q in todo))[:FRAME_BATCH]
+                batch = [q for q in todo if q["frame"] in frames]
+                self._frame_queue = [q for q in todo if q["frame"] not in frames]
+                self._frames_out = {(q["key"], q["frame"], q["h"]) for q in batch}
+            if stale or drawn:                  # stale: the cut changed while they waited, the page asks again
+                self.push("frames", {"ready": [self._frame_row(q) for q in drawn], "failed": [], "stale": stale,
+                                     "error": None})
+            if batch:
+                done = self._render_frames(body, skey, frames, batch)
+                with self._frames_lock:
+                    self._frames_out = set()
+                    if done is None:            # a render took the project meanwhile: wait for it
+                        self._frame_queue[:0] = batch
+                if done is None:
+                    time.sleep(1.0)
+                else:
+                    self.push("frames", done)
+
+    def _cut_frame(self, q: dict) -> Path:
+        return self._cached("frames", f"cut_{q['key']}_{q['frame']}_{q['h']}.jpg")
+
+    def _frame_row(self, q: dict) -> dict:
+        return {"t": q["t"], "h": q["h"], "frame": q["frame"],
+                "url": f"{self.base}/api/frame?t={q['t']:g}&h={q['h']}"}
+
+    def _render_frames(self, body: bytes, skey: str, frames: list[int], batch: list[dict]) -> dict | None:
+        """The frames event for the batch; None, rendering nothing, when a render holds the project by now."""
+        ready, failed, error = [], [], None
+        with self._still:                       # one renderer at a time, /api/still included
+            if self.rendering():
+                return None
+            work = self.watch_dir / "frames-work"
+            try:
+                shutil.rmtree(work, ignore_errors=True)
+                work.mkdir(parents=True)
+                src = self.watch_dir / "resolved.frames.json"
+                src.write_bytes(body)
+                res = R.run_node("stills", src, self.root, work, frames, timeout=STILL_TIMEOUT_S)
+                pngs = {int(s["frame"]): Path(s["png"]) for s in res.get("stills") or []} if res.get("ok") else {}
+                if not res.get("ok"):
+                    error = R.failure_text(res).splitlines()[0]
+                for q in batch:
+                    png = pngs.get(q["frame"])
+                    out = self._cut_frame(q)
+                    if png is not None and png.is_file():
+                        _ffmpeg(["-y", "-i", str(png), "-vf", f"scale=-2:{q['h']}", "-q:v", "4", str(out)])
+                    if out.is_file():
+                        ready.append(self._frame_row(q))
+                    else:
+                        self._frame_failed[(skey, q["frame"])] = error or "no still was written"
+                        failed.append(self._frame_row(q))
+                _prune(self.watch_dir / "frames")
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+        if len(self._frame_failed) > 1000:
+            self._frame_failed.clear()
+        return {"ready": ready, "failed": failed, "stale": [], "error": error}
 
     def resolved(self) -> tuple[bytes, str]:
         """The film exactly as render hands it to render.mjs, and its digest (the stills' cache key)."""
@@ -520,6 +800,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_bytes(body, "application/json")
         if path == "/api/still":
             return self.send_file(site.still(self.num("t", 0.0), int(self.num("w", STILL_W))))
+        if path == "/api/frame":
+            size = {k: int(self.num(k, 0)) if k in q else None for k in ("h", "w")}
+            got, source = site.frame(self.num("t", 0.0), size["h"], self.query.get("src", "auto"), size["w"])
+            if got is None:
+                return self.send_json({"pending": True}, 202)
+            return self.send_file(got, headers={"X-Frame-Source": source})
         if path == "/api/thumb":
             return self.send_file(site.thumb(self.asset_id(), self.num("t", 0.0), int(self.num("h", 72))))
         if path == "/api/wave":
@@ -545,23 +831,31 @@ class Handler(BaseHTTPRequestHandler):
                                            "gives it)"})
         site, path = self.post_site(url.path)
         if path == "/api/chat":
-            try:
-                data = json.loads(body.decode("utf-8") or "{}")
-            except ValueError:
-                raise HTTPError(400, {"error": "the body must be JSON: {\"message\": \"...\"}"}) from None
-            if not isinstance(data, dict):
-                raise HTTPError(400, {"error": "the body must be a JSON object"})
+            data = self.json_body(body, '{"message": "..."}')
             engine = data.get("engine")
             if engine is not None and not isinstance(engine, str):
                 raise HTTPError(400, {"error": "engine must be a string"})
-            try:
-                turn = site.chat.send(data.get("message"), engine or None, data.get("context"))
-            except C.ChatError as exc:
-                raise HTTPError(exc.code, {"error": str(exc)}) from None
-            return self.send_json({"turn": turn}, 202)
+            return self.send_json({"turn": site.send_chat(data.get("message"), engine or None, data.get("context"))},
+                                  202)
         if path == "/api/chat/stop":
             return self.send_json({"stopped": site.chat.stop()})
+        if path == "/api/action":
+            code, answer = site.act(self.json_body(body, '{"action": "render"}').get("action"))
+            return self.send_json(answer, code)
+        if path == "/api/accept":
+            return self.send_json(site.accept())
+        if path == "/api/reveal":
+            return self.send_json(site.reveal())
         raise HTTPError(404, {"error": "not found"})
+
+    def json_body(self, body: bytes, shape: str) -> dict:
+        try:
+            data = json.loads(body.decode("utf-8") or "{}")
+        except ValueError:
+            raise HTTPError(400, {"error": f"the body must be JSON: {shape}"}) from None
+        if not isinstance(data, dict):
+            raise HTTPError(400, {"error": "the body must be a JSON object"})
+        return data
 
     def post_site(self, path: str) -> tuple[Site, str]:
         srv = self.server
@@ -635,7 +929,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.head:
             self.wfile.write(body)
 
-    def send_file(self, path: Path, ctype: str | None = None, ranged: bool = False) -> None:
+    def send_file(self, path: Path, ctype: str | None = None, ranged: bool = False,
+                  headers: dict | None = None) -> None:
         size = path.stat().st_size
         start, end, code = 0, size - 1, 200
         rng = self.headers.get("Range") if ranged else None
@@ -659,6 +954,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.head:
             return
@@ -685,23 +982,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.close_connection = True
-        sent, seq, chat_seq = None, site.running_seq, site.chat_seq
+        sent, seq, chat_seq, push_seq = None, site.running_seq, site.chat_seq, site.pushed_seq
         stop = self.server.stopping
         while not stop.is_set():
             with site.changed:
-                if site.revision == sent and site.running_seq == seq and site.chat_seq == chat_seq:
+                if (site.revision == sent and site.running_seq == seq and site.chat_seq == chat_seq
+                        and site.pushed_seq == push_seq):
                     site.changed.wait(timeout=KEEPALIVE_S)
                 rev, now_seq, running = site.revision, site.running_seq, site.running
                 chats, lost = site.chat_since(chat_seq)
                 chat_seq = site.chat_seq
+                pushed, _ = site.pushed_since(push_seq)
+                push_seq = site.pushed_seq
             if stop.is_set():
                 break
             out = []
             if rev is not None and rev != sent:
-                out.append(("change", {"revision": rev, "running": running}))
+                out.append(("change", {"revision": rev, "running": S.running_view(running, site.running_by())}))
                 sent, seq = rev, now_seq
             elif now_seq != seq:
-                out.append(("running", running))
+                out.append(("running", S.running_view(running, site.running_by())))
                 seq = now_seq
             if lost:                    # this stream fell too far behind: the page refetches api/chat
                 last = chats[-1] if chats else {}
@@ -709,6 +1009,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "stopping": last.get("stopping"), "resync": True}))
             else:
                 out += [("chat", payload) for payload in chats]
+            out += pushed
             if not out:
                 self.wfile.write(b": keepalive\n\n")
             for name, data in out:
@@ -826,6 +1127,7 @@ class WatchServer(ThreadingHTTPServer):
             site.chat.stop()
         for site in sites:
             site.chat.wait(wait_s)
+            site.wait_action(wait_s)
 
     def stop(self) -> None:
         self.stopping.set()

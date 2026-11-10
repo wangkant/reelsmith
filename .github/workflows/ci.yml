@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: "3.10"}
+          - {os: ubuntu-latest, python: "3.12"}
+          - {os: windows-latest, python: "3.12"}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: renderer/package-lock.json
+
+      # the tests that render or probe skip without ffmpeg and ffprobe on PATH
+      - name: ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      # runner: test_runner.py skips without claude-agent-sdk
+      - name: Python packages
+        run: python -m pip install -e ".[dev,capture,web,runner]"
+
+      # the renderer tests skip without node and renderer/node_modules/remotion
+      - name: Renderer packages
+        working-directory: renderer
+        run: npm ci
+
+      # npm ci empties node_modules, so Remotion's headless browser is restored after it
+      - name: Remotion browser cache
+        uses: actions/cache@v4
+        with:
+          path: renderer/node_modules/.remotion
+          key: remotion-browser-${{ runner.os }}-${{ hashFiles('renderer/package-lock.json') }}
+      - name: Remotion browser
+        working-directory: renderer
+        run: npx remotion browser ensure
+
+      - name: pytest
+        run: python -m pytest -q
+
+      - name: typecheck
+        if: matrix.python == '3.12'
+        working-directory: renderer
+        run: npm run typecheck
+
+      # node only: one Python version is enough (about 4 minutes)
+      - name: renderer self-test
+        if: matrix.python == '3.12'
+        working-directory: renderer
+        run: node test/selftest.mjs

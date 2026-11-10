@@ -488,10 +488,16 @@ main(state)
     return [{ ok: false, stage: stop.stage, error: stop.message, ...stop.extra, browserErrors: state.browserErrors }, stop.stage === "args" ? 2 : 1];
   })
   .then(async ([result, code]) => {
-    // cleanup first: exiting inside finish() would skip it
+    // cleanup first: exiting inside finish() would skip it. Closing the browser rejects any protocol call still in
+    // flight ("Target closed"); with the result in hand, nothing stray may stop it from being printed
+    process.on("unhandledRejection", () => undefined);
     const k0 = Date.now();
-    if (state.browser) await state.browser.close({ silent: true }).catch(() => undefined);
-    if (state.bundleDir) fs.rmSync(state.bundleDir, { recursive: true, force: true });
+    try {
+      if (state.browser) await state.browser.close({ silent: true }).catch(() => undefined);
+      if (state.bundleDir) fs.rmSync(state.bundleDir, { recursive: true, force: true });
+    } catch {
+      // a locked temp folder is not the film's failure
+    }
     state.timings.cleanup = Date.now() - k0;
     state.timings.total = Date.now() - started;
     finish({ ...result, timings: state.timings, ...(state.port ? { port: state.port } : {}) }, code);

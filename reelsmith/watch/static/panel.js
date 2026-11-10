@@ -1,10 +1,12 @@
-import { lang, t } from "./i18n.js";
-import { clamp, clock, closeOnBackdrop, disable, elapsed, h, note, pressable, shortTime, storage, store, timecode, tip, typeColor, writtenText } from "./util.js";
+import { BASE, post } from "./api.js";
+import { kindName } from "./beats.js";
+import { has, lang, t } from "./i18n.js";
+import {
+  busy as busyOn, bytes, clamp, clock, closeOnBackdrop, disable, elapsed, h, icon, menuButton, note, pressable, shortTime, storage, store, timecode, tip, typeColor,
+  writtenText,
+} from "./util.js";
 
-const TABS = ["chat", "activity", "issues", "clip", "assets"];
-// Served files carry the project in a workspace: /p/<name>/project/...
-export const BASE = (/^\/p\/[^/]+/.exec(location.pathname) || [""])[0];
-const SVG = "http://www.w3.org/2000/svg";
+const PANES = ["chat", "issues", "clip", "assets"];
 const GROUP_MIN = 3;            // a run of this many calls to one tool collapses into one row
 const GROUP_GAP_S = 300;        // and a pause this long breaks the run (and puts a time divider in the feed)
 const PAID = new Set(["speak", "draw", "animate", "capture", "transcribe", "footage"]);
@@ -19,22 +21,12 @@ const KINDS = {
   footage: "make", import_asset: "bring", new_project: "bring",
 };
 
-export function icon(name, cls = "") {
-  const s = document.createElementNS(SVG, "svg");
-  if (cls) s.setAttribute("class", cls);
-  s.setAttribute("aria-hidden", "true");
-  const u = document.createElementNS(SVG, "use");
-  u.setAttribute("href", `#${name}`);
-  s.append(u);
-  return s;
-}
 export const toolIcon = (tool) => ICONS[tool] || "i-dot";
-export const toolKind = (tool) => KINDS[tool] || "other";
+const toolKind = (tool) => KINDS[tool] || "other";
 export function toolName(tool) {
   const k = `tool.${tool}`;
   return t(k) !== k ? t(k) : tool;
 }
-const has = (key) => t(key) !== key;
 
 // A centred empty state: a line icon, a heading and a hint.
 export function emptyState(iconName, title, body, ...extra) {
@@ -130,16 +122,16 @@ function editSentence(head) {
   return { text: `${t("act.edit.head")}${parts.slice(0, 3).join(t("list.sep"))}${parts.length > 3 ? ` +${parts.length - 3}` : ""}` };
 }
 
-function spans(head, fps) {
+function spans(head, fps, name) {
   const br = /\[([^\]]*)\]\s*$/.exec(head);
   if (!br) return null;
   const items = [...br[1].matchAll(/([A-Za-z0-9_][\w-]*) (\d+\.\d+)-(\d+\.\d+) s/g)]
-    .map((m) => `${m[1]} ${timecode(+m[2], fps)}–${timecode(+m[3], fps)}`);
+    .map((m) => `${name(m[1])} ${timecode(+m[2], fps)}–${timecode(+m[3], fps)}`);
   return items.length ? items.slice(0, 3).join(" · ") + (items.length > 3 ? ` +${items.length - 3}` : "") : null;
 }
 
 // What the activity row says to a person: {text, sub, subKind, fail, cost, ids, next, action}.
-export function describe(a, fps = 30) {
+function describe(a, fps = 30, name = (id) => id) {
   const head = firstLine(a);
   const all = lines(a);
   const fail = a.ok === false;
@@ -159,8 +151,8 @@ export function describe(a, fps = 30) {
         d.quiet = !!e.quiet;           // nothing on the timeline changed: no history view, and runs of them group apart
         d.files = !!e.files;
         d.ids = clipIds(a.text || a.summary || "");
-        d.sub = e.files ? [...head.matchAll(/asset (\S+)/g)].map((m) => m[1]).join(" · ") : spans(head, fps);
-        d.mono = true;
+        d.sub = e.files ? [...head.matchAll(/asset (\S+)/g)].map((m) => m[1]).join(" · ") : spans(head, fps, name);
+        d.mono = !!e.files;
       }
       break;
     case "undo": d.text = fail ? t("act.undo.none") : t("act.undo"); d.sub = fail ? head : null; break;
@@ -173,7 +165,7 @@ export function describe(a, fps = 30) {
       const probs = /layout: (\d+) problem/.exec(a.text || "");
       const times = [...String(a.text || "").matchAll(/^- (\d+(?:\.\d+)?)s \(frame/gm)].map((m) => timecode(+m[1], fps));
       if (probs) { d.text += ` · ${count("act.problems", +probs[1])}`; d.sub = reason2(a); d.subKind = "is-warn"; }
-      else if (/layout: ok/.test(a.text || "")) d.sub = t("act.layoutOk");
+      else if (/layout: ok/.test(a.text || "")) { d.sub = t("act.layoutOk"); d.good = true; }
       if (!d.sub && times.length) d.sub = t("act.at", { times: times.slice(0, 6).join(", ") + (times.length > 6 ? " …" : "") });
       break;
     }
@@ -188,7 +180,7 @@ export function describe(a, fps = 30) {
       const errs = /^BLOCKED: (\d+) error/.exec(head);
       const warns = /(\d+) warning/.exec(head);
       if (errs) { d.text = `${t("act.check")} · ${count("act.errors", +errs[1])}`; d.fail = true; d.sub = reason(); d.subKind = "is-error"; }
-      else if (/no issues/.test(head) || (warns && +warns[1] === 0)) d.text = `${t("act.check")} · ${t("act.clean")}`;
+      else if (/no issues/.test(head) || (warns && +warns[1] === 0)) { d.text = t("act.check"); d.sub = t("beats.clean"); d.good = true; }
       else if (warns) d.text = `${t("act.check")} · ${count("act.warnings", +warns[1])}`;
       else if (!fail) d.text = t("act.check");
       break;
@@ -249,7 +241,7 @@ function groupSentence(tool, n) {
 }
 
 // Problems the agent's last preview listed: [level] where @ t s: message.
-export function previewIssues(acts, clipExists) {
+function previewIssues(acts, clipExists) {
   const last = [...acts].reverse().find((a) => a.tool === "preview" && a.ok && a.text);
   if (!last) return null;
   const rows = [];
@@ -266,41 +258,71 @@ export function previewIssues(acts, clipExists) {
 // ---------------------------------------------------------------- the panel
 export function createPanel(app) {
   const $ = (id) => document.getElementById(id);
-  const tabButtons = TABS.map((k) => $(`tab-${k}`));
-  const panes = TABS.map((k) => $(`pane-${k}`));
-  const feed = $("feed"), feedNew = $("feedNew");
+  const panes = Object.fromEntries(PANES.map((k) => [k, $(`pane-${k}`)]));
   const replay = $("replay"), replayRange = $("replayRange"), replayLabel = $("replayLabel"), replayPlay = $("replayPlay");
   const issuesList = $("issuesList"), clipPane = $("clipBody"), assetsList = $("assetsList");
-  const issueCount = $("issueCount"), assetCount = $("assetCount"), actDot = $("actDot");
+  const issueCount = $("issueCount"), assetCount = $("assetCount");
+  const paneHead = $("paneHead"), moreBtn = $("moreBtn"), moreMenu = $("moreMenu");
 
-  let current = -1, touched = false;
-  function show(i, byPerson = true) {
+  // The thread is the session; the issues, the selected element and the files open in its place, one at a time.
+  let current = "chat", touched = false;
+  function show(name, byPerson = true) {
+    if (!panes[name]) return;
     if (byPerson) touched = true;
     const was = current;
-    current = i;
-    tabButtons.forEach((b, k) => {
-      b.setAttribute("aria-selected", String(k === i));
-      b.tabIndex = k === i ? 0 : -1;
-    });
-    panes.forEach((p, k) => { p.hidden = k !== i; });
-    if (TABS[i] === "activity") {
-      actDot.hidden = true;
-      requestAnimationFrame(() => stick(true));
-    }
-    if (was !== i) app.emit("panel", TABS[i]);
+    current = name;
+    for (const [k, el] of Object.entries(panes)) el.hidden = k !== name;
+    paneHead.hidden = name === "chat";
+    $("paneTitle").textContent = name === "chat" ? "" : t(`pane.${name}`);
+    for (const it of moreMenu.querySelectorAll("[data-pane]")) it.setAttribute("aria-checked", String(it.dataset.pane === name));
+    if (was !== name) app.emit("panel", name);
   }
-  tabButtons.forEach((b, i) => {
-    b.addEventListener("click", () => show(i));
-    tip(b, t(`tab.${TABS[i]}Tip`), String(i + 1), t(`tab.${TABS[i]}`));
-    b.addEventListener("keydown", (e) => {
-      const n = e.key === "ArrowRight" ? (i + 1) % TABS.length : e.key === "ArrowLeft" ? (i + TABS.length - 1) % TABS.length
-        : e.key === "Home" ? 0 : e.key === "End" ? TABS.length - 1 : -1;
-      if (n < 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      show(n);
-      tabButtons[n].focus();
-    });
+  pressable($("paneBack"), () => { show("chat"); $("chatInput").focus(); });
+  tip($("paneBack"), t("pane.backTip"), "Esc");
+
+  const more = menuButton(moreBtn, moreMenu);
+  const closeOthers = app.closeMenus;
+  app.closeMenus = () => more.close(true) || !!closeOthers?.();
+  tip(moreBtn, t("pane.more"));
+  moreMenu.addEventListener("click", (e) => {
+    const it = e.target.closest(".menu-item");
+    if (!it) return;
+    more.close(false);
+    if (it.dataset.pane) { show(current === it.dataset.pane ? "chat" : it.dataset.pane); (current === "chat" ? moreBtn : $("paneBack")).focus(); }
+    else if (it.dataset.filter) { setFilter(it.dataset.filter); moreBtn.focus(); }
+    else if (it.dataset.do === "help") app.openHelp();
+  });
+
+  // What the thread shows: everything, the requests and replies, the changes, or the problems. The entries stay in
+  // the page; the stylesheet hides the others, so streaming and scrolling work the same in every view.
+  const log = $("chatLog"), chip = $("filterChip");
+  $("filterGroup").hidden = !has("filter.all");
+  function setFilter(f) {
+    if (!has(`filter.${f}`)) f = "all";
+    store("filter", f === "all" ? null : f);
+    log.dataset.filter = f;
+    log.dataset.none = t("filter.none");
+    for (const it of moreMenu.querySelectorAll("[data-filter]")) it.setAttribute("aria-checked", String(it.dataset.filter === f));
+    chip.hidden = f === "all";
+    $("filterText").textContent = f === "all" ? "" : t(`filter.${f}`);
+    tip(chip, t("filter.clear"));
+    if (current !== "chat") show("chat");
+    log.scrollTop = log.scrollHeight;
+  }
+  pressable(chip, () => { setFilter("all"); moreBtn.focus(); });
+  setFilter(storage("filter", "all"));
+  for (const it of moreMenu.querySelectorAll("[data-label]")) it.querySelector("span").textContent = t(it.dataset.label);
+
+  // the history of the cut, batch by batch: a bar under the head, opened from it
+  const replayBtn = $("replayBtn");
+  function setReplayBar(on) {
+    store("replay-bar", on);
+    if (!on && app.viewing) app.backToNow();
+    renderReplay();
+  }
+  pressable(replayBtn, () => {
+    if (!(app.state?.history || []).length) { note(replayBtn, t("act.noHistory")); return; }
+    setReplayBar(replay.hidden);
   });
 
   // ---------------------------------------------------------------- the first-run card
@@ -310,10 +332,10 @@ export function createPanel(app) {
     const done = () => {
       store("intro-done", true);
       intro.hidden = true;
-      note(tabButtons[current] || tabButtons[0], t("intro.gone"));
-      tabButtons[current]?.focus();
+      note(moreBtn, t("intro.gone"));
+      $("chatInput").focus();
     };
-    const ok = h("button", { type: "button", class: "text-btn solid sm", text: t("intro.ok") });
+    const ok = h("button", { type: "button", class: "text-btn sm", text: t("intro.ok") });
     tip(ok, t("intro.okTip"));
     pressable(ok, done);
     const more = h("button", { type: "button", class: "link-btn", text: t("intro.keys") });
@@ -325,48 +347,9 @@ export function createPanel(app) {
     intro.hidden = false;
   }
 
-  // ---------------------------------------------------------------- the working state at the top of the feed
-  const nowStrip = $("nowStrip");
-  function renderNow() {
-    const r = app.runText?.();
-    nowStrip.hidden = !r;
-    if (!r) return;
-    const p = app.running?.progress;
-    nowStrip.classList.toggle("is-stuck", r.stuck);
-    nowStrip.replaceChildren(...[
-      h("span", { class: "now-ic" }, icon(toolIcon(app.running.tool))),
-      h("span", { class: "now-text", text: r.text }),
-      PAID.has(app.running.tool) ? h("span", { class: "cost-chip", text: t("act.paid") }) : null,
-      h("span", { class: `now-bar${typeof p === "number" ? "" : " is-open"}`, style: { "--p": `${clamp((p || 0) * 100, 0, 100)}%` } }),
-    ].filter(Boolean));
-  }
-  app.on("running", renderNow);
-  app.on("tick", renderNow);
-
-  // ---------------------------------------------------------------- activity
-  let atBottom = true, unseen = 0;
-  rove(feed, t("list.keys"));
-  feed.addEventListener("scroll", () => {
-    atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24;
-    if (atBottom && unseen) { unseen = 0; renderPill(); }
-  });
-  function stick(force) {
-    if (force || atBottom) {
-      feed.scrollTop = feed.scrollHeight;
-      atBottom = true;
-      unseen = 0;
-      renderPill();
-    }
-  }
-  new ResizeObserver(() => stick(false)).observe(feed);
-  function renderPill() {
-    feedNew.hidden = !unseen;
-    $("feedNewText").textContent = t("act.newRows", { n: unseen });
-  }
-  pressable(feedNew, () => { feed.scrollTo({ top: feed.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); unseen = 0; renderPill(); feed.focus({ preventScroll: true }); });
-
+  // ---------------------------------------------------------------- the agent's steps, as entries in the session thread
   const openResults = new Set(), openGroups = new Set();
-  let seen = null, feedKey = "";
+  let seen = null, stepsKey = "", stepsOut = [];
 
   function keyed(acts) {
     const n = new Map();
@@ -379,9 +362,10 @@ export function createPanel(app) {
   }
   const secsOf = (ts) => new Date(ts).getTime() / 1000;
 
-  const said = (item) => (item.d ||= describe(item.a, app.fps()));
+  const nameOf = (id) => { const c = app.clipById(id, app.state?.tracks); return c ? kindName(c) : id; };
+  const said = (item) => (item.d ||= describe(item.a, app.fps(), nameOf));
   const family = (item) => `${item.a.tool}|${said(item).files ? "files" : said(item).quiet ? "quiet" : ""}`;
-  // Runs of one tool (all of them fine, close together) become one row; failures always stand alone.
+  // Runs of one tool (all of them fine, close together) become one entry; failures always stand alone.
   function grouped(items) {
     const out = [];
     for (let i = 0; i < items.length;) {
@@ -400,7 +384,7 @@ export function createPanel(app) {
     const d = new Date(ts);
     const today = new Date().toDateString() === d.toDateString();
     const hm = clock(ts).slice(0, 5);
-    return today ? hm : `${d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric" })} · ${hm}`;
+    return today ? hm : `${d.toLocaleDateString(lang, { month: "short", day: "numeric" })} · ${hm}`;
   }
 
   function thumbLabel(path) {
@@ -413,25 +397,26 @@ export function createPanel(app) {
     return name.replace(/\.\w+$/, "");
   }
   function pictures(a) {
-    return (a.files || []).map((p) => {
+    return (a.files || []).filter((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)).map((p) => {
       const fr = /(?:still|frame)_(\d+)/.exec(p);
       return { url: `${BASE}/project/${p.split("/").map(encodeURIComponent).join("/")}`, label: thumbLabel(p), path: p,
         t: fr ? +fr[1] / app.fps() : null };
     });
   }
+  function thumb(p, onOpen, cls = "") {
+    const b = h("button", { type: "button", class: `thumb ${cls}` },
+      h("img", { src: p.url, alt: "", loading: "lazy", draggable: "false", onerror: (e) => e.target.replaceWith(icon("i-pic", "thumb-gone")) }),
+      p.label ? h("span", { class: "thumb-cap", text: p.label }) : null);
+    tip(b, t("pic.open", { what: p.label || "" }));
+    pressable(b, onOpen);
+    return b;
+  }
   function strip(a) {
     const pics = pictures(a);
     if (!pics.length) return null;
-    const MAX = 5;
+    const MAX = 4;
     const shown = pics.slice(0, pics.length > MAX ? MAX - 1 : MAX);
-    const kids = shown.map((p, i) => {
-      const b = h("button", { type: "button", class: "thumb" },
-        h("img", { src: p.url, alt: "", loading: "lazy", onerror: (e) => e.target.replaceWith(icon("i-pic", "thumb-gone")) }),
-        h("span", { class: "thumb-cap", text: p.label }));
-      tip(b, t("pic.open", { what: p.label }));
-      pressable(b, () => lightbox.open(pics, i, b));
-      return b;
-    });
+    const kids = shown.map((p, i) => thumb(p, (e) => lightbox.open(pics, i, e.currentTarget)));
     if (pics.length > shown.length) {
       const more = h("button", { type: "button", class: "thumb more", text: `+${pics.length - shown.length}` });
       tip(more, t("pic.more", { n: pics.length - shown.length }));
@@ -439,6 +424,88 @@ export function createPanel(app) {
       kids.push(more);
     }
     return h("div", { class: "act-strip" }, ...kids);
+  }
+
+  // The beats an edit touched, each one a way back to that beat.
+  function beatChips(nums) {
+    if (!nums?.length) return null;
+    const shown = nums.slice(0, 6);
+    return h("div", { class: "act-beats" }, ...shown.map((n) => {
+      const b = h("button", { type: "button", class: "chip is-beat" }, icon("i-target"), h("span", { text: t("beats.n", { n }) }));
+      tip(b, t("act.beatTip", { n }));
+      pressable(b, () => {
+        if (app.viewing) app.backToNow();
+        app.setBeat(n, { focus: false });
+        note(b, t("act.beatShown", { n }));
+      });
+      return b;
+    }), nums.length > shown.length ? h("span", { class: "faint small", text: `+${nums.length - shown.length}` }) : null);
+  }
+
+  // The latest delivered film, as a card that plays it on the stage.
+  function filmCard(a) {
+    const d = app.state?.render?.delivered;
+    const pic = { url: `${BASE}/api/frame?t=1.5&h=180&src=film`, label: "" };
+    const play = h("button", { type: "button", class: "text-btn mini" }, icon("i-play"), h("span", { text: t("act.watch") }));
+    tip(play, t("act.watchTip"));
+    pressable(play, () => {
+      if (app.viewing) app.backToNow();
+      app.setSource("delivered");
+      app.seek(0);
+      app.setPlaying(true, "ui");
+      note(play, t("act.watching"));
+    });
+    const kids = [play];
+    {
+      const rev = h("button", { type: "button", class: "text-btn mini" }, icon("i-folder"), h("span", { text: t("top.reveal") }), h("span", { class: "spin", "aria-hidden": "true" }));
+      tip(rev, t("reveal.tip"));
+      pressable(rev, async () => {
+        if (rev.classList.contains("is-busy")) return;
+        const slow = setTimeout(() => busyOn(rev, true), 150);
+        try { await post("/api/reveal", {}); note(rev, t("reveal.ok")); }
+        catch (e) { note(rev, t("reveal.failed", { why: e.message }), "is-error"); }
+        finally { clearTimeout(slow); busyOn(rev, false); }
+      });
+      kids.push(rev);
+    }
+    const facts = [d.duration ? timecode(d.duration, app.fps()).replace(/\d$/, "") : null, bytes(d.bytes),
+      a.seconds ? t("act.renderedIn", { d: elapsed(a.seconds) }) : null].filter(Boolean).join(" · ");
+    const open = h("button", { type: "button", class: "film-thumb" }, h("img", { src: pic.url, alt: "", loading: "lazy", draggable: "false",
+      onerror: (e) => e.target.replaceWith(icon("i-film", "thumb-gone")) }), h("span", { class: "film-play" }, icon("i-play")));
+    tip(open, t("act.watchTip"));
+    pressable(open, () => play.click());
+    const lufs = d.lufs != null ? h("div", { class: "act-sub is-ok" }, icon("i-check"), t("act.loudness", { v: String(d.lufs).replace("-", "−") })) : null;
+    return h("div", { class: "film-wrap" }, lufs, h("div", { class: "film-card" }, open,
+      h("div", { class: "film-info" }, h("strong", { text: t("act.film") }), h("span", { class: "num dim", text: facts }), h("div", { class: "film-actions" }, ...kids))));
+  }
+
+  // A refused render: the frame it measured, where the problem is, and a way to ask for the correction.
+  function refusedBody() {
+    const r = app.result();
+    if (r.state !== "refused") return null;
+    const kids = [];
+    if (r.frame) {
+      const pic = { url: `${BASE}${r.frame.startsWith("/") ? "" : "/project/"}${r.frame}`, label: r.t != null ? timecode(r.t, app.fps()) : "", path: r.frame, t: r.t };
+      kids.push(h("div", { class: "act-strip is-large" }, thumb(pic, (e) => lightbox.open([pic], 0, e.currentTarget), "is-bad")));
+    }
+    const chips = [];
+    if (r.beat != null) {
+      const b = h("button", { type: "button", class: "chip is-bad" }, icon("i-warn"),
+        h("span", { text: r.t != null ? `${t("beats.n", { n: r.beat })} · ${timecode(r.t, app.fps())}` : t("beats.n", { n: r.beat }) }));
+      tip(b, t("act.goProblem"));
+      pressable(b, () => { if (app.viewing) app.backToNow(); app.setBeat(r.beat, { focus: false }); if (r.t != null) app.seek(r.t); });
+      chips.push(b);
+    }
+    const fix = h("button", { type: "button", class: "chip is-link" }, icon("i-undo"), h("span", { text: t("act.askFix") }));
+    tip(fix, t("act.askFixTip"));
+    pressable(fix, () => {
+      if (r.beat != null) app.setBeat(r.beat, { focus: false });
+      if (r.t != null) app.seek(r.t);
+      app.emit("compose", t("act.fixText", { why: r.reason }));
+    });
+    chips.push(fix);
+    kids.push(h("div", { class: "act-beats" }, ...chips));
+    return kids;
   }
 
   function revealClips(ids, anchor) {
@@ -466,7 +533,8 @@ export function createPanel(app) {
     const viewing = a.batch != null && app.viewing?.n === a.batch;
     const later = d.fail ? fixedLater(items, idx) : null;
     const isNew = seen && !seen.has(key);
-    const li = h("li", { class: `act k-${d.kind}${d.fail ? " is-fail" : ""}${later ? " is-fixed" : ""}${viewing ? " is-viewing" : ""}${isNew ? " is-new" : ""}${inGroup ? " in-group" : ""}` });
+    const lastRender = a.tool === "render" && items.slice(idx + 1).every((x) => x.a.tool !== "render");
+    const li = h("div", { class: `act k-${d.kind}${d.fail ? " is-fail" : ""}${later ? " is-fixed" : ""}${viewing ? " is-viewing" : ""}${isNew ? " is-new" : ""}${inGroup ? " in-group" : ""}` });
     const live = d.ids.length && d.ids.some((id) => app.clipById(id, app.state?.tracks));
     let title;
     if (live) {
@@ -477,7 +545,7 @@ export function createPanel(app) {
       title = h("span", { class: "act-text", text: d.text });
     }
     const actions = [];
-    if (a.seconds != null && a.text && a.text.trim()) {          // rows made from history alone have nothing more to show
+    if (a.seconds != null && a.text && a.text.trim() && (d.fail || a.tool !== "render")) {   // rows made from history alone have nothing more to show
       const pre = h("pre", { class: "act-result", text: a.text });
       actions.push({ btn: disclosure(t("act.result"), pre, openResults.has(key), (on) => { on ? openResults.add(key) : openResults.delete(key); }), body: pre });
     }
@@ -494,40 +562,37 @@ export function createPanel(app) {
       });
       actions.push({ btn: b });
     }
-    if (d.action === "watch" && app.state?.render?.delivered && items.slice(idx + 1).every((x) => x.a.tool !== "render")) {
-      const b = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-play"), h("span", { text: t("act.watch") }));
-      tip(b, t("act.watchTip"));
-      pressable(b, () => {
-        if (app.viewing) app.backToNow();
-        app.setSource("delivered");
-        app.seek(0);
-        app.setPlaying(true, "ui");
-        note(b, t("act.watching"));
-      });
-      actions.push({ btn: b });
-    }
     if (d.action === "issues" && (app.state?.issues || []).length) {
       const b = h("button", { type: "button", class: "text-btn mini" }, icon("i-alert"), h("span", { text: t("act.showIssues") }));
-      tip(b, t("act.showIssuesTip"), "3");
+      tip(b, t("act.showIssuesTip"));
       pressable(b, () => app.showPanel("issues"));
       actions.push({ btn: b });
     }
     const secs = a.seconds != null && a.seconds >= 1 ? elapsed(a.seconds) : null;
+    const film = d.action === "watch" && lastRender && app.state?.render?.delivered ? filmCard(a) : null;
+    if (film) d.sub = null;
+    const refused = d.fail && a.tool === "render" && lastRender && app.result().state === "refused" ? refusedBody() : null;
+    if (refused) {
+      const r = app.result();
+      d.sub = [r.reason + (r.t != null ? ` · ${timecode(r.t, app.fps())}` : ""), app.state?.render?.delivered ? t("act.keptPrevious") : null].filter(Boolean).join(". ");
+    }
     li.append(
-      h("span", { class: "act-ic" }, icon(d.fail ? "i-alert" : d.icon)),
+      h("span", { class: "act-ic" }, icon(d.fail ? (a.tool === "render" ? "i-refused" : "i-alert") : d.icon)),
       h("div", { class: "act-main" },
-        title,
-        d.sub ? h("div", { class: `act-sub${d.mono ? " mono" : ""} ${d.subKind}`, text: d.sub }) : null,
-        d.next ? h("div", { class: "act-next", text: later ? t("act.fixedLater", { at: clock(later) }) : t("act.agentSees") }) : null,
+        h("div", { class: "act-head" }, title,
+          h("span", { class: "act-side" },
+            d.cost != null ? h("span", { class: "cost-chip num", text: money(d.cost) }) : null,
+            secs ? h("span", { class: "act-secs num", text: secs }) : null,
+            h("span", { class: "act-time num", text: clock(a.ts).slice(0, 5) }))),
+        d.sub ? h("div", { class: `act-sub${d.mono ? " mono" : ""} ${d.subKind}${d.good ? " is-ok" : ""}` }, d.good ? icon("i-check") : null, d.sub) : null,
+        d.next && !refused ? h("div", { class: "act-next", text: later ? t("act.fixedLater", { at: clock(later).slice(0, 5) }) : t("act.agentSees") }) : null,
+        a.tool === "edit" && !d.fail && !d.quiet ? beatChips(a.touched?.beats) : null,
         strip(a),
+        film,
+        ...(refused || []),
         actions.length ? h("div", { class: "act-actions" }, ...actions.map((x) => x.btn)) : null,
-        ...actions.filter((x) => x.body).map((x) => x.body)),
-      h("div", { class: "act-side" },
-        h("span", { class: "act-time num", text: clock(a.ts) }),
-        secs ? h("span", { class: "act-secs num", text: secs }) : null,
-        d.cost != null ? h("span", { class: "cost-chip num", text: money(d.cost) }) : null));
-    if (!d.fail) tip(li.querySelector(".act-ic"), toolName(a.tool));
-    else tip(li.querySelector(".act-ic"), t("act.failedTip"));
+        ...actions.filter((x) => x.body).map((x) => x.body)));
+    tip(li.querySelector(".act-ic"), d.fail ? t("act.failedTip") : toolName(a.tool));
     return li;
   }
 
@@ -535,56 +600,52 @@ export function createPanel(app) {
     const first = g.group[0], last = g.group.at(-1);
     const open = openGroups.has(first.key) || g.group.some((x) => x.a.batch != null && x.a.batch === app.viewing?.n);
     const d = said(last);
-    const list = h("ol", { class: "act-list sub" }, ...g.group.map((x) => rowEl(x, items.indexOf(x), items, true)));
+    const list = h("div", { class: "act-list sub" }, ...g.group.map((x) => rowEl(x, items.indexOf(x), items, true)));
     const isNew = seen && g.group.some((x) => !seen.has(x.key));
     const cost = g.group.reduce((s, x) => s + (costOf(x.a) || 0), 0);
     const sentence = g.group.every((x) => said(x).files) ? count("act.edit.files", g.group.length) : groupSentence(first.a.tool, g.group.length);
     const btn = disclosure(sentence, list, open, (on) => { on ? openGroups.add(first.key) : openGroups.delete(first.key); }, "act-group-btn");
     tip(btn, open ? t("act.groupClose") : t("act.groupOpen"));
     btn.addEventListener("click", () => tip(btn, btn.getAttribute("aria-expanded") === "true" ? t("act.groupClose") : t("act.groupOpen")));
-    return h("li", { class: `act act-group k-${toolKind(first.a.tool)}${isNew ? " is-new" : ""}` },
+    return h("div", { class: `act act-group k-${toolKind(first.a.tool)}${isNew ? " is-new" : ""}` },
       h("span", { class: "act-ic" }, icon(toolIcon(first.a.tool))),
-      h("div", { class: "act-main" }, btn, h("div", { class: "act-sub", text: `${t("act.latest")}: ${d.text}` }), list),
-      h("div", { class: "act-side" },
-        h("span", { class: "act-time num", text: `${clock(first.a.ts).slice(0, 5)}–${clock(last.a.ts).slice(0, 5)}` }),
-        cost ? h("span", { class: "cost-chip num", text: money(cost) }) : null));
+      h("div", { class: "act-main" },
+        h("div", { class: "act-head" }, btn, h("span", { class: "act-side" },
+          cost ? h("span", { class: "cost-chip num", text: money(cost) }) : null,
+          h("span", { class: "act-time num", text: `${clock(first.a.ts).slice(0, 5)}–${clock(last.a.ts).slice(0, 5)}` }))),
+        h("div", { class: "act-sub", text: `${t("act.latest")}: ${d.text}` }), list));
   }
 
-  function renderActivity(force = false) {
+  // The steps as thread entries {key, ts, el}; rebuilt only when the log, the view or the result moves.
+  function steps() {
     const acts = app.state?.activity || [];
-    const key = `${acts.length}:${acts.at(-1)?.ts}:${app.viewing?.n ?? ""}:${app.state?.revision}:${app.state?.render?.delivered?.at}`;
-    if (key === feedKey && !force) return;
-    feedKey = key;
-    if (!acts.length) {
-      feed.replaceChildren(emptyState("i-history", t("act.emptyTitle"), t("act.empty")));
-      seen = new Set();
-      return;
-    }
+    const key = JSON.stringify([acts.length, acts.at(-1)?.ts, app.viewing?.n ?? "", app.state?.revision, app.state?.render?.delivered?.at,
+      app.state?.result?.state, lang]);
+    if (key === stepsKey) return stepsOut;
+    stepsKey = key;
     const items = keyed(acts);
     const out = [];
     let prevTs = null;
     for (const g of grouped(items)) {
-      const ts = (g.group ? g.group[0] : g).a.ts;
-      if (!prevTs || secsOf(ts) - secsOf(prevTs) >= GROUP_GAP_S) out.push(h("li", { class: "act-divider", "aria-hidden": "true" }, h("span", { text: timeLabel(ts) })));
+      const head = g.group ? g.group[0] : g;
+      const ts = head.a.ts;
+      if (!prevTs || secsOf(ts) - secsOf(prevTs) >= GROUP_GAP_S) {
+        out.push({ key: `div|${ts}`, ts, el: h("div", { class: "act-divider", "aria-hidden": "true" }, h("span", { text: timeLabel(ts) })) });
+      }
       prevTs = (g.group ? g.group.at(-1) : g).a.ts;
-      out.push(g.group ? groupEl(g, items) : rowEl(g, items.indexOf(g), items));
+      out.push({ key: head.key, ts, el: g.group ? groupEl(g, items) : rowEl(g, items.indexOf(g), items) });
     }
-    const fresh = seen ? items.filter((x) => !seen.has(x.key)).length : 0;
-    const top = feed.scrollTop;
-    feed.replaceChildren(h("ol", { class: "act-list" }, ...out));
-    seen = new Set(items.map((x) => x.key));
-    if (atBottom) stick(true);
-    else {
-      feed.scrollTop = top;
-      unseen += fresh;
-      renderPill();
-    }
-    if (fresh && TABS[current] !== "activity") actDot.hidden = false;
+    if (app.state) seen = new Set(items.map((x) => x.key));      // what was there on arrival is not news
+    stepsOut = out;
+    return out;
   }
 
   function renderReplay() {
     const hist = app.state?.history || [];
-    replay.hidden = !hist.length;
+    const on = storage("replay-bar", false) || !!app.viewing;
+    replay.hidden = !on || !hist.length;
+    replayBtn.setAttribute("aria-pressed", String(!replay.hidden));
+    disable(replayBtn, hist.length ? null : t("act.noHistory"), t(replay.hidden ? "act.replayShow" : "act.replayHide"));
     if (!hist.length) return;
     replayRange.max = String(hist.length);
     const idx = app.historyIndex();
@@ -598,7 +659,6 @@ export function createPanel(app) {
     const i = app.historyIndex();
     disable($("replayPrev"), i <= 0 ? t("act.atFirst") : null, t("act.prev"));
     disable($("replayNext"), !app.viewing ? t("act.atNow") : null, t("act.next"));
-    requestAnimationFrame(() => stick(false));
   }
   replayRange.addEventListener("input", () => {
     const hist = app.state?.history || [];
@@ -918,12 +978,12 @@ export function createPanel(app) {
   })();
 
   // ---------------------------------------------------------------- hooks
-  app.on("state", () => { renderReplay(); renderActivity(); renderIssues(); renderAssets(); renderClip(); renderNow(); });
-  app.on("view", () => { renderReplay(); renderActivity(); renderClip(); });
+  app.on("state", () => { renderReplay(); renderIssues(); renderAssets(); renderClip(); app.emit("steps"); });
+  app.on("view", () => { renderReplay(); renderClip(); app.emit("steps"); });
   app.on("select", renderClip);
   app.on("replay", renderReplay);
 
   renderIntro();
-  show(0, false);
-  return { show, current: () => current, touched: () => touched };
+  show("chat", false);
+  return { show, current: () => current, touched: () => touched, steps, lightbox };
 }

@@ -414,6 +414,48 @@ def test_render_delivers_captions_files_and_chapters(tmp_path, monkeypatch):
 
 
 @needs_ffmpeg
+def test_render_cuts_the_profiles_covers_from_frame_0_and_asks_for_the_handover(tmp_path, monkeypatch):
+    from PIL import Image
+    small_douyin = {"base": "douyin", "width": 108, "height": 192, "min_s": None, "target_s": None,
+                    "cover": [{"name": "cover", "crop": [108, 144, 0, 24]}, {"name": "cover-full",
+                                                                            "crop": [108, 192, 0, 0]}]}
+    root = make_project(tmp_path, monkeypatch, duration=3, profile=small_douyin, tracks=[
+        {"id": "v0", "kind": "visual", "clips": [{"id": "bg", "type": "shape", "start": 0, "end": "end"}]}])
+    (root / sidecar.HANDOVER_FILE).write_text(sidecar.handover_skeleton("douyin"), encoding="utf-8")
+    (root / "out").mkdir()
+    (root / "out" / "cover-old.png").write_bytes(b"stale")
+    monkeypatch.setattr(R, "run_node", Node())
+    r = T.render(str(root))
+    assert r.ok, r
+    out = root / "out"
+    assert sorted(p.name for p in out.glob("cover*.png")) == ["cover-full.png", "cover.png"]
+    with Image.open(out / "cover.png") as im, Image.open(out / "cover-full.png") as full:
+        assert im.size == (108, 144) and full.size == (108, 192)
+        assert im.getpixel((50, 0)) == full.getpixel((50, 24))          # frame 0, cut 24 px from the top
+    assert f"cover: 3:4 cover (y 24-168) of frame 0, {out / 'cover.png'}" in r
+    assert f"cover-full: 9:16 cover of frame 0, {out / 'cover-full.png'}" in r
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["covers"] == ["cover.png", "cover-full.png"]
+    todo = len(sidecar.HANDOVER["douyin"])
+    assert f"note: {root / 'handover.md'} still has {todo} TODO: line(s): fill them" in r
+    filled = "\n".join(ln for ln in sidecar.handover_skeleton("douyin").splitlines() if not ln.startswith("TODO:"))
+    (root / sidecar.HANDOVER_FILE).write_text(filled, encoding="utf-8")
+    assert sidecar.handover_todo(root) == 0
+
+
+@needs_ffmpeg
+def test_review_without_narration_reads_the_captions_on_screen(tmp_path, monkeypatch):
+    root = make_project(tmp_path, monkeypatch, duration=3, tracks=captions_tracks())
+    (root / "out").mkdir()
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=s=192x108:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           root / "out" / "film.mp4")
+    r = T.review(str(root))
+    assert r.ok, r
+    assert "the caption on screen at each frame:\n- 0-1 s: Hello there\n- 2 s: and welcome" in r
+    assert "Hola" not in r and "no voice line to list" not in r
+    assert [f["shown"] for f in R.review(root)["frames"]] == ["Hello there", "Hello there", "and welcome"]
+
+
+@needs_ffmpeg
 def test_draft_renders_a_part_small_and_leaves_the_delivery_alone(tmp_path, monkeypatch):
     root = make_project(tmp_path, monkeypatch, duration=3, tracks=[
         {"id": "v0", "kind": "visual", "clips": [{"id": "bg", "type": "shape", "start": 0, "end": "end"}]}])

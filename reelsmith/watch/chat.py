@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import backends, cli_engines, guard, runner
+from . import presence
 from ..workspace import WorkspaceError, find_workspace
 
 TRANSCRIPT = Path(".history") / "chat.jsonl"
@@ -32,9 +33,11 @@ _ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 
 
 class ChatError(Exception):
-    def __init__(self, code: int, message: str):
+    """`code` the HTTP status; `key` and `params` the message as a code the window translates."""
+
+    def __init__(self, code: int, message: str, key: str = "chat.error", **params):
         super().__init__(message)
-        self.code = code
+        self.code, self.key, self.params = code, key, params
 
 
 # ------------------------------------------------------------------ which engines can run here
@@ -120,14 +123,25 @@ def clean_context(context) -> dict | None:
     if context is None:
         return None
     if not isinstance(context, dict):
-        raise ChatError(400, "context must be an object: {clip, start, end, playhead}")
+        raise ChatError(400, "context must be an object: {clip, start, end, playhead}", "chat.bad_context")
     out = {}
     if isinstance(context.get("clip"), str) and _ID.match(context["clip"]):
         out["clip"] = context["clip"]
     for key in ("start", "end", "playhead"):
         if _number(context.get(key)) is not None:
             out[key] = _number(context[key])
+    beat = context.get("beat")
+    if isinstance(beat, int) and not isinstance(beat, bool) and 0 < beat < 10000:
+        out["beat"] = beat
     return out or None
+
+
+def beat_line(context: dict | None) -> str:
+    """The selected beat, said to the agent (the runner's own line covers the clip and the playhead)."""
+    if not context or "beat" not in context or "clip" in context:
+        return ""
+    span = f" ({context['start']:.2f}-{context['end']:.2f} s)" if "start" in context and "end" in context else ""
+    return f"[selected beat {context['beat']}{span}]\n"
 
 
 def short_tool(name: str) -> str:
@@ -152,6 +166,8 @@ class Chat:
         self.engine: str | None = None          # of the turn that runs
         self._stop = threading.Event()
         self._calls: dict = {}                  # the running turn's call ids -> its tool rows
+        self._claimed: set = set()              # (turn, batch) already shown on a tool row
+        self._origin: dict = {}
         self._thread: threading.Thread | None = None
         self._engines: tuple[float, list[dict]] | None = None
 
@@ -244,28 +260,33 @@ class Chat:
     # ---- a turn
     def send(self, message, engine: str | None = None, context=None) -> int:
         if not isinstance(message, str) or not message.strip():
-            raise ChatError(400, "the message is empty")
+            raise ChatError(400, "the message is empty", "chat.empty")
         if len(message) > MAX_MESSAGE:
-            raise ChatError(400, f"the message is {len(message)} characters; the most is {MAX_MESSAGE}")
+            raise ChatError(400, f"the message is {len(message)} characters; the most is {MAX_MESSAGE}",
+                            "chat.too_long", chars=len(message), max=MAX_MESSAGE)
         context = clean_context(context)
         rows = self.engines()
         ws = self._workspace()
         if engine is None:
             engine = default_engine(rows, ws)
             if engine is None:
-                raise ChatError(400, "no engine can run here: " + "; ".join(f"{r['id']}: {r['why']}" for r in rows))
+                raise ChatError(400, "no engine can run here: " + "; ".join(f"{r['id']}: {r['why']}" for r in rows),
+                                "chat.no_engine")
         row = next((r for r in rows if r["id"] == engine), None)
         if row is None:
-            raise ChatError(400, f'unknown engine "{engine}": use {", ".join(ENGINE_ORDER)}')
+            raise ChatError(400, f'unknown engine "{engine}": use {", ".join(ENGINE_ORDER)}', "chat.unknown_engine",
+                            engine=engine)
         if not row["available"]:
-            raise ChatError(400, f"the {engine} engine cannot run here: {row['why']}")
+            raise ChatError(400, f"the {engine} engine cannot run here: {row['why']}", "chat.engine_unavailable",
+                            engine=engine, why=row["why"])
         hidden = guard.shadowed_workspace(self.root)
         if hidden is not None:
             raise ChatError(400, f"{self.root / 'workspace.json'} hides the workspace at {hidden}: move it out of "
-                                 "the project first")
+                                 "the project first", "chat.workspace_hidden")
         with self._lock:
             if self.busy is not None:
-                raise ChatError(409, f"turn {self.busy} is still running: wait for it or stop it")
+                raise ChatError(409, f"turn {self.busy} is still running: wait for it or stop it", "busy.chat",
+                                turn=self.busy)
             self.turn += 1
             turn = self.busy = self.turn
             self.engine = engine
@@ -285,6 +306,10 @@ class Chat:
         self._tell([])
         return True
 
+    @property
+    def stopping(self) -> bool:
+        return self._stop.is_set()
+
     def wait(self, timeout: float | None = None) -> bool:
         """True once no turn runs (tests and shutdown)."""
         thread = self._thread
@@ -293,13 +318,14 @@ class Chat:
         return self.busy is None
 
     def _work(self, turn: int, message: str, engine: str, context: dict | None) -> None:
+        self._origin = presence.set_origin(self.root, turn=turn)
         try:
             ws = self._workspace()
             settings = runner.settings_for(ws, engine=engine)
             conv = runner.Conversation(self.root, settings, ws, listener=lambda kind, data: self._heard(turn, kind,
                                                                                                          data),
                                        stop=self._stop, **self.seams)
-            row = asyncio.run(conv.turn(message, context))
+            row = asyncio.run(conv.turn(beat_line(context) + message, context))
         except Exception as exc:  # noqa: BLE001 - the window says why the turn failed
             row = {"error": str(exc) if isinstance(exc, WorkspaceError) else f"{type(exc).__name__}: {exc}",
                    "cost_usd": 0.0}
@@ -315,10 +341,32 @@ class Chat:
         elif kind == "result":
             row = self._calls.pop(data.get("id"), None) if data.get("id") is not None else None
             if row is not None:
-                self._update(row, ok=data["ok"], **({"detail": self._masked(data["text"])} if data.get("text") else {}))
+                batch = self._batch_of(turn, row["tool"]) if data["ok"] else None
+                self._update(row, ok=data["ok"], **({"detail": self._masked(data["text"])} if data.get("text") else {}),
+                             **({"batch": batch} if batch is not None else {}))
             elif not data["ok"]:               # a call the engine refused before it ran (an unknown tool, bad input)
                 self._add("tool", "", turn, tool=short_tool(data.get("name")), ok=False,
                           detail=self._masked(data.get("text") or ""))
+
+    def _batch_of(self, turn: int, tool: str) -> int | None:
+        """The edit batch the call just made: the newest activity row of this turn and tool that names one not yet
+        given to another row (the tool wrote it before its result came back, in whichever process it ran)."""
+        try:
+            with (self.root / ".history" / "activity.jsonl").open(encoding="utf-8", errors="replace") as f:
+                tail = deque(f, maxlen=40)
+        except OSError:
+            return None
+        for line in reversed(tail):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            n = row.get("batch") if isinstance(row, dict) else None
+            if (isinstance(n, int) and row.get("turn") == turn and row.get("tool") == tool
+                    and (turn, n) not in self._claimed):
+                self._claimed.add((turn, n))
+                return n
+        return None
 
     def _masked(self, text: str) -> str:
         from ..providers import config
@@ -336,23 +384,29 @@ class Chat:
         cost = round(float(row.get("cost_usd") or 0), 4)
         spent, budget = row.get("spent_usd"), row.get("budget_usd")
         note = {"cost_usd": cost, "spent_usd": spent, "budget_usd": budget}
+        params: dict = {"cost_usd": cost}
         if row.get("refused") == "budget":
-            kind = "budget"
-            text = (f"The chat's ${budget:.2f} budget is used up (${spent:.2f} spent): raise runner.budget_usd in "
-                    "workspace.json to go on.")
+            kind, params = "budget", {"budget_usd": budget, "spent_usd": spent}
+            text = (f"The chat's ${budget:.2f} budget is used up (${spent:.2f} spent). Raise runner.budget_usd in "
+                    "workspace.json to continue.")
         elif stopped:
-            kind, text = "stopped", f"Stopped. This turn cost ${cost:.2f}."
+            kind, text = "stopped", f"The request was stopped. Cost of this turn: ${cost:.2f}."
         elif row.get("error"):
-            kind, text = "error", f"The turn failed: {self._masked(row['error'])}"
+            kind, params = "error", {"error": self._masked(row["error"])}
+            text = f"The request failed: {params['error']}"
         elif row.get("aborted"):
-            kind, text = "aborted", f"The turn ended early: {row['aborted']}. It cost ${cost:.2f}."
+            kind, params = "aborted", {"reason": str(row["aborted"]), "cost_usd": cost}
+            text = f"The request ended early: {row['aborted']}. Cost of this turn: ${cost:.2f}."
         else:
-            kind, text = "end", f"Done. This turn cost ${cost:.2f}."
+            kind, text = "end", f"The request is complete. Cost of this turn: ${cost:.2f}."
         if row.get("budget_used_up") and kind != "budget":
-            text += f" The ${budget:.2f} budget is now used up: raise runner.budget_usd in workspace.json to go on."
-            note["budget_used_up"] = True
+            text += (f" The ${budget:.2f} budget is now used up. Raise runner.budget_usd in workspace.json to "
+                     "continue.")
+            note["budget_used_up"] = params["budget_used_up"] = True
+            params["budget_usd"] = budget
         with self._lock:
             self.busy = None
             self.engine = None
             self._stop.clear()
-        self._add("note", text, turn, kind=kind, **note)
+        presence.clear_origin(self.root, self._origin)
+        self._add("note", text, turn, kind=kind, code=f"chat.{kind}", params=params, **note)

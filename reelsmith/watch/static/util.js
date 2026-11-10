@@ -18,10 +18,6 @@ export function elapsed(sec) {
   return s < 60 ? `${s} s` : shortTime(s);
 }
 
-export function seconds(t, digits = 2) {
-  return `${(+t).toFixed(digits)} s`;
-}
-
 export function clock(ts) {
   if (!ts) return "";
   const m = /T(\d\d:\d\d:\d\d)/.exec(ts);
@@ -51,6 +47,21 @@ export function h(tag, attrs = {}, ...kids) {
 
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
+// A Lucide icon from the sprite in index.html.
+export function icon(name, cls = "") {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  if (cls) s.setAttribute("class", cls);
+  s.setAttribute("aria-hidden", "true");
+  const u = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  u.setAttribute("href", `#${name}`);
+  s.append(u);
+  return s;
+}
+
+// "Rendering the film" inside a sentence: "The agent is rendering the film".
+// German capitalises its nouns, so a name set mid-sentence keeps its capital there
+export const lowerFirst = (s) => (/^[A-Z][a-z]/.test(s) && !/^de/.test(document.documentElement.lang) ? s[0].toLowerCase() + s.slice(1) : s);
+
 export function css(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -58,11 +69,6 @@ export function css(name) {
 // Per-type colours, read from CSS so the stylesheet owns the palette.
 export function typeColor(type) {
   return css(`--clip-${type}`) || css("--clip-shape");
-}
-
-export function debounce(fn, ms) {
-  let id = 0;
-  return (...a) => { clearTimeout(id); id = setTimeout(() => fn(...a), ms); };
 }
 
 export function writtenText(w) {
@@ -175,6 +181,34 @@ export function installTips() {
   document.addEventListener("focusout", hideTip);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
   addEventListener("blur", hideTip);
+}
+
+// A button and its menu of .menu-item buttons: arrows, Home and End move; Escape and Tab close it and return to the
+// button; a press outside closes it. `first` picks the item the keyboard lands on.
+export function menuButton(btn, menu, first = () => 0) {
+  const items = () => [...menu.querySelectorAll(".menu-item")].filter((el) => el.offsetParent !== null);
+  function open(focus) {
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    if (focus) items()[first(items())]?.focus();
+  }
+  function close(refocus) {
+    if (menu.hidden) return false;
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    if (refocus) btn.focus();
+    return true;
+  }
+  btn.addEventListener("click", (e) => { menu.hidden ? open(e.detail === 0) : close(false); });
+  btn.addEventListener("keydown", (e) => { if (e.key === "ArrowDown") { e.preventDefault(); open(true); } });
+  menu.addEventListener("keydown", (e) => {
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); list[(i + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length].focus(); }
+    else if (e.key === "Home" || e.key === "End") { e.preventDefault(); list[e.key === "Home" ? 0 : list.length - 1].focus(); }
+    else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); close(true); }
+  });
+  document.addEventListener("pointerdown", (e) => { if (!btn.parentElement.contains(e.target)) close(false); });
+  return { open, close };
 }
 
 // A click on the backdrop closes a dialog, but not a press that began inside it and slid off.

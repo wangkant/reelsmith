@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import reelsmith
-from reelsmith import cli, media, profiles
+from reelsmith import cli, media, profiles, sidecar
 from reelsmith import render as R
 from reelsmith import timeexpr as TE
 from reelsmith import tools as T
@@ -143,9 +143,98 @@ def test_new_project(tmp_path, monkeypatch):
     assert not bad.ok and "unknown profile" in bad
 
 
+def test_new_project_on_a_platform_writes_the_playbooks_handover_skeleton(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    p = tmp_path / "bili"
+    r = T.new_project(str(p), profile="bilibili", title="标题")
+    assert r.ok and f"{p / 'handover.md'}: what to hand over beside the film; fill its TODO: lines" in r
+    raw = (p / "handover.md").read_bytes()
+    assert b"\r\n" not in raw
+    text = raw.decode("utf-8")
+    assert text.startswith("# Handover: 标题\n") and "docs/platforms/bilibili.md" in text
+    heads = [ln[3:] for ln in text.splitlines() if ln.startswith("## ")]
+    assert heads == [h for h, _ in sidecar.HANDOVER["bilibili"]]
+    assert {"Declarations", "Cover", "Pinned comment", "Chapters"} <= set(heads) and "AI-generated content" in text
+    assert sidecar.handover_todo(p) == len(heads)
+    # every playbook has one; douyin-long and shorts share theirs; generic canvases get none
+    assert set(profiles.PLAYBOOKS.values()) == set(sidecar.HANDOVER)
+    assert T.new_project(str(tmp_path / "s"), profile="shorts").ok and (tmp_path / "s" / "handover.md").is_file()
+    plain = T.new_project(str(tmp_path / "l"), profile="vertical")
+    assert plain.ok and "handover" not in plain and not (tmp_path / "l" / "handover.md").exists()
+    (tmp_path / "kept").mkdir()
+    (tmp_path / "kept" / "handover.md").write_text("mine", encoding="utf-8")
+    assert T.new_project(str(tmp_path / "kept"), profile="douyin").ok
+    assert (tmp_path / "kept" / "handover.md").read_text(encoding="utf-8") == "mine"
+
+
+def test_capture_viewport_follows_the_canvas_shape_as_its_help_says():
+    cap = importlib.import_module("reelsmith.providers.capture")
+    tall = [profiles.make_profile({"base": b}) for b in ("vertical", "portrait", "douyin")] + [
+        profiles.make_profile({"width": 1000, "height": 1002})]
+    wide = [profiles.make_profile({"base": b}) for b in ("landscape", "square", "bilibili")]
+    assert {cap.default_viewport(p) for p in tall} == {"phone"}
+    assert {cap.default_viewport(p) for p in wide} == {"desktop"}
+    says = "phone on a canvas taller than wide, desktop on a wide or square one"
+    assert says in cap.default_viewport.__doc__ and says in " ".join(T.capture.__doc__.split())
+    sub = next(a for a in cli.command_parser("capture")._actions if a.dest == "cmd").choices["capture"]
+    viewport = next(a for a in sub._actions if a.dest == "viewport")
+    assert says in viewport.help
+
+
 def test_manual_is_served():
     r = T.manual()
-    assert r.ok and "reelsmith" in r.lower()
+    assert r.ok and r.startswith("# reelsmith manual")
+    # without a project: every profile with a playbook is listed, with how to get it
+    assert all(name in r for name in profiles.PLAYBOOKS) and "manual(project)" in r and "This film is for" not in r
+
+
+def test_manual_with_a_project_adds_its_platforms_playbook(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    book = (T.PLATFORMS / "douyin.md").read_text(encoding="utf-8")
+    made = T.new_project(str(tmp_path / "d"), profile="douyin-long")
+    assert made.ok and "playbook for Douyin (抖音)" in made and "douyin.md" in made and "manual(project)" in made
+    r = T.manual(str(tmp_path / "d"))
+    core, _, rest = r.partition("\n# This film is for Douyin (抖音)\n")
+    assert r.ok and core.startswith("# reelsmith manual") and "`douyin-long`" in rest
+    body = book[book.index("\n## The frame"):book.index("## Sources")].strip()
+    assert body in rest and "## Sources" not in rest and "[^own]:" not in rest      # sources stay in the file
+    # an inline canvas on a platform base is still that platform's film; a generic canvas has no playbook
+    assert T.new_project(str(tmp_path / "d25"), profile="douyin", canvas="1080x1920@25").ok
+    assert "This film is for Douyin" in T.manual(str(tmp_path / "d25"))
+    plain = T.new_project(str(tmp_path / "l"), profile="landscape")
+    assert plain.ok and "playbook" not in plain
+    r = T.manual(str(tmp_path / "l"))
+    assert r.ok and "This film is for" not in r and "no playbook" in r
+    assert not T.manual(str(tmp_path / "missing")).ok
+
+
+def test_manual_follows_a_workspace_profile_to_its_platform(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "workspace.json").write_text(json.dumps({"profile": "brand", "profiles": {
+        "brand": {"base": "bilibili", "fps": 25}}}), encoding="utf-8")
+    assert T.new_project(str(ws / "projects" / "b")).ok
+    assert "# This film is for Bilibili" in T.manual(str(ws / "projects" / "b"))
+
+
+def test_manual_names_every_profile_and_stays_short():
+    # read at the start of every session: it must not grow, and its craft chapter stays a page
+    text = T.MANUAL.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert len(lines) <= 560
+    assert all(f"| `{name}`" in text or f"`{name}` /" in text or f"/ `{name}`" in text for name in profiles.PROFILES)
+    start = lines.index("## Making a film people watch")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## "))
+    assert end - start - 1 <= 30
+    assert "always pass every line" in text and "re-speak only" not in text and "handover.md" in text
+
+
+def test_cli_manual_takes_a_project(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    assert T.new_project(str(tmp_path / "x"), profile="xiaohongshu").ok
+    assert cli.main(["manual", str(tmp_path / "x")]) == 0
+    assert "# This film is for Xiaohongshu" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ check / describe / edit / undo
@@ -638,6 +727,11 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
+    try:                                                # a zombie waiting for init is dead
+        if open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
     return True
 
 

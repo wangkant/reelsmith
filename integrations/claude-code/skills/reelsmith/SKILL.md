@@ -22,13 +22,15 @@ result says it already opened that window for them.
 
 ## The loop
 
-1. `manual` once. It is the full contract: the project format, the Time grammar, every edit op, the components and
-   what blocks delivery. This skill is only the map; when they disagree, the manual wins.
+1. `manual(project)` once the project exists (`manual()` before). It is the full contract: the project format,
+   the Time grammar, every edit op, the components, making a film people watch and what blocks delivery, followed
+   by the playbook of the project's platform. This skill is only the map; when they disagree, the manual wins.
 2. `notes(project)`: what worked in this workspace before.
 3. `new_project(project, profile?, locale?, title?)` makes the folder holding `project.json` (inside the workspace's
    `projects/` when there is one). The profile sets the canvas, fps, safe area and any length limits (default
-   `landscape` 1920×1080; `vertical`, `square`, `youtube`, `tiktok`, `shorts`...); the locale (BCP-47, default `en`)
-   is the film's language.
+   `landscape` 1920×1080; `vertical`, `square`, `portrait`; platform profiles `youtube`, `shorts`, `douyin`,
+   `tiktok`, `reels`, `bilibili`, `xiaohongshu`, `channels`...); the locale (BCP-47, default `en`) is the film's
+   language. Then call `manual(project)` for the platform's playbook.
 4. Bring in the material the user asked for:
    - **Their footage**: `import_asset` it, then look before you cut: `probe` (length, size, sound), `frames` (stills
      at source seconds with a contact sheet), `scenes` (shot cuts), `silences` (quiet ranges), `transcribe` (every
@@ -56,7 +58,7 @@ result says it already opened that window for them.
 - Words stay inside the profile's safe area and above its minimum size; `render` refuses text outside it, a mostly
   black film, and whatever the profile itself forbids (no sound, frozen stretches, a length outside its limits).
 - `speak`, `animate` and `transcribe` cost money and `draw` spends limited tries: each estimates first and refuses
-  over the budget. Transcribe a recording once; re-speak only the lines that changed.
+  over the budget. Transcribe a recording once; `speak` always takes every line (unchanged ones come from the cache, free).
 - `build/`, `out/` and `.history/` belong to reelsmith. `project.json` may be edited by hand (every tool validates
   it), but `edit` is atomic and undoable.
 - Do what the user asked for (their footage, their length, their language); decide the rest yourself and write
