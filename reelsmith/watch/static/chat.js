@@ -280,6 +280,7 @@ export function createChat(app, panel) {
     else {
       empty?.remove();
       empty = null;
+      yieldIntro();
       log.insertBefore(el, working.isConnected ? working : null);
     }
     els.set(r.id, el);
@@ -309,6 +310,9 @@ export function createChat(app, panel) {
   }
   app.on("tick", () => { if (S.busy) renderWorking(); });
 
+  // someone already talking to the agent does not need the first-run card over the conversation
+  const yieldIntro = () => { const intro = document.getElementById("intro"); if (intro) intro.hidden = true; };
+
   function renderAll() {
     els.clear();
     const rows = [...S.rows.values()].sort((a, b) => a.id - b.id);
@@ -318,6 +322,7 @@ export function createChat(app, panel) {
       log.replaceChildren(empty);
     } else {
       empty = null;
+      yieldIntro();
       log.replaceChildren(...rows.map((r) => { const el = rowEl(r); els.set(r.id, el); return el; }));
     }
     renderWorking();

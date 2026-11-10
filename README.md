@@ -52,6 +52,24 @@ One `undo` later:
 DELIVERED: out/film.mp4 (29.43 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 35.4 MB; rendered in 82.0 s). Look at it with review.
 ```
 
+## Watch it work, and say what you want changed
+
+<p align="center">
+  <img src="docs/media/window.webp" width="100%" alt="The reelsmith window: a monitor playing the cut, a chat where the agent has just changed a title's colour, and a multi-track timeline with narration, captions, titles, footage and sound">
+</p>
+
+`reelsmith watch <project>` opens a desktop window on the film your agent is making: a monitor that plays the current
+cut with the film's own renderer, a timeline that changes as the agent edits, a feed of what it did (the frames it
+looked at, what a check found, what a step cost), and a chat. Say "make this title red" with a clip selected and the
+agent edits, looks at the result and answers; the picture and the timeline follow. It runs on your machine and
+talks to the engine you already have (Claude through the Agent SDK, Codex, DeepSeek Harness, or any
+OpenAI-compatible API). [docs/watch.md](docs/watch.md) has the details.
+
+```sh
+pip install -e ".[app]"          # the desktop window (without it, a browser tab)
+reelsmith watch ~/studio/projects/first
+```
+
 ## Quick start
 
 ```sh
