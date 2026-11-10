@@ -55,15 +55,18 @@ DELIVERED: out/film.mp4 (29.43 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 35.4 M
 ## Monitoring and conversational editing
 
 <p align="center">
-  <img src="docs/media/window.webp" width="100%" alt="The reelsmith window: a monitor playing the cut, a chat where the agent has just changed a title's colour, and a multi-track timeline with narration, captions, titles, footage and sound">
+  <img src="docs/media/window.webp" width="100%" alt="The reelsmith window: on the left a session where the agent has changed a title's colour and inspected a frame, on the right the current cut playing above the film's five beats">
 </p>
 
-`reelsmith watch <project>` opens a desktop window on the film your agent is making: a monitor that plays the current
-cut with the film's own renderer, a timeline that updates as the agent edits, a record of each step (the frames it
-inspected, the result of each check, the cost of each paid call), and a chat. A request such as "make this title
-red", sent with a clip selected, is carried out by the agent, verified on a rendered frame and reported back; the
-monitor and the timeline update accordingly. It runs on your machine and
-talks to the engine you already have (Claude through the Agent SDK, Codex, DeepSeek Harness, or any
+`reelsmith watch <project>` opens a desktop window on the film your agent is making. It is built for following an
+agent rather than for editing by hand: a session lists each step the agent takes (the edit, the frames it inspected,
+the result of each check, the cost of each paid call) beside the current cut, played with the film's own renderer, and
+the film laid out as beats, one per narration line, each with its shots, cards and any issue found. A request such as
+"make this title red", sent with a beat or an element selected, is carried out by the agent, verified on a rendered
+frame and reported back in the session. The multi-track timeline is one key away, and a delivered film is
+accepted in the same window. The interface is available in eight languages (English, Simplified and
+Traditional Chinese, Japanese, Korean, Spanish, French, German), in light and dark themes. It runs on your machine
+and talks to the engine you already have (Claude through the Agent SDK, Codex, DeepSeek Harness, or any
 OpenAI-compatible API). [docs/watch.md](docs/watch.md) has the details.
 
 ```sh

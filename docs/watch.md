@@ -2,10 +2,11 @@
 
 `reelsmith watch` opens an editor window on the project your coding agent is editing: a desktop window of its
 own when the `app` extra is installed (`pip install -e ".[app]"`), else a tab in your browser. It is for
-watching the work as it happens, the way you would look over someone's shoulder in an editing app: a monitor that
-plays the current cut, a multi-track timeline that changes with every edit, and a feed of what the agent just did.
-It also has a chat: ask an agent for a change at any time, and watch it make it (see
-[Talking to the agent](#talking-to-the-agent)).
+following an agent's work rather than editing by hand: a session that lists each step the agent takes, the current
+cut playing beside it, and the film laid out as beats (one per narration line) with a multi-track timeline in a
+drawer. The session is also a chat: ask an agent for a change at any time, and watch it make it (see
+[Talking to the agent](#talking-to-the-agent)). The desktop window opens on the system's light or dark ground and
+its title bar follows the theme chosen in the page.
 
 The window itself changes the project only through that chat, whose agent works with the same tools and the same
 fences as `reelsmith run`, and through a few actions that run one tool without typing (render, check, undo, redo).
