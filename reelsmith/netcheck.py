@@ -264,6 +264,10 @@ class GuardProxy:
 
     def close(self) -> None:
         self._closed = True
+        try:
+            self._server.shutdown(socket.SHUT_RDWR)     # Linux: close alone leaves a blocked accept listening
+        except OSError:
+            pass
         _close(self._server)
         with self._lock:
             socks, self._socks = list(self._socks), set()
@@ -285,6 +289,8 @@ class GuardProxy:
                 conn, _ = self._server.accept()
             except OSError:
                 return
+            if self._closed:
+                return _close(conn)
             self._track(conn)
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 

@@ -727,6 +727,11 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
+    try:                                                # a zombie waiting for init is dead
+        if open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
     return True
 
 
