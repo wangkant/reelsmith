@@ -1,0 +1,391 @@
+{
+ "version": 2,
+ "profile": "landscape",
+ "locale": "en",
+ "meta": {
+  "title": "Why is the sea salty?",
+  "desc": "Where the ocean's salt comes from, in half a minute",
+  "topic": "why seawater is salty when rivers taste fresh",
+  "shape": "question, mechanism step by step, the number, a twist",
+  "sources": [
+   {
+    "title": "Why is the ocean salty? (NOAA Ocean Service)",
+    "url": "https://oceanservice.noaa.gov/facts/whysalty.html"
+   }
+  ]
+ },
+ "assets": {
+  "delta": {
+   "path": "assets/delta.png",
+   "kind": "image",
+   "note": "Aerial photograph of a wide river delta flowing into a deep blue sea at golden hour, braided channels of pale water spreading into the ocean, green banks. Photograph, natural light, cinematic, no peop"
+  },
+  "salt": {
+   "path": "assets/salt.png",
+   "kind": "image",
+   "note": "A clear glass of seawater on a weathered wooden table at the shore, a small pile of coarse white sea salt crystals beside it on the left third of the frame, the ocean softly blurred behind, the right "
+  },
+  "rain": {
+   "path": "assets/rain.png",
+   "kind": "image",
+   "note": "Rain falling on dark wet granite mountain rocks, a small stream running down between the stones, overcast moody light, shallow depth of field. Photograph, natural light, cinematic, no people, no text,"
+  },
+  "sun": {
+   "path": "assets/sun.png",
+   "kind": "image",
+   "note": "A low warm sun over a calm open ocean, thin mist rising from the water surface, soft orange and teal light, horizon in the upper third. Photograph, natural light, cinematic, no people, no text, no sig"
+  },
+  "ev_noaa": {
+   "path": "assets/ev_noaa.png",
+   "kind": "evidence",
+   "box": [
+    925,
+    580,
+    770,
+    60
+   ],
+   "site": "oceanservice.noaa.gov",
+   "url": "https://oceanservice.noaa.gov/facts/whysalty.html",
+   "note": "Why is the ocean salty? | Rainwater that falls on land is slightly acidic, so it erodes rocks."
+  },
+  "sun_v": {
+   "path": "assets/sun_v.mp4",
+   "kind": "video",
+   "note": "from sun: Thin mist rises slowly from the sea surface and drifts upward, gentle swells move, the sun's reflection shimmers on the water"
+  },
+  "rain_v": {
+   "path": "assets/rain_v.mp4",
+   "kind": "video",
+   "note": "from rain: Rain falls steadily, drops splash on the wet rocks, the stream runs down between the stones, mist drifts across the mountain behind"
+  },
+  "delta_v": {
+   "path": "assets/delta_v.mp4",
+   "kind": "video",
+   "note": "from delta: The pale river water flows slowly through the braided channels into the sea, small waves roll in along the shore, the low sun glints on the water"
+  },
+  "bed": {
+   "path": "assets/bed.m4a",
+   "kind": "audio",
+   "note": "from bed.m4a"
+  }
+ },
+ "tracks": [
+  {
+   "id": "bg",
+   "kind": "visual",
+   "clips": [
+    {
+     "id": "a1",
+     "type": "video",
+     "asset": "delta_v",
+     "start": 0,
+     "end": "line:2",
+     "rate": 0.9
+    },
+    {
+     "id": "a2",
+     "type": "video",
+     "asset": "rain_v",
+     "start": "line:2",
+     "dur": 3.6
+    },
+    {
+     "id": "a3",
+     "type": "video",
+     "asset": "delta_v",
+     "start": "clip:a2.end-0.4",
+     "end": "line:3",
+     "reverse": true,
+     "filter": {
+      "brightness": 0.8
+     },
+     "transition": {
+      "type": "crossfade",
+      "dur": 0.4
+     }
+    },
+    {
+     "id": "a4",
+     "type": "video",
+     "asset": "sun_v",
+     "start": "line:3",
+     "end": "line:4",
+     "rate": 0.74
+    },
+    {
+     "id": "m1",
+     "type": "video",
+     "asset": "rain_v",
+     "start": "line:4",
+     "dur": 1.2,
+     "rate": 2,
+     "trim_in": 0.5
+    },
+    {
+     "id": "m2",
+     "type": "video",
+     "asset": "delta_v",
+     "start": "clip:m1.end",
+     "dur": 1.2,
+     "rate": 2,
+     "trim_in": 0.5
+    },
+    {
+     "id": "m3",
+     "type": "video",
+     "asset": "sun_v",
+     "start": "clip:m2.end",
+     "dur": 1.2,
+     "rate": 2,
+     "trim_in": 0.5
+    },
+    {
+     "id": "a6",
+     "type": "image",
+     "asset": "salt",
+     "start": "clip:m3.end",
+     "end": "line:5",
+     "motion": "push",
+     "focus": [
+      0.3,
+      0.6
+     ]
+    },
+    {
+     "id": "a7",
+     "type": "video",
+     "asset": "delta_v",
+     "start": "clip:a6.end-0.5",
+     "end": "end",
+     "rate": 0.85,
+     "transition": {
+      "type": "crossfade",
+      "dur": 0.5
+     }
+    }
+   ]
+  },
+  {
+   "id": "plate",
+   "kind": "visual",
+   "clips": [
+    {
+     "id": "p1",
+     "type": "shape",
+     "shape": "rect",
+     "fill": "night",
+     "opacity": 0.78,
+     "radius": 28,
+     "start": "line:4+5.5",
+     "end": "line:5",
+     "box": {
+      "x": 1010,
+      "y": 230,
+      "w": 800,
+      "h": 460
+     },
+     "enter": {
+      "preset": "fade",
+      "dur": 0.4
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    }
+   ]
+  },
+  {
+   "id": "fg",
+   "kind": "visual",
+   "clips": [
+    {
+     "id": "hook",
+     "type": "text",
+     "text": "Why is the sea **salty**?",
+     "start": 0,
+     "end": "line:1.end",
+     "box": {
+      "x": 140,
+      "y": 300,
+      "w": 1640,
+      "h": 360
+     },
+     "style": {
+      "font": "display",
+      "size": "fit",
+      "max_size": 190,
+      "color": "snow",
+      "accent": "gold",
+      "stroke": {
+       "color": "night",
+       "width": 10
+      }
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    },
+    {
+     "id": "sb",
+     "type": "component",
+     "name": "StoryBeats",
+     "start": "clip:a3",
+     "end": "line:3.end",
+     "box": {
+      "x": 1030,
+      "y": 90,
+      "w": 800,
+      "h": 700
+     },
+     "props": {
+      "ground": "dark",
+      "beats": [
+       {
+        "when": "Rain",
+        "text": "wears minerals out of rock",
+        "at": 0.2
+       },
+       {
+        "when": "Rivers",
+        "text": "carry them down to the sea",
+        "at": 1.5
+       },
+       {
+        "when": "The sun",
+        "text": "lifts the water back into the sky",
+        "at": "line:3+0.3"
+       },
+       {
+        "when": "The salt",
+        "text": "stays behind",
+        "at": "line:3+3.2",
+        "hot": true
+       }
+      ]
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    },
+    {
+     "id": "years",
+     "type": "text",
+     "text": "× **billions** of years",
+     "start": "line:4+0.3",
+     "end": "clip:m3.end",
+     "box": {
+      "x": 260,
+      "y": 380,
+      "w": 1400,
+      "h": 300
+     },
+     "style": {
+      "font": "display",
+      "size": "fit",
+      "max_size": 170,
+      "color": "snow",
+      "accent": "gold",
+      "stroke": {
+       "color": "night",
+       "width": 10
+      }
+     },
+     "enter": {
+      "preset": "pop",
+      "dur": 0.3
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.2
+     }
+    },
+    {
+     "id": "n1",
+     "type": "component",
+     "name": "CountUp",
+     "start": "line:4+5.5",
+     "end": "line:5",
+     "box": {
+      "x": 1050,
+      "y": 260,
+      "w": 720,
+      "h": 400
+     },
+     "props": {
+      "value": 35,
+      "suffix": "g",
+      "label": "of salt in every litre of seawater",
+      "at": "line:4+5.75",
+      "dur": 0.9,
+      "ground": "dark",
+      "color": "gold"
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    },
+    {
+     "id": "e1",
+     "type": "component",
+     "name": "EvidenceCard",
+     "start": "line:2+0.5",
+     "end": "clip:a2.end-0.4",
+     "box": {
+      "x": 240,
+      "y": 300,
+      "w": 1440,
+      "h": 480
+     },
+     "props": {
+      "asset": "ev_noaa",
+      "context": 110,
+      "highlight_at": 0.9,
+      "highlight_dur": 0.7,
+      "ground": "dark",
+      "source": "Source: NOAA Ocean Service"
+     },
+     "enter": {
+      "preset": "rise",
+      "dur": 0.4
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    }
+   ]
+  },
+  {
+   "id": "sfx",
+   "kind": "audio",
+   "clips": [
+    {
+     "id": "sea",
+     "type": "audio",
+     "asset": "bed",
+     "start": 0,
+     "end": "end",
+     "volume": 0.1,
+     "loop": true,
+     "fade_in": 0.6,
+     "fade_out": 1.5
+    }
+   ]
+  },
+  {
+   "id": "cap",
+   "kind": "captions",
+   "source": "voice",
+   "emphasis": [
+    "salty",
+    "thirty-five grams",
+    "billions of years"
+   ]
+  }
+ ],
+ "voice": "voice/voice.json"
+}

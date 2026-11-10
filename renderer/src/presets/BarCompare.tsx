@@ -5,7 +5,7 @@
 import React from "react";
 import { useCurrentFrame } from "remotion";
 import {
-  decimalsOf, ease, fit, fmt, FONTS, frameOr, numOr, onGround, textWidth, themeColor, toFrames, twoLines, useClip,
+  breakLines, decimalsOf, ease, fit, fitBlock, fmt, FONTS, frameOr, numOr, onGround, textWidth, themeColor, toFrames, twoLines, useClip,
 } from "@reelsmith/kit";
 
 type Item = { label: string; value: number; display?: string; tone?: string; at?: number };
@@ -17,7 +17,7 @@ const LABEL_K = 0.85; // a row label next to its value, relative to the value's 
 const unitW = (s: string, weight: number, tabular = false) => (s ? textWidth(s, 100, FONTS.sans, weight, tabular) / 100 : 0);
 
 export default function BarCompare({ props }: { props: any }) {
-  const { w, h, fps, theme } = useClip();
+  const { w, h, fps, theme, width, height } = useClip();
   const f = useCurrentFrame();
   const items: Item[] = (Array.isArray(props?.items) ? props.items : [])
     .filter((it: any) => it && typeof it === "object")
@@ -42,28 +42,63 @@ export default function BarCompare({ props }: { props: any }) {
   const textColorOf = (it: Item, i: number) => (it.tone || i === hl ? colorOf(it, i) : ink.ink);
   const finals = items.map((it) => valueText(it, 1));
   const labelIn = (i: number) => ease(f, ats[i] - 4, ats[i] + 6);
+  const floor = (28 * Math.min(width, height)) / 1080;
+  const lineBreak = (s: string, bw: number, size: number, weight: number) =>
+    breakLines(s, bw, (t) => textWidth(t, size, FONTS.sans, weight), true, true).map((l) => l.trim()).filter(Boolean);
+
+  // Values on one line while that stays above the floor; else a counting value breaks after its number (the unit
+  // wraps below it) and a `display` text wraps like a label.
+  const valueFit = (bw: number, cap: number, unitLines: number, splitCap = cap) => {
+    const one = Math.min(cap, ...finals.map((t) => fit(t, bw, cap, FONTS.sans, 900)));
+    if (one >= floor) return { size: one, split: false };
+    const block = (s: string, lines: number) =>
+      fitBlock(s, bw, Infinity, { max: splitCap, min: floor, maxLines: lines, family: FONTS.sans, weight: 900, lineHeight: 1.25 }).size;
+    const size = Math.min(splitCap, ...items.map((it) => (it.display
+      ? block(String(it.display), unitLines + 1)
+      : Math.min(fit(fmt(it.value, decimals), bw, splitCap, FONTS.sans, 900), unit.trim() ? block(unit.trim(), unitLines) : splitCap))));
+    return size > one ? { size, split: true } : { size: one, split: false };
+  };
+  const valueLines = (it: Item, g: number, v: { size: number; split: boolean }, bw: number) =>
+    !v.split ? [valueText(it, g)]
+      : it.display ? lineBreak(String(it.display), bw, v.size, 900)
+      : [fmt(it.value * g, decimals), ...(unit.trim() ? lineBreak(unit.trim(), bw, v.size, 900) : [])];
+  // labels under the floor wrap at one shared size (at most `most` lines) instead
+  const labelFit = (size: number, bw: number, cap: number, most: number, lh: number, room = Infinity) => {
+    if (size >= floor) return null;
+    const wrapped = Math.min(...items.map((it) =>
+      fitBlock(it.label, bw, room, { max: cap, min: floor, maxLines: most, family: FONTS.sans, weight: 800, lineHeight: lh }).size));
+    return wrapped > size ? { size: wrapped, rows: items.map((it) => lineBreak(it.label, bw, wrapped, 800)) } : null;
+  };
 
   // ---- columns: labels fit their own bar's width, so neighbours keep a whole gap between them
   const cols = (() => {
     const gap = Math.max(18, w * (n > 4 ? 0.04 : 0.06));
     const bw = Math.max(1, (w - gap * (n - 1)) / n);
-    const valueSize = Math.min(68, h * 0.12, ...finals.map((t) => fit(t, bw + gap * 0.5, 68, FONTS.sans, 900)));
+    const value = valueFit(bw + gap * 0.5, Math.min(68, h * 0.12), 2);
+    const valueSize = value.size;
     const cap = Math.min(52, h * 0.1, valueSize);
     const one = Math.min(cap, ...items.map((it) => fit(it.label, bw, cap, FONTS.sans, 800)));
     const split = items.map((it) => twoLines(it.label, 3));
     const two = Math.min(cap, ...split.flat().map((r) => fit(r, bw, cap, FONTS.sans, 800)));
     const useTwo = two > one * 1.2 && split.some((r) => r.length > 1);
-    const labelSize = useTwo ? two : one;
-    return { gap, bw, valueSize, labelSize, rows: useTwo ? split : items.map((it) => [it.label]), score: Math.min(valueSize, labelSize) };
+    const wrapped = labelFit(useTwo ? two : one, bw, cap, 3, 1.2, h * 0.3);
+    const labelSize = wrapped ? wrapped.size : useTwo ? two : one;
+    const rows = wrapped ? wrapped.rows : useTwo ? split : items.map((it) => [it.label]);
+    return { gap, bw, value, valueSize, labelSize, rows, score: Math.min(valueSize, labelSize) };
   })();
 
   // ---- rows, labels in a left column
   const side = (() => {
     const rowH = h / n;
     const colMax = w * 0.34;
-    const valueSize = Math.min(rowH * 0.42, 64, ...finals.map((t) => fit(t, w * 0.3, 64, FONTS.sans, 900)));
-    const labelSize = Math.min(rowH * 0.36, 52, valueSize, ...items.map((it) => fit(it.label, colMax, 52, FONTS.sans, 800)));
-    return { rowH, colMax, valueSize, labelSize, score: Math.min(valueSize, labelSize) };
+    const value = valueFit(w * 0.3, Math.min(rowH * 0.42, 64), 1, Math.min(rowH * 0.42, 64, (rowH * 0.9) / 2.5));
+    const valueSize = value.size;
+    const cap = Math.min(rowH * 0.36, 52, valueSize);
+    const one = Math.min(cap, ...items.map((it) => fit(it.label, colMax, 52, FONTS.sans, 800)));
+    const wrapped = labelFit(one, colMax, cap, 2, 1.3, rowH * 0.9);
+    const labelSize = wrapped ? wrapped.size : one;
+    const rows = wrapped ? wrapped.rows : items.map((it) => [it.label]);
+    return { rowH, colMax, value, valueSize, labelSize, rows, score: Math.min(valueSize, labelSize) };
   })();
 
   // ---- rows, label left and value right on a line above each full-width bar
@@ -118,9 +153,9 @@ export default function BarCompare({ props }: { props: any }) {
   }
 
   if (mode === "side") {
-    const { rowH, colMax, valueSize, labelSize } = side;
-    const labelW = Math.min(colMax, Math.max(...items.map((it) => textWidth(it.label, labelSize, FONTS.sans, 800))));
-    const valueW = Math.max(...finals.map((t) => textWidth(t, valueSize, FONTS.sans, 900, true)));
+    const { rowH, colMax, value, valueSize, labelSize, rows } = side;
+    const labelW = Math.min(colMax, Math.max(...rows.flat().map((t) => textWidth(t, labelSize, FONTS.sans, 800))));
+    const valueW = Math.max(...items.flatMap((it) => valueLines(it, 1, value, w * 0.3)).map((t) => textWidth(t, valueSize, FONTS.sans, 900, true)));
     const gap = Math.max(12, w * 0.025);
     const barX = labelW + gap;
     const room = Math.max(0, w - barX - gap - valueW * 1.05);
@@ -132,19 +167,20 @@ export default function BarCompare({ props }: { props: any }) {
           const g = grow[i];
           const len = Math.max(it.value ? 4 : 0, (Math.abs(it.value) / max) * room * g);
           const cy = rowH * (i + 0.5);
+          const vLines = valueLines(it, g, value, w * 0.3);
           return (
             <React.Fragment key={i}>
               <div style={{
-                position: "absolute", left: 0, width: labelW, top: cy - labelSize * 0.65, height: labelSize * 1.3, textAlign: "right",
+                position: "absolute", left: 0, width: labelW, top: cy - rows[i].length * labelSize * 0.65, height: rows[i].length * labelSize * 1.3, textAlign: "right",
                 fontFamily: FONTS.sans, fontWeight: 800, fontSize: labelSize, lineHeight: 1.3, color: ink.ink, whiteSpace: "pre",
                 opacity: labelIn(i),
-              }}>{it.label}</div>
+              }}>{rows[i].join("\n")}</div>
               <div style={{ position: "absolute", left: barX, top: cy - thick / 2, width: len, height: thick, background: colorOf(it, i), borderRadius: `0 ${thick * 0.18}px ${thick * 0.18}px 0` }} />
               <div style={{
-                position: "absolute", left: barX + len + gap, top: cy - valueSize * 0.62, height: valueSize * 1.25, lineHeight: 1.25,
+                position: "absolute", left: barX + len + gap, top: cy - vLines.length * valueSize * 0.62, height: vLines.length * valueSize * 1.25, lineHeight: 1.25,
                 fontFamily: FONTS.sans, fontWeight: 900, fontSize: valueSize, color: textColorOf(it, i), whiteSpace: "pre",
                 fontVariantNumeric: "tabular-nums", opacity: g,
-              }}>{valueText(it, g)}</div>
+              }}>{vLines.join("\n")}</div>
             </React.Fragment>
           );
         })}
@@ -152,10 +188,12 @@ export default function BarCompare({ props }: { props: any }) {
     );
   }
 
-  const { gap, bw, valueSize, labelSize, rows } = cols;
+  const { gap, bw, value, valueSize, labelSize, rows } = cols;
+  const vw = bw + gap * 0.5;
+  const valueRows = Math.max(...items.map((it) => valueLines(it, 1, value, vw).length));
   const labelRows = Math.max(...rows.map((r) => r.length));
   const labelArea = labelRows * labelSize * 1.2 + labelSize * 0.45;
-  const valueArea = valueSize * 1.25 + valueSize * 0.25;
+  const valueArea = valueRows * valueSize * 1.25 + valueSize * 0.25;
   const base = h - labelArea;
   const maxBar = Math.max(0, base - valueArea);
   // a text centred over its bar, nudged inwards when it would cross the box edge
@@ -171,16 +209,17 @@ export default function BarCompare({ props }: { props: any }) {
         const x = i * (bw + gap);
         const bar = Math.max(it.value ? 4 : 0, (Math.abs(it.value) / max) * maxBar * g);
         const cx = x + bw / 2;
-        const vBox = over(cx, textWidth(finals[i], valueSize, FONTS.sans, 900, true));
+        const vLines = valueLines(it, g, value, vw);
+        const vBox = over(cx, Math.max(...valueLines(it, 1, value, vw).map((t) => textWidth(t, valueSize, FONTS.sans, 900, true))));
         const lBox = over(cx, Math.max(...rows[i].map((r) => textWidth(r, labelSize, FONTS.sans, 800))));
         return (
           <React.Fragment key={i}>
             <div style={{ position: "absolute", left: x, top: base - bar, width: bw, height: bar, background: colorOf(it, i), borderRadius: `${Math.min(14, bw * 0.08)}px ${Math.min(14, bw * 0.08)}px 0 0` }} />
             <div style={{
-              position: "absolute", ...vBox, top: base - bar - valueArea + valueSize * 0.1, height: valueSize * 1.25,
+              position: "absolute", ...vBox, top: base - bar - vLines.length * valueSize * 1.25 - valueSize * 0.15, height: vLines.length * valueSize * 1.25,
               lineHeight: 1.25, textAlign: "center", fontFamily: FONTS.sans, fontWeight: 900, fontSize: valueSize, whiteSpace: "pre",
               color: textColorOf(it, i), opacity: g, fontVariantNumeric: "tabular-nums",
-            }}>{valueText(it, g)}</div>
+            }}>{vLines.join("\n")}</div>
             <div style={{
               position: "absolute", ...lBox, top: base + labelSize * 0.45, textAlign: "center",
               fontFamily: FONTS.sans, fontWeight: 800, fontSize: labelSize, lineHeight: 1.2, color: ink.ink, whiteSpace: "pre",

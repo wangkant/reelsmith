@@ -129,8 +129,10 @@ Unknown keys are refused everywhere. Ids (assets, tracks, clips) and marker name
 `-`; clip ids are unique in the project. Paths are relative to the project folder.
 
 **Asset**: `{"path": "assets/x.png", "kind": "image"|"video"|"audio"|"evidence", "box": [x, y, w, h], "site": "",
-"url": "", "note": "", "transcript": "assets/x.transcript.json"}`. `box` (pixels in the image: the proving
-sentence), `site` and `url` belong to evidence. `transcript` (video and audio; written by `transcribe`, section 9.8)
+"url": "", "note": "", "line": 58, "around": [89, 58], "transcript": "assets/x.transcript.json"}`. `box` (pixels in
+the image: the proving sentence), `site` and `url` belong to evidence, and so do `line` (the text's line pitch) and
+`around` (how far above and below the box the gaps past its neighbouring lines lie), image pixels both, which
+`capture` measures so a crop cuts between lines. `transcript` (video and audio; written by `transcribe`, section 9.8)
 names the asset's word timing: `{"version": 1, "asset", "source", "duration_s", "language", "provider", "text",
 "words": [{"word", "start", "end"}], "segments": [{"start", "end", "text"}]}`, times in source seconds. A missing
 or unreadable transcript is a warning (an error when captions follow it).
@@ -172,8 +174,8 @@ reads the file's header) plays from the clip's start and loops; a still one hold
   captions.
 
 **Chapters**: `{"at": Time, "title": 1-100 characters}`, in any order (they are sorted by time). `at` must fall
-inside the film (an error otherwise); two chapters on one frame are a warning. Anchor them on markers (`"mark:intro"`)
-or clips so that ripple edits carry them; a number stays where it is.
+inside the film (an error otherwise); two chapters on one frame are a warning. Ripple edits move them as they move
+markers.
 
 ### 3.1 Time
 
@@ -239,7 +241,8 @@ Types and their fields:
   pixels), `draw` (the stroke draws on along `progress`, by default over the first 0.6 s). A line or arrow with
   only `fill` is stroked in that colour.
 - `evidence`: `asset` (kind evidence). The capture's `box` is scaled to the clip width (at most 2×) with context
-  above and below; the panel hugs its content (the rest of the box is transparent) and cut edges fade.
+  above and below (one whole line each way when the asset has `line` and `around`: the edges fall between lines and
+  only that gap fades); the panel hugs its content (the rest of the box is transparent) and cut edges fade.
   `highlight`: `{"at": Time?, "dur": 0.8, "color": "gold"}` sweeps across the proving sentence.
 - `component`: `name`, `props` (validated against the component's meta schema)
 
@@ -277,7 +280,8 @@ transitions in over whatever is beneath it. `crossfade` fades it in over the pre
 1.2× while the previous clip grows. Wipes, slides and zooms ease in and out; fades and dips are linear. A clip
 with sound fades its sound in over `dur`, and a previous clip with sound fades out over the overlap (audio clips
 take only `crossfade`, which crossfades their volume the same way). A transition longer than either clip, an
-overlap longer than the transition, and an overlap with any clip other than the previous one are errors.
+overlap longer than the transition, and an overlap with any clip other than the previous one are errors; an overlap
+shorter than the transition (by more than half a frame) is a warning.
 
 ### 3.3 Component props and Times
 
@@ -387,43 +391,50 @@ half keeps `fade_in` and loses `fade_out`, the second keeps
 `fade_out` and loses `fade_in`, `enter` and `transition`; `src:<id>@S` Times with S in the second half are pointed
 at the new clip. The halves meet at `at` as written, unless it is a number or a Time that moves with the clip itself
 (`clip:<id>...`, `src:<id>@S`, a marker on one): then at the cut's frame in seconds (3 decimals), which the second
-half's `trim_in` and keyframes agree with.
+half's `trim_in` and keyframes agree with; when the clip's start is not a number, the first half gets the `dur` it
+has and the second starts at `clip:<first>.end`, so the pair moves as the clip did.
 
-**Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, the duration,
-caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts it and
-written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end"`, `"mark:x"`, `"src:c@3"`) is put
-back wherever it still lands on the same frame. Anchors survive where they stay true (a clip timed from a clip that
-moved with it); the others become numbers (a clip after the cut timed from a voice line, since the voice is not
-cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
-(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. Whether a Time is at,
-before or after an edit point is decided in frames. Where an edit point falls inside a transition's overlap, a piece
-that still overlaps the clip before it keeps the transition, shortened to the overlap left, and a piece that kept
-it but got shorter than it is shortened to fit. Captions from a transcript whose clip is cut away (or removed with
-`remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
+**Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, chapters, the
+duration, caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts
+it and written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end"`, `"mark:x"`,
+`"src:c@3"`) is put back wherever it still lands on the same frame. Anchors survive where they stay true (a clip
+timed from a clip that moved with it); the others become numbers (a clip after the cut timed from a voice line,
+since the voice is not cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
+(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. A `src:<id>@S` argument
+(`start`, `end`, `at`, `in`, `out`) whose S clip `<id>` does not play names the piece of the same recording on its
+track that does, and is refused when none does. Whether a Time is at, before or after an edit point is decided in
+frames. Where an edit point falls inside a transition's overlap, a piece that still overlaps the clip before it keeps
+the transition, shortened to the overlap left, and one that kept it but is longer than its overlap or either clip
+is shortened to fit. Captions from a transcript whose clip is cut away (or removed with `remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
 
 - `ripple_delete`: the range `start`-`end` (frames) goes from the given tracks (default: every visual and audio
   track and every captions track with `items`). Clips inside it are removed, clips crossing an edge are split
   there (video and audio move their `trim_in` by the time cut × rate), and everything after it on those tracks
-  moves earlier by its length. Caption items are clipped to what is left. Clips on tracks it does not touch stay
-  where they are (an anchor that would drag them becomes a number). Markers and a set `duration` move with the
-  cut. The narration is never cut: a note says so when the range falls inside it. To cut several source ranges of
-  one clip (`silences`), cut from the last back: an earlier `src:<clip>@S` still names the first piece; name the
-  footage's tracks, or a music bed on its own track is cut (and skips) at every cut too.
+  moves earlier by its length. Caption items are clipped to what is left. On tracks it does not touch, numbers
+  stay where they are and a Time anchored on a clip (as are markers and chapters anchored on one) follows that
+  clip; one whose anchor was cut away becomes the number it was. Markers, chapters and a set `duration` move with
+  the cut. The narration is never cut: a note says so when the range falls inside it. Several source ranges of one
+  clip (`silences`) are cut in one batch in any order; name the footage's tracks, or a music bed on its own track
+  is cut (and skips) at every cut too.
 - `insert_gap`: everything at or after `at` on the given tracks moves later by `dur` (a clip that starts at `at`
-  moves, one that ends there stays; a clip across it is split); markers at or after it and a set `duration` move.
+  moves, one that ends there stays; a clip across it is split, except the clip a transition starting at `at` comes
+  from, which keeps its place); markers and chapters at or after it and a set `duration` move.
 - `trim_clip`: for a video or audio clip, `in` and `out` are seconds of its source (its new `trim_in` and the
   source second where it ends); for any other clip, Times of its new start and end. Without `ripple` the picture
   stays where it is on the timeline and only the clip's edges move (extending past a neighbour is refused as an
-  overlap); with `ripple` the clip keeps its start, and the clips after it on its track move by the change in its
-  length. Other clips anchored on it follow their anchors. An out point past the end of a non-looping source, an
-  in point that would start the clip before 0 s without ripple, and a reversed, held or speed-curved video clip
-  (its source seconds are not in film order) are refused.
+  overlap; clips timed from a moved edge stay where they were, as numbers); with `ripple` the clip keeps its start,
+  and the clips after it on its track move by the change in its length. Other clips anchored on it follow their
+  anchors. An out point past the end of a non-looping source, an in point that would start the clip before 0 s
+  without ripple, and a reversed, held or speed-curved video clip (its source seconds are not in film order) are
+  refused.
 
 A batch is refused, and project.json left untouched, when an op fails or when the result has validation errors the
 project did not have before: errors that were already there do not block edits that leave them alone. Before each
 write the previous project.json is kept as `.history/NNNN.json` (the last 500); `undo` puts one back and keeps the
-version it replaces as `.history/redo.json`. The project may also be edited as a file directly; every tool reads it
-fresh and validates it.
+version it replaces as `.history/redo.json` (saying so when project.json had changed since the last batch wrote it),
+and `redo` puts that version back as a batch of its own until another batch is applied. `remove_clip` of a clip
+others are timed from turns those anchors into the numbers they were. The project may also be edited as a file
+directly; every tool reads it fresh and validates it.
 
 ## 6. Components (presets and the agent's library)
 
@@ -486,7 +497,7 @@ content by type:
              "reversed"?: true (src is the reversed proxy, trimIn 0)}
   text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
   shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
-  evidence  {"src", "size", "box", "site", "highlight": {"at" frames, "dur" frames, "color"} | null}
+  evidence  {"src", "size", "box", "site", "line"?, "around"?, "highlight": {"at" frames, "dur" frames, "color"} | null}
   component {"name", "props" (Times → frames, asset ids → refs)}
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
@@ -577,7 +588,7 @@ project needs.
 ### 9.2 capture
 
 `capture(project, url, id, match?, viewport?)` → `assets/<id>.png`, an evidence asset with `box` (the sentence
-holding `match`, in the PNG's pixels), `site` and `url`. The browser is the installed Microsoft Edge, else the
+holding `match`, in the PNG's pixels), `site`, `url`, `line` and `around`. The browser is the installed Microsoft Edge, else the
 installed Google Chrome, else the Chromium that `python -m playwright install chromium` downloads. `viewport`
 `phone` loads the page at 430 CSS px wide and 3× device scale with a phone's user agent (the PNG is 1290 px wide);
 `desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone for vertical
@@ -619,10 +630,11 @@ paying again, and a finished clip whose download failed is collected again from 
 ### 9.5 import_asset and assets
 
 `import_asset(project, id, source, kind?)` brings a local file, or downloads an http(s) image, video or audio file,
-into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video
-and audio probed) whatever the name or the server says. A local file has no size limit: on the project's volume it
-is hard-linked into `assets/` (one file on disk under two names, so a multi-GB recording is not stored twice; no
-tool writes into an asset file, they only replace it, so the original is never changed), elsewhere it is copied
+into `assets/` and registers it (a relative path is read from the project folder; `reelsmith import` reads one
+the shell's folder holds from there). The bytes are sniffed (and video and audio probed) whatever the name or
+the server says. A local file has no size limit: on the project's volume it is hard-linked into `assets/` (one
+file on disk under two names, so a multi-GB recording is not stored twice; no tool writes into an asset file,
+they only replace it, so the original is never changed), elsewhere it is copied
 once the disk is found to have room for it (with 256 MB to spare); the reply says which. A download goes only to
 public hosts, every redirect included, and is capped by `providers.import.max_mb` (200). `kind` `evidence` takes a
 page screenshot you already have (PNG, JPEG or WebP); its box is the whole picture until `update_asset` sets one.
@@ -683,7 +695,10 @@ timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 `transcript` set through the edit ops. The asset must be video or audio with sound. ffmpeg takes its sound out as
 16 kHz mono (MP3 at 32 kbit/s for an endpoint, WAV for the local model). `language` is an ISO code (empty: the
 provider detects it, or `providers.transcribe.language`); `prompt` (at most 800 characters) lists names and words
-to spell right. The result lists what is said by segment with source times.
+to spell right. The result lists what is said by segment with source times. A call on the same file (size and
+mtime), provider, model, language and prompt as the saved transcript returns it "(cached, free)"; each finished
+piece is kept in the cache until the transcript is written, so a retry after a failure pays only for the pieces
+still missing.
 
 `providers.transcribe`:
 
@@ -713,10 +728,11 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 |---|---|---|
 | `manual()` | the agent manual ([manual.md](manual.md)) | `manual` |
 | `notes(project)` / `note(project, text)` | read / append to the workspace's `library/NOTES.md` | `notes`, `note` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag | `new --profile --canvas --locale` |
+| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag; `from_project` copies another project's film (assets and voice hard-linked, the edit with every pixel box mapped from its safe area to the new one) | `new --profile --canvas --locale --from` |
 | `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
 | `edit(project, ops)` | apply a batch of ops (section 5) | `edit` (JSON, `@file` or `-`) |
 | `undo(project, steps=1)` | undo applied batches | `undo --steps` |
+| `redo(project)` | put back what the last undo replaced | `redo` |
 | `check(project)` | validation, hard rules, advice (section 14) | `check` |
 | `library(project, name?)` | components with their props; one in full with its schema, example and source path | `library` |
 | `typecheck(project)` | type-check the library's components | `typecheck` |
@@ -1037,7 +1053,11 @@ value.
 - Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
   cyclic Times, props that fail a component's schema, an unknown font, a malformed locale or profile); the hard
   rules (section 2.2); a length outside the profile's limits (when it has any); an evidence clip whose drawn panel leaves the safe area
-  (a screenshot's words are words). Footage: an unknown clip or marker
+  (a screenshot's words are words); more of the film with no visual clip on screen than `max_black_ratio`; where
+  the profile sets `max_still_s`, a stretch longer than it in which nothing can move (only images without motion
+  or keyframes, text and shapes outside their enter, exit, reveal or draw, no video, animated image, component,
+  evidence or caption change). Footage: a video or audio clip whose `trim_in` is at or past its source's end (not
+  looping, held, speed-curved or reversed); an unknown clip or marker
   in a `src:` or `mark:` Time, a `src:` on a looping or non-media clip or before its in point, a transition longer
   than its clip or the clip it comes from, an overlap longer than the transition (or with any clip but the previous
   one), an audio transition other than `crossfade`, volume keyframes on a clip without sound or below 0, a `duck`
@@ -1046,9 +1066,12 @@ value.
 - Warnings: an empty title where rules.json has a title rule; on a profile with platform UI (`ui`, section 15.1)
   or when rules.json sets `hook_seconds`, frame 0 (the cover) without whole words on it (mid-reveal, mid-enter,
   fading in, or no words at all); evidence whose proving sentence will read under 40 px; a component Time that
-  falls outside its clip (by more than half a frame); motion and keyframes on the same property. Footage: a `src:`
-  second past its clip's end, an asset whose transcript is missing, both `enter` and `transition` on a clip,
-  `overrides` on captions from a transcript.
+  falls outside its clip (by more than half a frame); motion and keyframes on the same property; 0.5 s or more with
+  no visual clip on screen (black); caption items that overlap in time, or start or end past the film's end.
+  Footage: a `src:` second past its clip's end, an asset whose transcript is missing, both `enter` and `transition`
+  on a clip, `overrides` on captions from a transcript, a clip that runs more than a frame past the end of its
+  source (it freezes or falls silent), nothing audible on the timeline while a video it shows has sound (video
+  volume defaults to 0).
 - Advice (only what rules.json `advice` sets): nothing on screen at 0 s or no words within `hook_seconds`; a still
   image or evidence held longer than `max_same_visual_s` without anything moving it; more than `max_slide_share` of
   the film as words over a still picture or a flat ground; the length outside `target_s`.
@@ -1064,18 +1087,26 @@ value.
    Warnings: text under 28 px, text overflowing its clip box, text of one clip over text of another (captions
    included), and contrast under 3:1 against the background sampled from the still (between 2:1 and 3:1 a clearly
    different hue passes). The stills go to render.mjs 200 a call; after each call the stills that show no problem
-   are deleted, so a long film needs no more disk or memory than a short one.
+   are deleted, so a long film needs no more disk or memory than a short one. A clean pass is kept in
+   `build/layout.json` and reused while everything it read is unchanged (the resolved film, the profile, the
+   renderer's sources, the workspace's components, each shown file's size and time): after `preview` with
+   `sweep=true`, or a render that failed later, the layout is not measured again.
 3. **film**: the renderer encodes the film.
-4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP). A profile with `require_audio`
-   refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
+4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP) and the sound cut to the
+   picture's length; the gain applied is in the report (`master_gain_db`), with a note above +12 dB. A profile
+   with `require_audio` refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
    is not mastered). The project's `chapters` are put into the mp4 as chapter marks (streams copied).
 5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
    profile's cap, sound present and not near silent (`require_audio`), at most `max_black_ratio` black (10 %), and
    no stretch longer than `max_still_s` (5 s on the social profiles) without any motion; a limit that is null is
-   not checked. A rejected film is kept as `build/film.rejected.mp4` to look at.
+   not checked; the length is the picture's. A failure names the longest stretches and the clips on screen in
+   them, and the report keeps every black and frozen span (`black_spans`, `still_spans`; `review` lists the frozen
+   ones as its still screens). A rejected film is kept as `build/film.rejected.mp4` to look at.
 
 Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
 failure that is not the project's (its local server or browser) is retried once and reported as transient.
+`render`, `preview` and a draft of one project run one at a time: a second one in this process waits, one in
+another process is refused (the lock is `build/render.lock`, released when its process ends).
 
 A delivered film comes with its side files, the stale ones removed: `out/captions/<track>.srt` (SubRip) and `.vtt`
 (WebVTT, with a `Language:` header line) for every captions track, hidden ones included, each item one cue (its
@@ -1084,7 +1115,9 @@ phrase on one line, accents dropped, times on the film's frames); and, when the 
 description. A note says when YouTube would not show them as chapters (the first must start at 0:00, at least 3,
 each 10 s or more). `out/meta.json` lists the captions files (`captions`: track, language, srt, vtt) and the
 chapters (`chapters`: t, title; `chapters_file`). `export_captions` writes the captions files from the project as
-it stands, without rendering. `render` also warns for each HDR video the film shows (section 9.7).
+it stands, without rendering; when the cut differs from the one `out/report.json` records, to `build/captions`
+instead, so `out/` keeps the files that match its film. `render` also warns for each HDR video the film shows
+(section 9.7).
 
 Films of any length render. The encode may run 0.25 s a frame (at least 40 minutes) before it counts as hung, a
 call of stills 3 s a still (at least 15 minutes); mastering and the film checks scale their ffmpeg timeouts with the

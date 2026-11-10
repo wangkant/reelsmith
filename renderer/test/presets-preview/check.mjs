@@ -89,6 +89,30 @@ for (const id of ids.filter((i) => i.includes("Arrow") && !i.includes("empty")))
   for (const t of ts) check(t.s >= 28, `${id}: label ${fmtT(t)} is under 28 px`);
 }
 
+console.log("Chinese at the schemas' longest: nothing under the floor (28 px at a 1080 short side); a link label on two lines at most");
+for (const id of ids.filter((i) => /-zh-(max|wide)$/.test(i))) {
+  const p = probeOf(id);
+  const ts = shown(p);
+  // the stage's canvas is the box with 40 px around it
+  const floor = (28 * Math.min(p.w + 80, p.h + 80)) / 1080;
+  check(ts.length > 0, `${id}: text shows`);
+  for (const t of ts) check(t.s >= floor - 0.5, `${id}: ${fmtT(t)} is under the ${floor.toFixed(1)} px floor`);
+  if (id.includes("Parties")) {
+    const pills = ts.filter((t) => /^国家统计局/.test(linesOf(t).join("")));
+    check(pills.length >= 1 && pills.every((t) => linesOf(t).length <= 2), `${id}: link labels on at most two lines (${pills.map(fmtT).join(", ")})`);
+  }
+}
+
+console.log("StoryBeats: mid-length `when` labels keep the folded texts their room and wrap at their own line height");
+{
+  const p = probeOf("x-StoryBeats-mid-labels");
+  const ts = shown(p);
+  const label = ts.find((t) => linesOf(t).join(" ") === "Two weeks later");
+  const text = ts.find((t) => linesOf(t).join(" ").startsWith("The company cut"));
+  check(label && text && text.r[0] <= 0.42 * p.w, `the folded text starts at x ${text?.r[0]} (at most ${0.42 * p.w})`);
+  check(label && label.r[3] <= linesOf(label).length * 1.5 * label.s, `the label ${label ? fmtT(label) : "?"} is ${label?.r[3]} px tall`);
+}
+
 console.log("BarCompare: labels never larger than values, a clear gap between neighbours, legible in tall boxes");
 const LABELS = {
   "x-BarCompare-horizontal": ["上海门店", "北京门店", "深圳门店", "成都门店", "杭州门店"],
@@ -96,6 +120,7 @@ const LABELS = {
   "x-BarCompare-long-labels": ["城镇居民中位数", "农村居民中位数", "全国中位数"],
   "x-BarCompare-zh": ["奖品价值", "个税", "到手"],
   "x-BarCompare-latin-long": ["Median household income", "Median rural income", "Median urban income"],
+  "x-BarCompare-zh-max": Array(3).fill("国家统计局发布最新数据显示城镇居民人均可支配收入"),
 };
 const squash = (s) => s.replace(/\s+/g, "");
 for (const id of ids.filter((i) => i.includes("BarCompare") && !i.includes("empty"))) {

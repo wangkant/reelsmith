@@ -22,6 +22,7 @@
     "@remotion/layout-utils": "4.0.532",
     "@remotion/media": "4.0.532",
     "@remotion/paths": "4.0.532",
+    "@remotion/player": "4.0.532",
     "@remotion/renderer": "4.0.532",
     "react": "19.2.9",
     "react-dom": "19.2.9",

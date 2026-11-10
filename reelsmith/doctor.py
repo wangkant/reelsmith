@@ -304,9 +304,12 @@ def check_codex(os_name: str) -> Check:
     enables = "draw: original pictures through Codex image generation, on the user's Codex sign-in"
     from .providers.draw import find_codex
     path = find_codex()
+    auth = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json"
+    if path and not auth.is_file():
+        return Check("codex", False, False, f"Codex CLI at {path}, but not signed in ({auth} is missing): the user "
+                                            "runs `codex login` once (it opens a browser)", "codex login", enables)
     if path:
-        return Check("codex", True, False, f"Codex CLI at {path} (the user signs in once with `codex login`)",
-                     enables=enables)
+        return Check("codex", True, False, f"Codex CLI at {path}, signed in", enables=enables)
     return Check("codex", False, False, "the Codex CLI was not found (CODEX_EXE, the desktop app, PATH); after the "
                                         "install the user signs in once with `codex login` (it opens a browser)",
                  f"{npm(os_name)} install -g @openai/codex", enables)

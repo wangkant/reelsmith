@@ -2,7 +2,9 @@
 // edge with an arrowhead and a label pill; money / people links keep coins or people flowing; cut_at breaks one.
 import React, { useId, useMemo } from "react";
 import { useCurrentFrame } from "remotion";
-import { breakLines, ease, FONTS, frameOr, onGround, springAt, textWidth, themeColor, useClip, withAlpha } from "@reelsmith/kit";
+import {
+  breakLines, ease, fitBlock as blockFit, FONTS, frameOr, onGround, springAt, textWidth, themeColor, useClip, withAlpha,
+} from "@reelsmith/kit";
 
 type Pt = { x: number; y: number };
 type Rect = { x: number; y: number; w: number; h: number };
@@ -44,6 +46,20 @@ function fitBlock(text: string, maxW: number, max: number, min: number, floor: n
   }
   const { lines, widest } = wrap(bottom);
   return { size: widest > maxW ? Math.floor((bottom * maxW) / widest) : bottom, lines };
+}
+
+/** A link label on at most two lines: one line at the READ floor, else two lines shrinking to the SMALL floor, and only
+ *  then a wider pill (up to `wide`). */
+function pillBlock(label: string, maxW: number, wide: number, k: number): Block {
+  const s = label.trim();
+  if (!s) return { size: 0, lines: [] };
+  const at = (mw: number, min: number) =>
+    blockFit(s, mw, Infinity, { max: READ / k, min, maxLines: 2, family: FONTS.sans, weight: 700, lineHeight: 1.22 });
+  for (const [mw, min] of [[maxW, READ / k], [maxW, SMALL / k], [wide, SMALL / k]]) {
+    const b = at(mw, min);
+    if (b.size >= min) return b;
+  }
+  return at(wide, SMALL / k);
 }
 
 function measureCard(p: Party, style: "v" | "h", cw: number, badge: number, k: number): Omit<Card, "rect"> & { hgt: number } {
@@ -292,7 +308,7 @@ export default function Parties({ props }: { props: any }) {
   }
   const sameRow = (a: number, b: number) => (mode === "grid" ? (a < 2) === (b < 2) : mode === "triangle" ? a > 0 && b > 0 : mode === "row");
   const pillW = (label: string) => {
-    const b = fitBlock(label, PILL - 44, READ, READ, READ, 700, 2);
+    const b = pillBlock(label, PILL - 44, PILL - 44, 1);
     return Math.max(0, ...b.lines.map((x) => textWidth(x, b.size, FONTS.sans, 700))) + 44;
   };
   const rowGap = Math.max(0, ...links.filter((l) => l.label && sameRow(idx.get(String(l.from))!, idx.get(String(l.to))!))
@@ -331,7 +347,7 @@ export default function Parties({ props }: { props: any }) {
     const cards = layoutCards(parties, mode, X0, Y0, IW, IH, links.length > 0, rowGap, k).cards;
     const rects = cards.map((c) => c.rect);
     const pillMax = Math.min(IW * 0.62, PILL / k);
-    const pills = links.map((l) => fitBlock(String(l.label ?? ""), pillMax - 44, 40, 40, READ / k, 700, 2));
+    const pills = links.map((l) => pillBlock(String(l.label ?? ""), pillMax - 44, IW * 0.9 - 44, k));
     const pillDims = pills.map((b) => (b.lines.length
       ? { w: Math.max(...b.lines.map((s) => textWidth(s, b.size, FONTS.sans, 700))) + 44, h: b.lines.length * b.size * 1.22 + 22 }
       : { w: 0, h: 0 }));

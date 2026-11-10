@@ -29,6 +29,7 @@ PHRASE_MIN = 4
 _BREAK = re.compile(r"(?:[，。！？；：、!?;:…\n]|(?<!\d)[.,]|[.,](?!\d))+")
 _CLOSERS = "”’」』）》】〕〉)]}"               # stay with the text before them
 _OPENERS = "“‘「『（《【〔〈([{"               # stay with the text after them
+_JOINER = re.compile(r"(?<=[^\W_])[-‑–'’/](?=[^\W_])")   # a mark inside a word joins its halves
 _NUMERAL = "零〇一二三四五六七八九十百千万亿两"
 _NUMBER = re.compile(rf"\d+(?:[.,]\d+)*[{_NUMERAL}]*|[{_NUMERAL}](?:[{_NUMERAL}点]*[{_NUMERAL}])?")
 _UNITS = ("块钱", "元钱", "美元", "港元", "日元", "欧元", "英镑", "平方米", "平米", "公里", "千米", "厘米", "毫米",
@@ -441,6 +442,8 @@ def _cut_rules(text: str) -> tuple[list[bool], list[bool]]:
     for i in range(1, len(text)):
         if text[i] in _CLOSERS or text[i - 1] in _OPENERS:
             locked[i] = True
+    for m in _JOINER.finditer(text):            # thirty-five, don't, 2019–2024: the segmenter cuts at the mark
+        locked[m.start()] = locked[m.end()] = True
     return locked, number
 
 
@@ -987,6 +990,10 @@ class _Resolver:
         if a.kind == "evidence":
             ref["box"] = list(a.box) if a.box else None
             ref["site"] = a.site
+            if a.line:
+                ref["line"] = a.line
+            if a.around:
+                ref["around"] = list(a.around)
         if a.kind in ("video", "audio"):
             ref["duration"] = media_duration(path)
         return ref
@@ -1102,8 +1109,12 @@ class _Resolver:
             if c.highlight:
                 at = self.rel_frame(c.highlight.at, start) if c.highlight.at is not None else None
                 hl = {"at": at, "dur": max(1, self.frame(c.highlight.dur)), "color": c.highlight.color}
-            return {"src": ref["src"], "size": ref.get("size"), "box": ref.get("box"), "site": ref.get("site", ""),
-                    "highlight": hl}
+            out = {"src": ref["src"], "size": ref.get("size"), "box": ref.get("box"), "site": ref.get("site", ""),
+                   "highlight": hl}
+            for k in ("line", "around"):
+                if ref.get(k):
+                    out[k] = ref[k]
+            return out
         return {"name": c.name, "props": self.props(c.props, start)}
 
     def retime(self, c, start: int, dur: int, out: dict) -> None:
@@ -1359,7 +1370,16 @@ def _written(value) -> str:
     return "" if value is None or T.is_number(value) else str(value)
 
 
-def _clip_summary(c, doc: D.Document) -> str:
+def _muted(c, a, root: Path | None) -> bool:
+    """A video clip at volume 0 whose source has sound: the default, easy to miss."""
+    path = project_file(root, a.path) if a is not None and root is not None else None
+    if c.volume or c.keyframes.get("volume") or path is None:
+        return False
+    from . import media
+    return media.stream_facts(path)[1]
+
+
+def _clip_summary(c, doc: D.Document, root: Path | None = None) -> str:
     bits: list[str] = []
     if c.type in ("image", "video", "evidence", "audio"):
         a = doc.assets.get(c.asset)
@@ -1369,6 +1389,7 @@ def _clip_summary(c, doc: D.Document) -> str:
     elif c.type == "video":
         bits += [c.fit] + ([f"trim {c.trim_in:g}s"] if c.trim_in else []) + (["loop"] if c.loop else []) \
             + ([f"rate {c.rate:g}"] if c.rate != 1 else []) + ([f"vol {c.volume:g}"] if c.volume else []) \
+            + (["muted"] if _muted(c, a, root) else []) \
             + ([f"motion {c.motion}"] if c.motion else []) + (["reversed"] if c.reverse else []) \
             + ([f"hold {c.hold:g}s"] if c.hold is not None else [])
     elif c.type == "text":
@@ -1465,11 +1486,11 @@ class _Window:
             when = f"?-? ({_short(span, 70)})"
         else:
             written = [_written(c.start), _written(c.end)]
-            note = f" ({written[0] or f'{span[0]:g}'} -> {written[1] or ('dur ' + format(c.dur, 'g') if c.dur else '')})" \
-                if any(written) else ""
+            end = written[1] or (f"dur {c.dur:g}" if c.dur is not None else f"{span[1]:g}")
+            note = f" ({written[0] or f'{span[0]:g}'} -> {end})" if any(written) else ""
             when = f"{span[0]:.2f}-{span[1]:.2f}{note}"
         box = "" if c.type == "audio" else f"  [{_fmt_box(c.box, self.profile)}]"
-        return f"{c.id} {c.type} {when}{box}  {_clip_summary(c, self.doc)}".rstrip()
+        return f"{c.id} {c.type} {when}{box}  {_clip_summary(c, self.doc, self.root)}".rstrip()
 
     def header(self) -> list[str]:
         p, s = self.profile, self.profile.safe
@@ -1600,7 +1621,13 @@ class _Window:
     def at_rows(self, at: float) -> list[str]:
         f = T.to_frame(at, self.fps)
         end = f"{self.end:.2f} s" if self.end is not None else "?"
-        rows = [f"at {at:.2f} s (frame {f}) of {end}"]
+        past = []
+        if self.end is not None and f >= T.to_frame(self.end, self.fps):       # "end" is the last frame
+            if f > T.to_frame(self.end, self.fps):
+                past = [f"{at:g} s is past the film's end at {end}: showing the last frame"]
+            f = max(0, T.to_frame(self.end, self.fps) - 1)
+            at = f / self.fps
+        rows = past + [f"at {at:.2f} s (frame {f}) of {end}"]
         if self.voice:
             ln = next((x for x in self.voice.lines if x.t0 <= at < x.t1), None)
             rows.append(f"voice: [{ln.i}] {ln.t0:.2f}-{ln.t1:.2f} {ln.text}" if ln else "voice: (between lines)")

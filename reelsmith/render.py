@@ -2,6 +2,7 @@
 chapters), a quick draft film and a review sheet."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib
 import json
@@ -11,11 +12,13 @@ import re
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import media, sidecar
 from .checks import LayoutCheck, check_film, check_project, load_and_validate
+from .issues import Issue
 from .profiles import Profile
 from .timeexpr import TimeError, parse as parse_time, to_frame
 from .workspace import PROJECT_FILE, find_workspace, profile_for, project_paths, project_root
@@ -33,7 +36,9 @@ SHEET_WIDTH = 2600                  # columns are added while the sheet stays ab
 WATCH_EVERY_S = 1.0                 # review watches the film a frame a second ...
 WATCH_MAX_FRAMES = 150              # ... spread out on films longer than this many seconds
 WATCH_SHEET_WIDTH = 1600            # a watch sheet's side stays readable when a model scales it to 1280-1568 px
-STILL_DIFF = 1.5                    # mean grey-level change (0-255) of a 54x96 thumbnail under which a frame is "same"
+STILL_DIFF = 0.255                  # mean grey-level change (0-255) under which a frame is "same" (-60 dB, as
+                                    # the film check's freezedetect)
+LOUD_GAIN_DB = 12.0                # mastering that raises the mix more than this is worth a note
 LAYOUT_EVERY_S = 1.0
 LAYOUT_GRID_MAX = 600               # grid stills of the layout pass; a longer film's grid is spaced out evenly
 LAYOUT_BATCH = 200                  # stills per render.mjs call (it takes 600); each batch is pruned before the next
@@ -53,6 +58,68 @@ _MISSING = re.compile(r'component "(?P<name>[A-Za-z0-9_]+)" (?P<msg>(?:not found
 
 class RenderError(RuntimeError):
     """A request the platform cannot carry out as given; the message says what to do."""
+
+
+_PROJECT_LOCKS: dict[str, threading.RLock] = {}
+_PROJECT_GUARD = threading.Lock()
+_HELD = threading.local()
+
+
+def _try_os_lock(fh) -> bool:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _os_unlock(fh) -> None:
+    if os.name == "nt":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@contextmanager
+def project_lock(build: Path):
+    """One render, preview or draft of a project at a time: threads of this process wait their turn, another
+    process is refused. The OS drops the lock of a process that dies."""
+    key = str(Path(build).resolve()).lower()
+    with _PROJECT_GUARD:
+        lock = _PROJECT_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        held = _HELD.__dict__.setdefault("keys", set())
+        if key in held:
+            yield
+            return
+        Path(build).mkdir(parents=True, exist_ok=True)
+        with open(Path(build) / "render.lock", "a+b") as fh:
+            if not _try_os_lock(fh):
+                raise RenderError("another render or preview of this project is running (another process): wait "
+                                  "for it to finish, then try again")
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
+                _os_unlock(fh)
+
+
+def _one_at_a_time(fn):
+    @functools.wraps(fn)
+    def wrapper(project, *args, **kwargs):
+        with project_lock(project_paths(project_root(project)).build):
+            return fn(project, *args, **kwargs)
+    return wrapper
 
 
 def _mod(name: str):
@@ -373,7 +440,70 @@ def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profi
             "measured": measured, "crashes": crashes, "res": merged}
 
 
+# ------------------------------------------------------------------ the layout pass, kept
+def _digest_files(h, folder: Path, base: Path) -> None:
+    for f in sorted(p for p in folder.rglob("*") if p.is_file() and "node_modules" not in p.parts):
+        h.update(f.relative_to(base).as_posix().encode("utf-8") + b"\0" + f.read_bytes() + b"\0")
+
+
+def _srcs(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "src" and isinstance(v, str):
+                yield v
+            else:
+                yield from _srcs(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _srcs(v)
+
+
+def layout_key(root: Path, resolved: dict, frames: list[int], profile: Profile) -> str:
+    """Everything the layout pass reads: the film as resolved, the frames, the profile, the measuring code, the
+    renderer's sources, the workspace's components and the size and time of every file the film shows."""
+    h = hashlib.sha256(json.dumps({**resolved, "inspect": True}, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    h.update(json.dumps(frames).encode() + repr(profile).encode("utf-8"))
+    for f in (Path(__file__), Path(__file__).with_name("checks.py")):
+        h.update(f.read_bytes())
+    for name in ("src", "scripts"):
+        _digest_files(h, RENDERER / name, RENDERER)
+    for name in ("package.json", "package-lock.json", "remotion.config.ts", "tsconfig.json"):
+        f = RENDERER / name
+        h.update(f.read_bytes() if f.is_file() else b"-")
+    library = node_env(root).get("REELSMITH_LIBRARY")
+    if library:
+        _digest_files(h, Path(library), Path(library))
+    for src in sorted(set(_srcs(resolved))):
+        try:
+            st = (root / src).stat()
+            h.update(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode("utf-8"))
+        except OSError:
+            h.update(f"{src}:-".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _keep_layout(paths, key: str, got: dict) -> None:
+    """A clean layout pass (no crash) for the next render of the same film."""
+    if got["ok"] and not got["crashes"]:
+        _write_json(paths.build / "layout.json", {
+            "key": key, "layout": [i.__dict__ for i in got["layout"]], "frames": got["frames"],
+            "measured": got["measured"], "res": got["res"]})
+
+
+def _kept_layout(paths, key: str) -> dict | None:
+    """The kept layout pass for `key`, with its flagged stills still on disk; None otherwise."""
+    try:
+        data = json.loads((paths.build / "layout.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("key") != key or not all(Path(s["png"]).is_file() for s in data.get("frames") or []):
+        return None
+    return {"ok": True, "layout": [Issue(**i) for i in data["layout"]], "frames": data["frames"],
+            "measured": data["measured"], "crashes": {}, "res": data["res"]}
+
+
 # ------------------------------------------------------------------ preview
+@_one_at_a_time
 def preview(project: str | Path, times: list | None, sweep: bool = False) -> dict:
     """Stills at the given Times straight from the project, measured: {ok, frames, contact, layout, ...}. With
     `sweep`, also the layout pass render makes (layout_frames, not encoded): only flagged stills are kept."""
@@ -397,9 +527,12 @@ def preview(project: str | Path, times: list | None, sweep: bool = False) -> dic
         fps = float(resolved.get("fps") or profile.fps)
         last = max(0, int(resolved.get("durationInFrames") or 1) - 1)
         asked = {frame_of(root, t, fps, last) for t in times}
+        past = [t for t in times if to_frame(seconds_of(root, t), fps) > last + 1]      # "end" is the last frame
         frames = sorted(asked | (set(layout_frames(resolved)) if sweep else set()))
         _fresh_stills(paths.stills)
         got = measure(json_path, root, paths.stills, frames, profile, resolved, keep=asked if sweep else None)
+        if sweep and got["ok"] and frames == layout_frames(resolved):
+            _keep_layout(paths, layout_key(root, resolved, frames, profile), got)
     if not got["ok"]:
         res = got["node"]
         return {"ok": False, "stage": res.get("stage"), "error": failure_text(res),
@@ -415,6 +548,8 @@ def preview(project: str | Path, times: list | None, sweep: bool = False) -> dic
            "notes": res.get("notes") or []}
     if res.get("retried"):
         out["notes"] = out["notes"] + [f"the renderer had a transient problem and was retried: {res['retried'][0]}"]
+    out["notes"] = [f"{f'{t:g} s' if isinstance(t, (int, float)) else t} is past the film's end at "
+                    f"{out['duration_s']:.2f} s: showing the last frame" for t in past] + out["notes"]
     if sweep:
         out["sweep"] = {"measured": got["measured"], "kept": len(shots),
                         "every_s": round(layout_step(resolved) / fps, 2)}
@@ -510,6 +645,7 @@ def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float
     return out
 
 
+@_one_at_a_time
 def render(project: str | Path) -> dict:
     """The film into <project>/out/film.mp4, mastered and checked, with its captions as out/captions/<track>.srt and
     .vtt and its chapters as out/chapters.txt (and in the mp4). Every attempt's report goes to build/report.json
@@ -570,15 +706,22 @@ def render(project: str | Path) -> dict:
         frames = int(resolved.get("durationInFrames") or 0)
 
         # layout first: a few stills cost far less than the film and are the usual failure
-        _clear(paths.inspect)
-        got = measure(inspect_json, root, paths.inspect, layout_frames(resolved), profile, resolved, keep=set())
-        if not got["ok"]:
-            return node_failed("layout", got["node"])
+        grid = layout_frames(resolved)
+        key = layout_key(root, resolved, grid, profile)
+        got = _kept_layout(paths, key)
+        if got is None:
+            _clear(paths.inspect)
+            got = measure(inspect_json, root, paths.inspect, grid, profile, resolved, keep=set())
+            if not got["ok"]:
+                return node_failed("layout", got["node"])
+            _keep_layout(paths, key, got)
+        else:
+            report["layout_reused"] = True
         crashes, layout = got["crashes"], got["layout"]
         report["layout"] = [str(i) for i in layout]
         report["layout_frames"] = [s["png"] for s in got["frames"]]
         report["layout_measured"] = got["measured"]
-        lap("layout", got["res"])
+        lap("layout", None if report.get("layout_reused") else got["res"])
         if crashes:
             report["crashes"] = crash_rows(crashes)
             return finish("component", "a component crashed while the layout was measured (listed in crashes): "
@@ -603,7 +746,14 @@ def render(project: str | Path) -> dict:
             return finish("master", f"the film has no sound and {profile.name} wants it: add narration (speak) or "
                                     "an audio clip")
         if sound:
-            media.master(raw, mastered, profile.lufs, profile.peak_db, timeout=media.scaled_timeout(length))
+            gain = media.master(raw, mastered, profile.lufs, profile.peak_db, timeout=media.scaled_timeout(length))
+            report["master_gain_db"] = gain
+            if gain > LOUD_GAIN_DB:
+                report.setdefault("notes", []).append(
+                    f"mastering raised the sound by {gain:g} dB (to {profile.lufs:g} LUFS): the mix as edited is that "
+                    "quiet, so a draft (not mastered) sounds far quieter than the film, and all of it comes up, a "
+                    "quiet bed and room noise too; without a voice, a bed's volume sets its balance against the "
+                    "other sound, not its level")
         else:
             _replace(raw, mastered)             # a silent film: no loudness to master
             report["master"] = "silent film: not mastered"
@@ -624,7 +774,7 @@ def render(project: str | Path) -> dict:
             report.setdefault("notes", []).append(f"the chapters could not be put in the mp4 ({exc}); chapters.txt "
                                                   "still has them")
     lap("master")
-    report["film_check"] = check_film(mastered, profile)
+    report["film_check"] = check_film(mastered, profile, resolved)
     lap("film_check")
     if not report["film_check"]["ok"]:
         rejected = paths.build / "film.rejected.mp4"
@@ -663,10 +813,25 @@ def export_captions(project: str | Path, track: str | None = None) -> dict:
         return {"ok": False, "error": "the project has no captions track: add one (add_track kind captions)"}
     if track and track not in known:
         return {"ok": False, "error": f"no captions track {track!r}; captions tracks: {', '.join(known)}"}
-    return {"ok": True, "files": sidecar.write_captions(root, resolved, paths.out / "captions", only=track or None)}
+    folder, note = paths.out / "captions", ""
+    if paths.film.is_file() and _delivered_cut(paths) not in (None, film_inputs(root).get("cut")):
+        folder = paths.build / "captions"
+        note = (f"the cut has changed since {paths.film} was rendered, so these match the project, not that film: "
+                f"written to {folder}; out/captions keeps the files that match the film (render to deliver both)")
+    out = {"ok": True, "files": sidecar.write_captions(root, resolved, folder, only=track or None)}
+    return {**out, "note": note} if note else out
+
+
+def _delivered_cut(paths) -> str | None:
+    """The cut out/film.mp4 was rendered from (out/report.json); None when unknown."""
+    try:
+        return (json.loads(paths.report.read_text(encoding="utf-8")).get("inputs") or {}).get("cut")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 # ------------------------------------------------------------------ draft
+@_one_at_a_time
 def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE) -> dict:
     """A quick look at the film, or at the part from `start` to `end` (Times): build/draft.mp4 at `scale` of the
     canvas (0.1-1), fast-encoded and not mastered, with no layout pass and no delivery checks. out/ and the reports
@@ -742,7 +907,9 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
     shots = [{"t": t, "png": str(p)} for t, p in media.frames_every(paths.film, every, paths.review)
              if t < length]
     lines = _voice_lines(root)
-    still = _unchanged([s["png"] for s in shots])
+    spans = _still_spans(paths)
+    still = _unchanged([s["png"] for s in shots]) if spans is None else \
+        [i > 0 and _within(spans, shots[i - 1]["t"], s["t"]) for i, s in enumerate(shots)]
     for s, same in zip(shots, still):
         ln = next((x for x in lines if x.t0 <= s["t"] < x.t1), None)
         s.update(line=ln.i if ln else None, said=ln.text if ln else "", same=same)
@@ -764,13 +931,27 @@ def _voice_lines(root: Path) -> list:
     return list(voice.lines) if voice else []
 
 
+def _still_spans(paths) -> list | None:
+    """The film check's frozen stretches of the delivered film (out/report.json); None when it has none recorded."""
+    try:
+        fc = json.loads(paths.report.read_text(encoding="utf-8")).get("film_check") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    return fc.get("still_spans") if isinstance(fc.get("still_spans"), list) else None
+
+
+def _within(spans: list, a: float, b: float) -> bool:
+    return any(x - 0.02 <= a and b <= y + 0.02 for x, y in spans)
+
+
 def _unchanged(pngs: list[str]) -> list[bool]:
-    """Per frame: the picture is the same as the frame before (a still stretch shows as a run of these)."""
+    """Per frame: the picture is the same as the frame before (a still stretch shows as a run of these), by the
+    film check's measure (freezedetect's -60 dB) at full size."""
     from PIL import Image, ImageChops, ImageStat
     same, prev = [], None
     for p in pngs:
         with Image.open(p) as im:
-            cur = im.convert("L").resize((54, 96))
+            cur = im.convert("L")
         same.append(prev is not None and ImageStat.Stat(ImageChops.difference(cur, prev)).mean[0] < STILL_DIFF)
         prev = cur
     return same

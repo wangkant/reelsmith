@@ -3,14 +3,14 @@
 // with right-aligned tabular digits, so it does not re-centre while digits are added.
 import { useCurrentFrame } from "remotion";
 import {
-  decimalsOf, ease, fit, fmt, FONTS, frameOr, numOr, onGround, textWidth, themeColor, toFrames, useClip,
+  decimalsOf, ease, fitBlock, fmt, FONTS, frameOr, numOr, onGround, textWidth, themeColor, toFrames, useClip,
 } from "@reelsmith/kit";
 
 const PRE = 0.55; // prefix and suffix sizes relative to the digits
 const SUF = 0.45;
 
 export default function CountUp({ props }: { props: any }) {
-  const { w, h, dur, fps, theme } = useClip();
+  const { w, h, dur, fps, theme, width, height } = useClip();
   const f = useCurrentFrame();
   const value = numOr(props?.value, 0);
   const start = numOr(props?.from, 0);
@@ -40,8 +40,13 @@ export default function CountUp({ props }: { props: any }) {
   // a word after the number ("12 minutes") takes a word space; a symbol or a CJK unit sits close
   const sufGap = /^[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}]/u.test(suffix) ? 0.12 : 0.04;
   const perPx = unit(prefix, PRE) + digits + unit(suffix, SUF) + (suffix ? sufGap : 0);
-  const labelSize = label ? Math.min(72, h * 0.13, fit(label, w * 0.94, 72, FONTS.sans, 800)) : 0;
-  const labelBlock = label ? labelSize * 0.7 + labelSize * 1.25 : 0;
+  // a long label wraps (up to three lines) rather than shrink under the readable floor
+  const fitted = label
+    ? fitBlock(label, w * 0.94, h * 0.36, { max: Math.min(72, h * 0.13), min: (28 * Math.min(width, height)) / 1080, maxLines: 3, family: FONTS.sans, weight: 800, lineHeight: 1.25 })
+    : { size: 0, lines: [] as string[] };
+  const labelSize = fitted.size;
+  const labelH = fitted.lines.length * labelSize * 1.25;
+  const labelBlock = label ? labelSize * 0.7 + labelH : 0;
   const barGap = 0.16; // clear of a comma's descender
   const barH = 0.04;
   // 0.9 of the width leaves room for the landing pop
@@ -79,10 +84,10 @@ export default function CountUp({ props }: { props: any }) {
       ) : null}
       {label ? (
         <div style={{
-          position: "absolute", left: 0, width: w, top: top + block - labelSize * 1.25, height: labelSize * 1.25,
+          position: "absolute", left: 0, width: w, top: top + block - labelH, height: labelH,
           textAlign: left ? "left" : "center", fontFamily: FONTS.sans, fontWeight: 800, fontSize: labelSize, lineHeight: 1.25,
           color: ink.ink, whiteSpace: "pre", opacity: labelIn, transform: `translateY(${(1 - labelIn) * rise}px)`,
-        }}>{label}</div>
+        }}>{fitted.lines.join("\n")}</div>
       ) : null}
     </div>
   );

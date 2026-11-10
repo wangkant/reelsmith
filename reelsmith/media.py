@@ -157,6 +157,27 @@ def duration(path: Path) -> float | None:
         return None
 
 
+_FACTS: dict[tuple, tuple[float | None, bool]] = {}
+
+
+def stream_facts(path: Path) -> tuple[float | None, bool]:
+    """(seconds, has sound) of a video or audio file, kept while its size and mtime stay; (None, False) when it
+    cannot be read."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None, False
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _FACTS:
+        try:
+            info = probe(Path(path))
+            secs = float(info.get("format", {}).get("duration") or 0) or None
+            _FACTS[key] = secs, any(s.get("codec_type") == "audio" for s in info.get("streams") or [])
+        except (RuntimeError, ValueError):
+            _FACTS[key] = None, False
+    return _FACTS[key]
+
+
 def scaled_timeout(length_s: float, floor: float = 600, per_s: float = 1.0) -> float:
     """A timeout for an ffmpeg pass over `length_s` seconds of film: `floor`, or longer for a long film."""
     return max(floor, per_s * max(0.0, float(length_s or 0)))
@@ -176,8 +197,9 @@ class SilentAudio(RuntimeError):
     """The mix has an audio stream with nothing in it."""
 
 
-def master(src: Path, dst: Path, lufs: float, peak: float = -1.0, timeout: float = 600) -> None:
-    """Two-pass loudnorm of the whole mix to `lufs`; the picture is copied."""
+def master(src: Path, dst: Path, lufs: float, peak: float = -1.0, timeout: float = 600) -> float:
+    """Two-pass loudnorm of the whole mix to `lufs`, cut to the picture's length (loudnorm pads the sound); the
+    picture is copied. Returns the gain applied (dB)."""
     target = f"loudnorm=I={lufs}:TP={peak}:LRA=11"
     first = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(src), "-vn", "-af",
                  f"{target}:print_format=json", "-f", "null", "-"], timeout)
@@ -189,11 +211,14 @@ def master(src: Path, dst: Path, lufs: float, peak: float = -1.0, timeout: float
         raise SilentAudio("the audio is silent: nothing to master (is the narration missing?)")
     measured = (f"measured_I={s['input_i']}:measured_TP={s['input_tp']}:measured_LRA={s['input_lra']}:"
                 f"measured_thresh={s['input_thresh']}:offset={s['target_offset']}:linear=true")
+    video = next((v for v in probe(src).get("streams") or [] if v.get("codec_type") == "video"), {})
+    picture = ["-t", f"{float(video['duration']):.6f}"] if video.get("duration") else []
     r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map",
              "0:a:0", "-c:v", "copy", "-af", f"{target}:{measured}", "-ar", "48000", "-c:a", "aac", "-b:a", "192k",
-             "-movflags", "+faststart", str(dst)], timeout)
+             *picture, "-movflags", "+faststart", str(dst)], timeout)
     if r.returncode != 0 or not Path(dst).is_file() or Path(dst).stat().st_size == 0:
         raise RuntimeError(f"mastering failed: {tail(r.stderr or '', 5, 300)}")
+    return round(lufs - float(s["input_i"]), 1)
 
 
 def add_chapters(path: Path, meta: str, timeout: float = 600) -> None:
@@ -265,19 +290,23 @@ def reverse_span(src: Path, start: float, end: float, dst: Path, margin: int = 0
 
 
 def scan(path: Path, length: float) -> dict:
-    """Seconds of near-black and the longest stretch without any change, from one decode."""
+    """Seconds of near-black and the longest stretch without any change, with their spans ([[from, to] s]), from
+    one decode."""
     r = run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path), "-an",
              "-vf", f"{BLACK_FILTER},{FREEZE_FILTER}", "-f", "null", "-"], scaled_timeout(length, 900))
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg could not decode the film: {tail(r.stderr or '', 5, 300)}")
     err = r.stderr or ""
-    black = sum(float(x) for x in re.findall(r"black_duration:\s*([\d.]+)", err))
+    blacks = [[float(a), float(b)] for a, b in re.findall(r"black_start:\s*([\d.]+)\s+black_end:\s*([\d.]+)", err)]
+    black = sum(b - a for a, b in blacks)
     starts = [float(x) for x in re.findall(r"freeze_start:\s*([\d.]+)", err)]
-    lens = [float(x) for x in re.findall(r"freeze_duration:\s*([\d.]+)", err)]
-    if len(starts) > len(lens):         # still frozen at the end: ffmpeg prints no end for it
-        lens.append(max(0.0, length - starts[-1]))
+    ends = [float(x) for x in re.findall(r"freeze_end:\s*([\d.]+)", err)]
+    ends += [length] * (len(starts) - len(ends))        # still frozen at the end: ffmpeg prints no end for it
+    stills = [[a, max(a, b)] for a, b in zip(starts, ends)]
     return {"black_s": round(black, 2), "black_ratio": round(black / length, 3) if length else 0.0,
-            "longest_still_s": round(max(lens, default=0.0), 2)}
+            "longest_still_s": round(max((b - a for a, b in stills), default=0.0), 2),
+            "black_spans": [[round(a, 2), round(b, 2)] for a, b in blacks],
+            "still_spans": [[round(a, 2), round(b, 2)] for a, b in stills]}
 
 
 def _label_tiles(sheet: Path, labels: list[str], cols: int, tile: tuple[int, int]) -> None:

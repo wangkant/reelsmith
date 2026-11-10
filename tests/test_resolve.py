@@ -181,6 +181,24 @@ def test_component_props_get_frames_and_asset_refs(demo):
     assert rclip(r, "bill")["content"]["props"]["total"]["at"] == 342 - 169       # line:4.end at 11.40 s
 
 
+def test_evidence_line_measures_reach_the_crop_and_components(demo):
+    data = raw(demo)
+    data["assets"]["ev"].update(line=58, around=[89, 58])
+    data["tracks"].append({"id": "cards", "kind": "visual", "clips": [
+        {"id": "card", "type": "component", "name": "EvidenceCard", "start": "line:6", "end": "line:7",
+         "props": {"asset": "ev"}}]})
+    write(demo, data)
+    r = R.resolve(demo)
+    proof = rclip(r, "proof")["content"]
+    assert proof["line"] == 58 and proof["around"] == [89, 58]
+    asset = rclip(r, "card")["content"]["props"]["asset"]
+    assert asset["line"] == 58 and asset["around"] == [89, 58]
+    data["assets"]["ev"]["around"] = [89]
+    write(demo, data)
+    with pytest.raises(Exception, match="above, below"):
+        R.resolve(demo)
+
+
 def test_motion_becomes_keyframes_and_explicit_keyframes_win(demo):
     data = raw(demo)
     open_ = data["tracks"][0]["clips"][0]
@@ -306,6 +324,16 @@ def test_captions_cut_between_words_with_the_segmenter():
     assert R.phrases("国家统计局发布的数据显示城乡居民收入差距继续缩小") == ["国家统计局发布的数据显示",
                                                                          "城乡居民收入差距继续缩小"]
     assert R.phrases("真正的大头，是房租和人工，占了六成。") == ["真正的大头", "是房租和人工", "占了六成"]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node not on PATH")
+def test_captions_keep_hyphenated_words_and_contractions_whole():
+    line = "Repeat that for billions of years, and every litre of seawater holds about thirty-five grams of salt."
+    assert R.phrases(line, 32)[-2:] == ["holds about", "thirty-five grams of salt"]
+    for text in ("nobody here knows who's first and it doesn't change the on/off rule at all",
+                 "a well-known brand sold a state-of-the-art phone from 2019–2024 in every shop"):
+        for phrase in R.phrases(text, 16):
+            assert phrase[0].isalnum() and phrase[-1].isalnum(), (text, phrase)
 
 
 def test_captions_fallback_keeps_numbers_units_and_quotes_together():
@@ -501,7 +529,10 @@ def test_describe_at_a_moment(demo):
     assert "close image" in text and "now: zoom 1.08" in text and "progress 0" in text
     assert 'cap: caption "所以算下来"' in text
     assert "todo" not in text                                           # hidden track
-    assert "nothing visible" in R.describe(demo, 30)
+    late = R.describe(demo, 30)
+    assert late.startswith("30 s is past the film's end at 21.80 s: showing the last frame\nat 21.77 s (frame 653)")
+    assert "nothing visible" not in late and "close image" in late
+    assert R.describe(demo, 21.8).startswith("at 21.77 s (frame 653)")          # "end": its last frame, no note
 
 
 def test_describe_lists_issues_and_survives_broken_projects(demo):

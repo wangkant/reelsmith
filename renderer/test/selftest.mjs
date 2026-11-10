@@ -288,6 +288,19 @@ console.log("word-by-word captions");
   check(texts(15, "kp").map((i) => `${i.text} ${i.color}`).join("|") === `one two three ${WHITE}`, "phrase: the item shows whole");
 }
 
+console.log("text a component clips away inside itself");
+{
+  const w = writeMini("window", [comp("win", "Window")]);
+  const r = run(["inspect", w.file, w.dir, path.join(w.dir, "out"), "3"], { REELSMITH_LIBRARY: library });
+  const out = path.join(w.dir, "out", "inspect.json");
+  const data = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : { frames: [] };
+  const texts = (data.frames[0]?.items ?? []).filter((i) => i.clip === "win" && i.kind === "text");
+  const bottom = (t) => { const i = texts.find((x) => x.text === t); return i ? i.rect[1] + i.rect[3] : null; };
+  check(r.result?.ok === true && texts.map((i) => i.text).join("|") === "shown|half",
+    `a row outside the window is not measured (${r.s} s): ${texts.map((i) => i.text).join("|")} ${r.result?.error ?? ""}`);
+  check(bottom("half") === 200 && bottom("shown") < 200, `a row half under the edge is measured by the part that shows: bottom ${bottom("half")}`);
+}
+
 console.log("the film's locale reaches components (EvidenceCard's source line)");
 {
   const ev = { src: "assets/evidence.png", kind: "evidence", size: [1290, 960], box: [358, 446, 330, 66], site: "www.example.org" };
@@ -330,6 +343,12 @@ console.log("word-aware line breaking (unit)");
   const two = breakLines("iPhone 17 Pro 售价 8999 元，比去年贵了 12%", 20, byChar, true);
   check(two.length === 2 && !two.some((l) => /^元/.test(l)) && Math.abs(byChar(two[0]) - byChar(two[1])) <= 8,
     `balanced lines stay even and keep 8999 元 together (${two.join(" / ")})`);
+  const pct = breakLines("今年增长了50％以上", 6.5, byChar);
+  check(!pct.some((l) => /^[％%]/.test(l)) && has("价格＄99起，利率5‰", "＄99", "5‰"), `fullwidth ％, ＄ and ‰ stay with their number (${pct.join(" / ")})`);
+  const covid = breakLines("新冠COVID-19疫情", 5, byChar);
+  check(has("GPT-5发布了", "GPT-5") && covid.includes("COVID-19") && !covid.some((l) => /^-/.test(l)),
+    `a hyphenated Latin or digit run is one piece and no line starts with its hyphen (${covid.join(" / ")})`);
+  check(has("高さ634メートル、価格は1,200円", "634メートル、", "1,200円"), "Japanese units stay with their number");
 }
 
 console.log("text layout, default colour, fonts and evidence crops (layout.resolved.json)");
@@ -498,12 +517,15 @@ console.log("picture and time: focus keyframes, flips, filters, an animated GIF,
       el("gif", "image", { x: 440, y: 0, w: 60, h: 60 }, { src: "assets/anim.gif", size: [40, 40], fit: "cover", focus: null, animated: true }),
       el("held", "video", { x: 120, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { hold: 30 })),
       el("ramp", "video", { x: 200, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { rateKeys: [{ f: 0, v: 1 }, { f: 20, v: 3, ease: "step" }] })),
+      // the last 3 frames of the film: the source frame must not be capped at the frames left
+      { ...el("heldEnd", "video", { x: 280, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { hold: 40 })), from: 87, dur: 3 },
+      { ...el("rampEnd", "video", { x: 360, y: 100, w: 64, h: 64 }, vid("assets/counter.mp4", { trimIn: 20, rateKeys: [{ f: 0, v: 1 }] })), from: 87, dur: 3 },
     ] }],
     audio: [], inspect: false,
   };
   const file = path.join(dir, "resolved.json");
   fs.writeFileSync(file, JSON.stringify(film));
-  const r = run(["stills", file, dir, path.join(dir, "out"), "0", "15", "30", "45", "60", "75"]);
+  const r = run(["stills", file, dir, path.join(dir, "out"), "0", "15", "30", "45", "60", "75", "89"]);
   console.log(`  (${r.s} s)`);
   check(r.result?.ok === true && Math.abs((r.result?.fps ?? 0) - 29.97) < 0.001,
     `stills ok, at 30000/1001 fps (${r.result?.fps}) ${r.result?.error ?? ""}`);
@@ -528,6 +550,9 @@ console.log("picture and time: focus keyframes, flips, filters, an animated GIF,
   const ramp = [at(0, 220, 120)[0], at(15, 220, 120)[0], at(30, 220, 120)[0]];
   check(ramp[0] < 8 && Math.abs(ramp[1] - 60) <= 6 && Math.abs(ramp[2] - 200) <= 6,
     `a speed curve walks the source: 1x for 20 frames, then 3x (frames 0, 15, 30 show source 0, 15, 50: ${ramp.join(", ")})`);
+  const [heldEnd, rampEnd] = [at(89, 300, 120)[0], at(89, 380, 120)[0]];
+  check(Math.abs(heldEnd - 160) <= 6 && Math.abs(rampEnd - 88) <= 6,
+    `in the film's last frame a hold shows source 40 (grey 160) and a speed curve from trim 20 shows source 22 (grey 88): ${heldEnd}, ${rampEnd}`);
 }
 
 console.log("transient failures");

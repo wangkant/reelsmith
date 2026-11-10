@@ -22,11 +22,13 @@ import urllib.request
 import uuid
 import wave
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 from .. import locales
 from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, project_locale, redact, rel,
                      run_tree, safe_tool, set_voice_if_unset, tail, write_json)
+from .ledger import _os_lock
 from .openrouter import DEFAULT_MODEL, KEY_NAME, MIN_AUDIO_BYTES, ZH_VOICE, OpenRouter, synthesize
 
 PACE = {"slower": 1.10, "normal": 1.25, "faster": 1.35}
@@ -42,6 +44,7 @@ MAX_LINE_CHARS = 400
 MAX_EMOTION_CHARS = 20
 CACHE_VERSION = "1"
 PROCESS_VERSION = "p4"
+SPEAK_WAIT_S = 30 * 60          # another process's narration of the same project
 _PROJECT_LOCKS: dict[str, threading.Lock] = {}
 _GUARD = threading.Lock()
 
@@ -319,9 +322,16 @@ def _join(wavs: list[Path], specs: list[dict], gap_s: float, out: Path) -> tuple
 
 
 # ------------------------------------------------------------------ speak
-def _project_lock(ctx: Context) -> threading.Lock:
+@contextmanager
+def _project_lock(ctx: Context):
+    """One narration of a project at a time, across threads and processes (the MCP server and a CLI): the second
+    finds the first's lines cached instead of paying for them again."""
     with _GUARD:
-        return _PROJECT_LOCKS.setdefault(str(ctx.project).lower(), threading.Lock())
+        lock = _PROJECT_LOCKS.setdefault(str(ctx.project).lower(), threading.Lock())
+    name = hashlib.sha256(str(ctx.project).lower().encode("utf-8")).hexdigest()[:16]
+    with lock, _os_lock(ctx.cache_dir / "tts" / f".speak-{name}.lock", SPEAK_WAIT_S,
+                        "another speak is narrating this project"):
+        yield
 
 
 def _synth_fresh(engine: TTSEngine, fresh: dict[str, dict], cache: Path) -> tuple[dict[str, str], dict[str, float]]:

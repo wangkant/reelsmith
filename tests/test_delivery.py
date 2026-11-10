@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import zlib
 from pathlib import Path
 
@@ -144,9 +145,61 @@ def test_render_measures_a_long_film_in_batches_and_keeps_only_flagged_stills(tm
     assert sorted(p.name for p in (root / "build" / "inspect").glob("*.png")) == [f"still_{flagged:05d}.png"]
     assert all(c["timeout"] >= R.STILLS_TIMEOUT_S for c in inspects)
     node.items_for = lambda f: []                               # fixed: on to the film, whose timeout scales
+    (root / "build" / "layout.json").unlink()                   # the stand-in changed, not the film: measure again
     rep = R.render(root)
     film = [c for c in node.calls if c["mode"] == "film"][-1]
     assert rep["stage"] == "film" and film["timeout"] == pytest.approx(0.25 * 27000)
+
+
+def test_render_reuses_the_layout_pass_of_the_same_film(tmp_path, monkeypatch):
+    root = make_project(tmp_path, monkeypatch, duration=20, tracks=[
+        {"id": "v0", "kind": "visual", "clips": [{"id": "bg", "type": "shape", "start": 0, "end": "end"}]},
+        {"id": "v1", "kind": "visual", "clips": [{"id": "t", "type": "text", "text": "Hi", "start": 0, "end": "end",
+                                                  "box": {"x": 20, "y": 20, "w": 150, "h": 30}}]}])
+    node = Node(film_ok=False)
+    monkeypatch.setattr(R, "run_node", node)
+    assert T.preview(str(root), [], sweep=True).ok
+    swept = len(node.calls)
+    rep = R.render(root)
+    assert rep["stage"] == "film" and rep["layout_reused"] and len(node.calls) == swept + 1     # the film only
+    assert "layout 0 s (reused" in T._timing_text(rep)
+    R.render(root)                                              # the film failed: the next try skips the layout too
+    assert [c["mode"] for c in node.calls[swept:]] == ["film", "film"]
+    data = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    data["tracks"][1]["clips"][0]["text"] = "Hello"
+    (root / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    rep = R.render(root)
+    assert not rep.get("layout_reused") and node.calls[-2]["mode"] == "inspect"
+    write_png(root / "assets" / "p.png")
+    data["assets"] = {"p": {"path": "assets/p.png", "kind": "image"}}
+    data["tracks"].append({"id": "v2", "kind": "visual", "clips": [{"id": "pic", "type": "image", "asset": "p",
+                                                                    "start": 0, "dur": 1}]})
+    (root / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    R.render(root)
+    calls = len(node.calls)
+    st = (root / "assets" / "p.png").stat()
+    os.utime(root / "assets" / "p.png", ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+    R.render(root)
+    assert node.calls[calls]["mode"] == "inspect"
+
+
+def test_one_render_or_preview_of_a_project_at_a_time(tmp_path, monkeypatch):
+    root = make_project(tmp_path, monkeypatch, duration=5)
+    script = ("import sys, time; from reelsmith import render as R; "
+              "cm = R.project_lock(R.project_paths(sys.argv[1]).build); cm.__enter__(); print('held', flush=True); "
+              "time.sleep(30)")
+    holder = subprocess.Popen([sys.executable, "-c", script, str(root)], stdout=subprocess.PIPE, text=True,
+                              env={**os.environ, "PYTHONPATH": str(Path(R.__file__).parent.parent)})
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        res = T.preview(str(root), [1])
+        assert not res.ok and "another render or preview of this project is running" in res
+        assert not T.render(str(root)).ok
+    finally:
+        holder.kill()
+        holder.wait()
+    monkeypatch.setattr(R, "run_node", Node())
+    assert T.preview(str(root), [1]).ok                         # a dead process's lock is gone with it
 
 
 def test_preview_sweep_of_a_long_film_is_batched_too(tmp_path, monkeypatch):
@@ -296,6 +349,22 @@ def test_render_delivers_captions_files_and_chapters(tmp_path, monkeypatch):
     assert meta["chapters"][0] == {"t": 0.0, "title": "Intro"} and meta["chapters_file"] == "chapters.txt"
     assert "captions cap_es (es, hidden: file only, 2 cue(s))" in r and "chapters (3, also in the mp4)" in r
     assert "YouTube shows chapters only when" in r and "chapters under 10 s" in r
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert isinstance(report["master_gain_db"], float)
+    r = T.export_captions(str(root))                        # the same cut: next to the film
+    assert r.ok and "note:" not in r and str(out / "captions" / "cap.srt") in r
+    data = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    data["tracks"][1]["items"][1]["text"] = "and goodbye"
+    (root / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    r = T.export_captions(str(root))                        # a new cut: out/ keeps the pair that matches
+    assert r.ok and "the cut has changed since" in r and str(root / "build" / "captions" / "cap.srt") in r
+    assert "and welcome" in (out / "captions" / "cap.srt").read_text(encoding="utf-8")
+    assert "and goodbye" in (root / "build" / "captions" / "cap.srt").read_text(encoding="utf-8")
+    real = media.master
+    monkeypatch.setattr(media, "master", lambda *a, **k: (real(*a, **k), 33.0)[1])     # a quiet bed, no voice
+    r = T.render(str(root))
+    assert r.ok and "note: mastering raised the sound by 33 dB" in r
+    assert json.loads((out / "report.json").read_text(encoding="utf-8"))["master_gain_db"] == 33.0
 
 
 @needs_ffmpeg

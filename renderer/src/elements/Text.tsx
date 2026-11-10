@@ -113,18 +113,29 @@ export type TextLayout = {
   balanceCss: boolean;
 };
 
-const memo = new Map<string, TextLayout>();
+// keyed on the text alone (captions repaint accents and opacities every frame); `at`: where each line starts
+const memo = new Map<string, { L: TextLayout; at: number[] }>();
 
 /** Size and line breaks for runs in a w x h box; `maxLines` caps how many lines "fit" may use. Needs the fonts
  *  loaded (the Film waits for them). */
 export const layoutText = (runs: Run[], s: TextStyle, w: number, h: number, maxLines = Infinity): TextLayout => {
-  const key = JSON.stringify([runs, s, w, h, maxLines]);
-  const known = memo.get(key);
-  if (known) return known;
-  const L = layoutUncached(runs, s, w, h, maxLines);
-  if (memo.size > 400) memo.clear();
-  memo.set(key, L);
-  return L;
+  const key = JSON.stringify([textOf(runs), s, w, h, maxLines]);
+  let known = memo.get(key);
+  if (!known) {
+    const L = layoutUncached(runs, s, w, h, maxLines);
+    const all = textOf(runs);
+    let cursor = 0;
+    const at = (L.lines ?? []).map((line) => {
+      const i = all.indexOf(textOf(line), cursor);
+      cursor = i + textOf(line).length;
+      return chars(all.slice(0, i)).length;
+    });
+    known = { L, at };
+    if (memo.size > 400) memo.clear();
+    memo.set(key, known);
+  }
+  const { L, at } = known;
+  return L.lines ? { ...L, lines: L.lines.map((line, i) => sliceRuns(runs, at[i], at[i] + chars(textOf(line)).length)) } : L;
 };
 
 const layoutUncached = (runs: Run[], s: TextStyle, w: number, h: number, maxLines: number): TextLayout => {

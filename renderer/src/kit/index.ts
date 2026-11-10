@@ -6,7 +6,7 @@ export { EvidenceCrop, evidenceLayout } from "../elements/EvidenceCrop";
 export { FONTS, fontFamily } from "../fonts";
 export { breakLines } from "../elements/linebreak";
 export {
-  assetSrc, clamp, decimalsOf, ease, fit, fitLines, fmt, frameOr, isAsset, numOr, onGround, spread, springAt, textWidth,
+  assetSrc, clamp, decimalsOf, ease, fit, fitBlock, fitLines, fmt, frameOr, isAsset, numOr, onGround, spread, springAt, textWidth,
   themeColor, toFrames, TOKEN_NAMES, twoLines, withAlpha, words,
 } from "./helpers";
-export type { AssetRef, FontName, Ground, SpringOptions, Tokens } from "./helpers";
+export type { AssetRef, BlockOptions, FontName, Ground, SpringOptions, Tokens } from "./helpers";

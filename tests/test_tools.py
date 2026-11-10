@@ -30,7 +30,7 @@ TINY = replace(DOUYIN, name="tiny", width=108, height=192, safe=Box(8, 20, 92, 1
                target_s=(1, 10), lufs=-16.0, max_still_s=2.0)
 META = {"title": "油价为什么又涨了", "desc": "一句 #油价", "topic": "油价", "shape": "",
         "sources": [{"title": "示例日报", "url": "https://www.example.org/x"}]}
-SPEC_TOOLS = {"manual", "describe", "edit", "undo", "check", "library", "preview", "render", "review", "speak",
+SPEC_TOOLS = {"manual", "describe", "edit", "undo", "redo", "check", "library", "preview", "render", "review", "speak",
               "capture", "draw", "animate", "import_asset", "assets", "notes", "note", "typecheck"}
 
 
@@ -194,6 +194,9 @@ def test_undo_result_shapes(project, monkeypatch):
     fake_module(monkeypatch, "ops", undo=lambda pr, steps: (True, f"restored .history/000{steps}.json"))
     assert T.undo(str(project.path), 2) == "restored .history/0002.json"
     assert not T.undo(str(project.path), 0).ok
+    fake_module(monkeypatch, "ops", redo=lambda pr: (False, "nothing to redo"))
+    r = T.redo(str(project.path))
+    assert not r.ok and r == "nothing to redo"
 
 
 # ------------------------------------------------------------------ library, notes, providers
@@ -313,6 +316,7 @@ def test_preview(project, monkeypatch):
     assert "4 still(s) of a 3.0 s film" in r and "contact sheet" in r
     assert (project.path / "build" / "stills" / "contact.png").is_file()
     assert "t1 @ 1.2s" in r and "outside the safe area (top)" in r and "would block render" in r
+    assert "note: 99 s is past the film's end at 3.00 s: showing the last frame" in r and "'end'" not in r
 
 
 def test_preview_frames_round_as_the_timeline_does(project, monkeypatch):
@@ -442,6 +446,11 @@ def test_review_watches_the_film_a_second_at_a_time_with_the_voice(project, monk
     assert "- 0 s: [1] 一" in rv and "- 1 s: (no voice)" in rv and "- 2 s: [2] 二" in rv
     assert "- 3-9 s: (no voice)" in rv
     assert "the picture does not change" in rv and "- 0-9 s" in rv          # one colour throughout
+    # the film check's own frozen stretches, when the report has them: review says what it measured
+    (project.path / "out" / "report.json").write_text(json.dumps({"film_check": {"still_spans": [[4.0, 7.0]]}}),
+                                                      encoding="utf-8")
+    rv = T.review(str(project.path))
+    assert "the picture does not change" in rv and "- 4-7 s" in rv and "0-9 s" not in rv
     quick = T.review(str(project.path), 3)                                   # n: the quick look, as before
     assert quick.ok and "contact sheet" in quick and not list(review.glob("sheet_*.png"))
 
@@ -709,8 +718,38 @@ def test_mcp_exposes_every_tool_with_descriptions():
     assert all(len(t.description) > 30 for t in listed.values())
     from reelsmith.ops import OPS
     assert [op for op in OPS if op not in listed["edit"].description] == []        # clients see only this text
-    assert listed["preview"].input_schema["properties"]["times"]["type"] == "array"
+    times = listed["preview"].input_schema["properties"]["times"]["anyOf"]
+    assert [t["type"] for t in times] == ["array", "number", "string"]
     assert bad.is_error and "new_project" in bad.content[0].text
+
+
+def test_mcp_takes_one_op_and_one_time_and_explains_bad_arguments(project, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from reelsmith.mcp_server import mcp
+    seen, asked = [], []
+    fake_module(monkeypatch, "ops", apply=lambda pr, ops: (seen.append(ops), (True, [], "1 op"))[1])
+    monkeypatch.setattr(R, "preview", lambda pr, times, sweep=False: asked.append(times) or {"ok": False,
+                                                                                             "error": "x"})
+    op = {"op": "set", "path": "meta.title", "value": "t"}
+
+    async def go():
+        done = [await mcp.call_tool("edit", {"project": str(project.path), "ops": op}),
+                await mcp.call_tool("preview", {"project": str(project.path), "times": 1.5}),
+                await mcp.call_tool("preview", {"project": str(project.path), "times": "line:2"})]
+        errors = []
+        for name, args in (("edit", {"project": str(project.path), "ops": 5}), ("undo", {"project": "p", "steps": "x"}),
+                           ("check", {})):
+            with pytest.raises(ToolError) as exc:
+                await mcp.call_tool(name, args)
+            errors.append(str(exc.value))
+        return done, errors
+    done, errors = asyncio.run(go())
+    assert not done[0].is_error and seen == [[op]] and asked == [[1.5], ["line:2"]]
+    assert errors == ["edit was not run: ops takes a list, an object or a string, not 5. Fix the arguments and call "
+                      "it again.",
+                      'undo was not run: steps takes a whole number, not "x". Fix the arguments and call it again.',
+                      "check was not run: project is required. Fix the arguments and call it again."]
 
 
 def test_cli_exit_codes_and_files(project, monkeypatch, tmp_path, capsys):

@@ -44,7 +44,9 @@ All run at 30 fps and are mastered to −14 LUFS unless the table says otherwise
 area is a title-safe margin; on the platform ones (douyin, douyin-long, tiktok, shorts, reels) it is where the
 phone's UI does not cover the picture (status bar and tabs on top, like/comment buttons down the right, title and
 music at the bottom), and there a film needs sound and nothing may stand still for more than 5 s (`youtube` needs
-sound only). Backgrounds may bleed to the edges; **words must stay inside the safe area** — render measures the
+sound only); `check` already refuses a stretch where nothing can move, and gaps where nothing is on screen (black)
+add up against 10 % of the film on every canvas. Backgrounds may bleed to the edges; **words must stay inside the
+safe area** — render measures the
 film and refuses text outside it. The owner may define other canvases (workspace.json `profiles`, or an inline
 `"profile": {"base": "landscape", "width": 1280, "height": 720, "fps": 25}`); `new_project(p,
 canvas="1920x1080@25")` makes one. NTSC rates work too: `"fps": 29.97` (or 23.976, 59.94,
@@ -54,10 +56,12 @@ Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose s
 scale them with your canvas.
 
 **One project, one canvas, one film.** A project renders one mp4 (h264/aac) on its own canvas. For the same edit on
-another canvas (a 9:16 cut of a 16:9 film): `new_project` with that profile, `import_asset` the same files from the
-first project (on one drive they are hard-linked, so nothing is copied), copy the first project's `tracks`,
-`markers` and `chapters` into the new project.json and re-lay the boxes for the new canvas (they are canvas pixels),
-then `preview` it. Other formats (webm, GIF, ProRes, audio only, a transparent overlay) are not made here.
+another canvas (a 9:16 cut of a 16:9 film): `new_project(p2, profile="vertical", from_project=p1)`. It brings the
+first project's assets and voice (hard-linked on one drive, so nothing is copied), tracks, markers, chapters, meta
+and theme, and maps every pixel box from the old safe area to the new one (x and w by its width, y and h by its
+height; `"full"` and `"safe"` stay). Text sizes stay as they were, and a wide layout squeezed into a tall one is
+rarely right as it lands: `preview` every scene and re-lay what needs it. Other formats (webm, GIF, ProRes, audio
+only, a transparent overlay) are not made here.
 
 **Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
 (`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language, the words components add
@@ -266,7 +270,7 @@ come from the transcript; voice lines and given `items` are timed by characters.
 ## Edit ops
 
 `edit(project, ops)` applies a list of ops as one batch: all apply and the result validates, or nothing changes.
-Each applied batch can be undone with `undo`.
+Each applied batch can be undone with `undo`; `redo` puts back what the last undo replaced.
 
 ```json
 {"op": "add_track", "track": {"id": "v3", "kind": "visual", "clips": []}, "index": 2}
@@ -289,7 +293,8 @@ Each applied batch can be undone with `undo`.
 
 `set` replaces the value at a dotted path (not inside `tracks` or `assets`). `update_*` deep-merge; `null` removes a
 key. `add_asset` with an id that exists replaces that asset. An asset still used by a clip (directly or through
-component props) cannot be removed. The last three are ripple edits for footage (next section).
+component props) cannot be removed; removing a clip others are timed from leaves them where they were (their
+anchors on it become numbers). The last three are ripple edits for footage (next section).
 
 ## Editing footage
 
@@ -309,18 +314,22 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    until source second 95. `trim_in` skips the head, `rate` speeds it up; give video `volume` 1 to hear it.
 4. Cut. `ripple_delete` takes a range out and closes the gap: clips crossing its edges are split (the part after
    the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on; a clip whose head is cut keeps its id), later
-   clips, markers and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence from
-   `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), **from the last silence back** in
-   one batch, so each `src:a@...` still names the piece that plays it. Name the tracks to cut
+   clips, markers, chapters and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence
+   from `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), all in one batch, in any
+   order: a `src:a@...` that an earlier cut left to a later piece names that piece, and a second no piece plays any
+   more is refused. Name the tracks to cut
    (`"tracks": ["v1"]`, plus the track of its sound if that is separate, and a captions track with `items`): left
    out, every track is cut, a music bed included, and the music skips at each jump; or cut first and lay the bed
    after. A cut that falls inside a transition keeps what is left of it (shortened to fit). `trim_clip` sets a clip's
    in/out in source seconds (`ripple: true` pulls the rest of its track along; without it the picture stays put and
-   only the edges move), `insert_gap` opens room, and `split_clip` cuts a clip in two. Anchors that stay true after
-   a ripple edit stay; the rest become numbers.
+   only the edges move, and clips timed from a moved edge stay where they were), `insert_gap` opens room, and
+   `split_clip` cuts a clip in two (a clip timed from another stays a chain: its second half starts at
+   `clip:<first>.end`). Anchors that stay true after a ripple edit stay; the rest become numbers. On tracks the edit
+   does not cut, a time anchored on a clip follows that clip, and a number stays put.
 5. Join shots: give the later clip `"transition": {"type": "crossfade", "dur": 0.4}` and start it that long before
    the previous one ends (`"start": "clip:a.end-0.4"`); that is the only overlap a track allows. Without the
-   overlap it transitions in over whatever is beneath it. `dip_black`/`dip_white` go through a colour,
+   overlap it transitions in over whatever is beneath it (an `insert_gap` at its start leaves that: the clip it
+   came from is not split). `dip_black`/`dip_white` go through a colour,
    `wipe_left`/`wipe_right`/`wipe_up` sweep an edge, `slide_left` pushes the old shot out, `zoom` zooms through. A
    clip with sound crossfades its sound over the same time.
 6. Sound: `volume` keyframes ride a clip's level (`{"t": 3, "v": 0.2}`); a music bed with `"duck": {"under": "v1"}`
@@ -330,8 +339,8 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    you can hear), drops the words you cut, and phrases by pauses and sentence ends, then within `max_chars` the way
    voice captions are. `"mode": "words"` lights each word as it is said, `"build"` adds the words one by one.
 8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
-   goes; markers move with ripple edits. Chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"}, ...]`)
-   anchored on markers move with them too.
+   goes; markers move with ripple edits, and so do chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"},
+   ...]`).
 9. Time effects, on a piece of its own (split first; do these after the cuts that use `src:` on it):
    - speed ramp: `rate` keyframes, e.g. `[{"t": 0, "v": 1}, {"t": 0.4, "v": 0.25, "ease": "inOut"}, {"t": 1.6, "v":
      0.25}, {"t": 2, "v": 1, "ease": "inOut"}]`; the source walks on by the curve, frame-accurately;
@@ -395,10 +404,11 @@ transcript. No narration: the film lasts until `a_2` ends.
 | `manual()` | this manual | `manual()` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md` with your file tools) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
+| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own; `from_project` puts another project's film on this canvas | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
-| `undo(project, steps=1)` | undo applied batches | `undo(p)` |
+| `undo(project, steps=1)` | undo applied batches (an asset registration is one too) | `undo(p)` |
+| `redo(project)` | put back what the last undo replaced | `redo(p)` |
 | `check(project)` | errors (block render), warnings, advice | `check(p)` |
 | `library(project, name?)` | components with their prop names; with a name, schema, example and source | `library(p, "Receipt")` |
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
@@ -435,13 +445,16 @@ transcript. No narration: the film lasts until `a_2` ends.
   measures how much of the film is words over a still.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
   limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
-  crossed. Transcribe a recording once; re-speak only the lines that changed.
+  crossed. Transcribing the same recording again with the same settings is free (the saved transcript comes
+  back); re-speak only the lines that changed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
   `update_asset`. A capture comes back in the project's language (the browser's locale).
 - Music: there is no music generator. `import_asset` an audio file you are allowed to use, put it on an audio
-  track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film.
+  track at a low `volume` (0.08–0.15) with `"loop": true` if it is shorter than the film. Without a voice,
+  mastering brings the whole mix up to the platform's loudness: a bed's volume then sets its balance against other
+  sound, not its level (render notes a gain over 12 dB).
 - `preview` is cheap (one bundle, a few seconds a still): use it after every meaningful edit and look at the PNGs.
   In the contact sheet (tiles in your canvas's shape) the dark bands are outside the safe area (the platform's UI,
   or the title-safe margin), the yellow line is the safe area's edge and each tile shows its time. Earlier previews' stills stay in `build/stills`. `sweep=true` measures the film exactly
@@ -451,7 +464,8 @@ transcript. No narration: the film lasts until `a_2` ends.
   (0.1-1) sets the size. Use it to watch joins, pacing and sound on a long film before the real render.
 - Subtitles and chapters ship with the film: every captions track, hidden ones too, becomes
   `out/captions/<track>.srt` and `.vtt` (a hidden track with its own `items` and `"language": "es"` is a Spanish
-  subtitle file that is never burned in); `export_captions` writes them without rendering. Project `chapters`
+  subtitle file that is never burned in); `export_captions` writes them without rendering (to `build/captions`
+  once the cut has changed since the delivered film, which keeps its own). Project `chapters`
   become `out/chapters.txt` (`0:00 Intro` lines for a YouTube description) and chapter marks in the mp4; YouTube
   shows them when the first is at 0:00, there are at least 3 and each lasts 10 s or more.
 
@@ -519,8 +533,9 @@ export default function Tally({ props }: { props: any }) {
 ```
 
 Fuller worked examples: the sample component in `examples/workspace/library/components/` (the starter workspace),
-and every preset's source (`library(p, name)` gives the path). Lay yourself out in `w × h`; keep text at 28 px or
-more at a 1080 px short side (on other canvases scale by `Math.min(width, height) / 1080`, both from `useClip()`);
+and every preset's source (`library(p, name)` gives the path). Lay yourself out in `w × h`; aim for text of 40 px
+or more at a 1080 px short side: the layout check warns under 28 px and render refuses under 20 px (on other
+canvases all three scale by `Math.min(width, height) / 1080`, both from `useClip()`);
 choose the words a component adds itself by `useClip().locale`; animate from the frame, never from time or
 randomness; give SVG ids (`clipPath`, gradients) `React.useId()` so two instances do not collide. Then `typecheck`
 and `preview` a moment where it shows. A component that crashes shows a red box in previews and is reported first,

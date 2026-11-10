@@ -86,6 +86,13 @@ def _quad(v):
     return v
 
 
+def _pair(v):
+    if not (isinstance(v, list) and len(v) == 2 and all(isinstance(n, (int, float)) and not isinstance(n, bool) and n >= 0
+                                                        for n in v)):
+        raise PydanticCustomError("around_type", "should be [above, below] in the image's pixels, each >= 0")
+    return v
+
+
 def _box_tag(v):
     return "name" if isinstance(v, str) else "box"
 
@@ -101,6 +108,7 @@ Time = Annotated[Union[float, str], PlainValidator(_time)]
 Size = Annotated[Union[float, str], PlainValidator(_size)]
 Shadow = Annotated[Optional[Union[bool, str]], PlainValidator(_shadow)]
 Quad = Annotated[list, PlainValidator(_quad)]
+Pair = Annotated[list, PlainValidator(_pair)]
 Unit = Annotated[float, Field(ge=0, le=1)]
 
 
@@ -139,6 +147,8 @@ class Asset(_M):
     site: str = ""
     url: str = ""
     note: str = ""
+    line: Optional[float] = Field(None, gt=0)     # evidence: the text's line pitch in image pixels (capture)
+    around: Optional[Pair] = None           # evidence: how far past the box the gaps beyond its neighbouring lines lie
     transcript: Optional[str] = None        # assets/<id>.transcript.json (transcribe)
 
 
@@ -1191,6 +1201,11 @@ class _Check:
                                  f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "
                                  f"{over:.2f} s, more than {c2.id}'s transition ({tr.dur:g} s): a clip may overlap "
                                  "the clip before it by at most its transition's dur")
+                    elif over < tr.dur - 0.5 / self.fps:
+                        self.add("warning", f"clip {c2.id}.transition",
+                                 f"the {tr.type} lasts {tr.dur:g} s but {c2.id} overlaps {c1.id} by only {over:.2f} s: "
+                                 f"for {tr.dur - over:.2f} s it transitions in over what is beneath; start {c2.id} at "
+                                 f"clip:{c1.id}.end-{tr.dur:g}, or set dur {round(over, 3):g}")
                     continue
                 self.add("error", f"track {track.id}",
                          f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "
@@ -1209,13 +1224,28 @@ class _Check:
             self.transcript_source(track, where)
             return
         if track.items is not None:
+            spans = []
             for n, it in enumerate(track.items):
                 w = f"{where}.items[{n}]"
                 a, b = self.time(it.start, f"{w}.start"), self.time(it.end, f"{w}.end")
                 if a is not None and b is not None and b <= a:
                     self.add("error", w, f"ends at {b:.2f} s, not after its start ({a:.2f} s)")
+                elif a is not None and b is not None:
+                    spans.append((a, b, n))
+                    if self.film_end is not None and a >= self.film_end - 1e-9:
+                        self.add("warning", w, f"starts at {a:.2f} s, at or after the film's end "
+                                               f"({self.film_end:.2f} s): it never shows")
+                    elif self.film_end is not None and b > self.film_end + 0.5 / self.fps:
+                        self.add("warning", w, f"ends at {b:.2f} s, after the film's end ({self.film_end:.2f} s): "
+                                               "the rest is cut")
                 if not it.text.strip():
                     self.add("warning", w, "empty caption text")
+            spans.sort()
+            for (a0, b0, n0), (a1, _, n1) in zip(spans, spans[1:]):
+                if a1 < b0 - 1e-9:
+                    self.add("warning", f"{where}.items[{n1}]",
+                             f"starts at {a1:.2f} s, before items[{n0}] ends ({b0:.2f} s): the two draw on top of "
+                             f"each other; end items[{n0}] by {a1:.2f} s or start this one later")
             return
         if self.voice is None:
             if not self.doc.voice:

@@ -48,34 +48,11 @@ const wrap = (text: string, width: number, measure: (s: string) => number): stri
   return lines;
 };
 
-/** Han text broken between characters into the fewest lines `width` allows, evened out. Latin words and numbers
- *  stay whole; closing punctuation stays with the character before it, opening punctuation with the one after. */
-const wrapHan = (text: string, width: number, measure: (s: string) => number): string[] => {
-  const units = text.trim().match(/[\u201C\u2018\u300C\u300E(\uFF08\u300A]*(?:[A-Za-z0-9.%-]+|\S)[\uFF0C\u3001\uFF1A\uFF1B\uFF1F\uFF01\u3002,.:;?!\u2026\u201D\u2019\u300D\u300F)\uFF09\u300B]*\s*/gu) ?? [text];
-  const fill = (limit: number) => {
-    const out: string[] = [];
-    let cur = "";
-    for (const unit of units) {
-      if (cur && measure((cur + unit).trimEnd()) > limit) { out.push(cur.trimEnd()); cur = ""; }
-      cur += unit;
-    }
-    if (cur.trim()) out.push(cur.trimEnd());
-    return out;
-  };
-  const least = fill(width);
-  const even = measure(text) / least.length;
-  for (let limit = even; limit < width; limit += (width - even) / 8 + 0.01) {
-    const lines = fill(limit);
-    if (lines.length <= least.length) return lines;
-  }
-  return least;
-};
-
 /** `wrap`, except that Han text breaks between characters (as Chinese is set) when word breaks cost a line. */
 const wrapTight = (text: string, width: number, measure: (s: string) => number): string[] => {
   const byWord = wrap(text, width, measure);
   if (!/\p{Script=Han}/u.test(text)) return byWord;
-  const byChar = wrapHan(text, width, measure);
+  const byChar = breakLines(text, width, measure, false, true);
   return byChar.length < byWord.length ? byChar : byWord;
 };
 
@@ -120,10 +97,11 @@ export default function StoryBeats({ props }: { props: any }) {
   const textX = railX + 42 * u;
   const textW = Math.max(80 * u, w - textX - pad);
 
-  // One shared column for the compact `when` labels, so every compact text starts at the same x; long labels wrap in it.
+  // One shared column for the compact `when` labels, so every compact text starts at the same x; long labels wrap in it
+  // at their own line height, and the column stays under 30 % of the card so the texts keep their room.
   const whenW = (s: string) => textWidth(s, WHEN_SIZE, FONTS.sans, 700);
   const colGap = 20 * u;
-  const whenCol = Math.min(textW * 0.4, Math.max(0, ...beats.map((b) => (b.when ? whenW(b.when) + colGap : 0))));
+  const whenCol = Math.min(textW * 0.3, Math.max(0, ...beats.map((b) => (b.when ? whenW(b.when) + colGap : 0))));
   const whenLines = beats.map((b) => (b.when ? wrap(b.when, Math.max(1, whenCol - colGap), whenW) : []));
   // The chip of the large beat: shrinks to fit the text column (never under 30 px at a 1080 short side), then wraps.
   const chipPadX = 0.55;
@@ -162,8 +140,8 @@ export default function StoryBeats({ props }: { props: any }) {
       const bs = Math.max(low, Math.min(bigMax, Math.floor((textW * 100) / Math.max(1, widest))));
       const chip = chips[i];
       const chipH = b.when ? chip.lines.length * chip.size * 1.15 + chip.size * 0.5 + chipGap : 0;
-      const rowsC = Math.max(cLines.length, whenLines[i].length);
-      return { cLines, Hc: rowsC * cs * 1.32, bs, bLines, chipH, Hb: chipH + bLines.length * bs * 1.2 };
+      const whenH = whenLines[i].length ? (cs * 1.32 - WHEN_SIZE * 1.2) / 2 + whenLines[i].length * WHEN_SIZE * 1.2 : 0;
+      return { cLines, Hc: Math.max(cLines.length * cs * 1.32, whenH), bs, bLines, chipH, Hb: chipH + bLines.length * bs * 1.2 };
     });
     let need = 0;
     let acc = 0;
@@ -213,8 +191,8 @@ export default function StoryBeats({ props }: { props: any }) {
     rows.push(
       <div key={"c" + i} style={{ position: "absolute", left: textX, top: y, width: textW, opacity: compactOp, display: "flex", alignItems: "flex-start" }}>
         {b.when ? (
-          <div style={{ width: whenCol, flex: "none", fontFamily: FONTS.sans, fontWeight: 700, fontSize: WHEN_SIZE, lineHeight: `${cs * 1.32}px`,
-            color: b.hot ? accent : dimInk, whiteSpace: "pre" }}>{whenLines[i].join("\n")}</div>
+          <div style={{ width: whenCol, flex: "none", fontFamily: FONTS.sans, fontWeight: 700, fontSize: WHEN_SIZE, lineHeight: `${WHEN_SIZE * 1.2}px`,
+            paddingTop: (cs * 1.32 - WHEN_SIZE * 1.2) / 2, color: b.hot ? accent : dimInk, whiteSpace: "pre" }}>{whenLines[i].join("\n")}</div>
         ) : null}
         <div style={{ fontFamily: FONTS.sans, fontWeight: 600, fontSize: cs, lineHeight: 1.32, color: dimInk, whiteSpace: "pre" }}>{it.cLines.join("\n")}</div>
       </div>,

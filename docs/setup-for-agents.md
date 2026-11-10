@@ -137,7 +137,8 @@ for this OS) and `enables` (what an optional check unlocks). Exit status 0 means
   Playwright's Chromium) for users who want web screenshots. `remotion-browser` downloads itself on the first
   preview or render.
 - `codex`'s fix is a global npm install (rule 3); after it the user runs `codex login` themselves (it opens a
-  browser). `on-path` matters only for the Claude Code and DSH plugins (step 6), not for `reelsmith setup`; its fix
+  browser). When its fix is `codex login`, Codex is installed but not signed in: that is the user's to run too.
+  `on-path` matters only for the Claude Code and DSH plugins (step 6), not for `reelsmith setup`; its fix
   changes the user's `PATH`, so run it only if the user wants a plugin and says yes.
 
 ## 5. Make a workspace

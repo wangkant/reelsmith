@@ -13,8 +13,8 @@ clip and look at it as you go. Any canvas (landscape by default, vertical, squar
 ## Before you start
 
 The reelsmith MCP server must be connected: its tools are `manual`, `notes`, `new_project`, `describe`, `edit`,
-`undo`, `check`, `preview`, `render`, `review`, `export_captions`, `library`, the footage tools `probe`, `frames`,
-`scenes`, `silences` and `transcribe`, and the asset tools `import_asset`, `speak`, `capture`, `draw`, `animate` and `assets`. If they
+`undo`, `redo`, `check`, `preview`, `render`, `review`, `export_captions`, `library`, the footage tools `probe`,
+`frames`, `scenes`, `silences` and `transcribe`, and the asset tools `import_asset`, `speak`, `capture`, `draw`, `animate` and `assets`. If they
 are missing, tell the user to run `reelsmith setup <their agent>` and restart the agent. Every tool is also a shell
 command (`reelsmith <tool> --help`) when no MCP client is attached.
 

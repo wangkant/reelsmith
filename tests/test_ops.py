@@ -144,8 +144,10 @@ def test_op_field_errors_say_how_to_call(demo):
 def test_remove_clip(demo):
     assert ok(demo, {"op": "remove_clip", "id": "todo"}) == "removed text clip todo from notes"
     ok(demo, {"op": "update_clip", "id": "arrow", "set": {"start": "clip:proof+1"}})
-    rows = refused(demo, {"op": "remove_clip", "id": "proof"})
-    assert any("clip arrow" in r and "no clip 'proof'" in r for r in rows)
+    at = R.time_of(demo, "clip:arrow")
+    s = ok(demo, {"op": "remove_clip", "id": "proof"})
+    assert "arrow were timed from proof and stay where they were, as numbers" in s
+    assert clip(raw(demo), "arrow")["start"] == round(at, 3)
 
 
 def test_move_clip_keeps_length_and_changes_track(demo):
@@ -323,8 +325,8 @@ def test_split_dur_clip_and_self_relative_cut(demo):
        {"op": "split_clip", "id": "ring", "at": "clip:ring+0.3", "new_id": "ring2"})
     data = raw(demo)
     a, b = clip(data, "arrow"), clip(data, "arrow2")
-    assert a["end"] == 13.433 and "dur" not in a                   # baked to seconds, on its frame (403)
-    assert b["start"] == 13.433 and b["dur"] == 0.687
+    assert a["dur"] == 0.813 and "end" not in a and b["start"] == "clip:arrow.end"  # the pair moves as one
+    assert R.time_of(demo, "clip:arrow.end") == 13.433 and b["dur"] == 0.687         # on its frame (403)
     assert b["draw"] is False                                         # its 0.6 s draw-on already happened
     assert clip(data, "ring2")["draw"] is True                        # driven by progress keyframes: kept
 
@@ -548,6 +550,22 @@ def test_history_and_undo(demo):
     good, text = ops.undo(demo)
     assert good and text_of(demo) == original
     assert ops.snapshots(demo) == []
+
+
+def test_redo_puts_back_what_undo_replaced_and_undo_names_hand_edits(demo):
+    assert ops.redo(demo) == (False, "nothing to redo: redo follows an undo, before any other edit")
+    ok(demo, {"op": "set", "path": "meta.title", "value": "one"})
+    edited = text_of(demo).replace(b'"one"', b'"by hand"')
+    (demo / "project.json").write_bytes(edited)
+    good, text = ops.undo(demo)
+    assert good and "project.json had been changed since batch 1 wrote it (by hand or by another program)" in text
+    good, text = ops.redo(demo)
+    assert good and "redid the last undo" in text and text_of(demo) == edited
+    assert ops.redo(demo)[0] is False                                     # once
+    good, text = ops.undo(demo)                                           # the redo is a batch of its own
+    assert good and "had been changed" not in text and raw(demo)["meta"]["title"] != "by hand"
+    ok(demo, {"op": "set", "path": "meta.title", "value": "two"})          # a new batch: nothing left to redo
+    assert ops.redo(demo)[0] is False
 
 
 def test_undo_steps_and_limits(demo):
