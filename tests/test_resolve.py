@@ -308,6 +308,16 @@ def test_captions_cut_between_words_with_the_segmenter():
     assert R.phrases("真正的大头，是房租和人工，占了六成。") == ["真正的大头", "是房租和人工", "占了六成"]
 
 
+@pytest.mark.skipif(not shutil.which("node"), reason="node not on PATH")
+def test_captions_keep_hyphenated_words_and_contractions_whole():
+    line = "Repeat that for billions of years, and every litre of seawater holds about thirty-five grams of salt."
+    assert R.phrases(line, 32)[-2:] == ["holds about", "thirty-five grams of salt"]
+    for text in ("nobody here knows who's first and it doesn't change the on/off rule at all",
+                 "a well-known brand sold a state-of-the-art phone from 2019–2024 in every shop"):
+        for phrase in R.phrases(text, 16):
+            assert phrase[0].isalnum() and phrase[-1].isalnum(), (text, phrase)
+
+
 def test_captions_fallback_keeps_numbers_units_and_quotes_together():
     out = {text: chars(text) for text in MIDWORD_LINES}
     assert out["按92号汽油密度0.725换算"] == ["按92号汽油密度", "0.725换算"]

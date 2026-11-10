@@ -1,0 +1,39 @@
+{
+  "file": "voice/voice.wav",
+  "duration_s": 28.839,
+  "lufs": -13.5,
+  "true_peak_db": -0.9,
+  "gap_s": 0.22,
+  "lines": [
+    {
+      "i": 1,
+      "text": "Why is the sea salty, when the rivers that fill it taste fresh?",
+      "t0": 0.0,
+      "t1": 4.181
+    },
+    {
+      "i": 2,
+      "text": "Rain is slightly acidic. It wears down rock, and rivers carry the dissolved minerals to the sea.",
+      "t0": 4.401,
+      "t1": 11.451
+    },
+    {
+      "i": 3,
+      "text": "Then the sun lifts the water back into the sky. The salt stays behind.",
+      "t0": 11.671,
+      "t1": 16.806
+    },
+    {
+      "i": 4,
+      "text": "Repeat that for billions of years, and every litre of seawater holds about thirty-five grams of salt.",
+      "t0": 17.026,
+      "t1": 25.24
+    },
+    {
+      "i": 5,
+      "text": "The rivers are salty too. Just too little to taste.",
+      "t0": 25.46,
+      "t1": 28.839
+    }
+  ]
+}

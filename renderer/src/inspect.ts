@@ -49,7 +49,29 @@ const lineBoxRatio = (el: Element | null): number => {
   return Math.min(1, lh / fs / contentAreaEm(cs.fontFamily));
 };
 
-/** Every visible clip container and text node under `root`, in canvas pixels. */
+type Edges = { left: number; top: number; right: number; bottom: number };
+
+/** What the clipping ancestors of `el` inside `clip` (overflow other than visible) leave of `r`; null when nothing. */
+const clipped = (r: Edges, el: Element | null, clip: Element, cache: Map<Element, DOMRect | null>): Edges | null => {
+  const out = { ...r };
+  for (let a = el; a && a !== clip; a = a.parentElement) {
+    let box = cache.get(a);
+    if (box === undefined) {
+      const cs = getComputedStyle(a);
+      box = cs.overflowX !== "visible" || cs.overflowY !== "visible" ? a.getBoundingClientRect() : null;
+      cache.set(a, box);
+    }
+    if (!box) continue;
+    out.left = Math.max(out.left, box.left);
+    out.top = Math.max(out.top, box.top);
+    out.right = Math.min(out.right, box.right);
+    out.bottom = Math.min(out.bottom, box.bottom);
+  }
+  return out.right - out.left > 0.5 && out.bottom - out.top > 0.5 ? out : null;
+};
+
+/** Every visible clip container and text node under `root`, in canvas pixels. Text a component clips away inside
+ *  itself (a row sliding in under its card's edge) is measured by the part that shows. */
 export const measure = (root: HTMLElement, width: number, height: number): InspectItem[] => {
   const rr = root.getBoundingClientRect();
   const sx = rr.width / width || 1;
@@ -58,6 +80,7 @@ export const measure = (root: HTMLElement, width: number, height: number): Inspe
     round((r.left - rr.left) / sx), round((r.top - rr.top) / sy), round(r.width / sx), round(r.height / sy),
   ];
   const cache = new Map<Element, number>();
+  const clips = new Map<Element, DOMRect | null>();
   const items: InspectItem[] = [];
   const range = document.createRange();
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-clip]"))) {
@@ -89,9 +112,12 @@ export const measure = (root: HTMLElement, width: number, height: number): Inspe
         b = Math.max(b, q.bottom - cut);
       }
       if (!(r > l) || !(b > t)) continue;
+      const seen = clipped({ left: l, top: t, right: r, bottom: b }, n.parentElement, el, clips);
+      if (!seen) continue;
       const cs = n.parentElement ? getComputedStyle(n.parentElement) : null;
       items.push({
-        clip, track, kind: "text", rect: rect({ left: l, top: t, width: r - l, height: b - t }),
+        clip, track, kind: "text",
+        rect: rect({ left: seen.left, top: seen.top, width: seen.right - seen.left, height: seen.bottom - seen.top }),
         opacity: round3(o), text: [...text.trim()].slice(0, 24).join(""),
         size: round(parseFloat(cs?.fontSize ?? "") || 0), color: cs?.color ?? "",
       });

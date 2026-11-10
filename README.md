@@ -1,26 +1,56 @@
-# reelsmith
+<h1 align="center">reelsmith</h1>
 
-**A video editing harness for AI coding agents.**
+<p align="center">
+  <b>A video editor your coding agent can drive.</b><br>
+  Claude Code, Codex, Cursor or any MCP client edits a real timeline, looks at its own frames<br>
+  and renders through checks that will not let a broken film out.
+</p>
 
-reelsmith gives a coding agent (Claude Code, Codex, DeepSeek Harness, Cursor or any MCP client) a real video
-editor: a timeline of tracks, clips, keyframes, text and components that it edits with tools and code, looks at
-frame by frame, and renders through checks that will not let a broken film out.
-The agent builds the film clip by clip from footage, pictures, narration and its own React components, the way a
-person works in an editing app.
+<p align="center">
+  <a href="docs/media/sea.mp4"><img src="docs/media/sea.webp" width="720" alt="Moments from a 30-second explainer on why the sea is salty: a title over aerial footage of a river delta, a sentence highlighted on a NOAA page, a step-by-step scene over a sunset sea, a number counting up to 35 g"></a>
+</p>
 
-```
-agent ── brief, footage, research
-  │
-  ├─ probe · frames · scenes · silences · transcribe ──▶ knows what is in the footage
-  ├─ import_asset · speak · draw · capture · animate ──▶ assets/  voice/
-  ├─ edit (tracks, clips, keyframes, transitions, ripple cuts, captions, components) ──▶ project.json
-  ├─ describe · preview · check ──▶ the timeline as text, stills, contact sheets, measured layout ──▶ fix, repeat
-  └─ render ──▶ layout pass ──▶ Remotion ──▶ loudness mastering ──▶ delivery checks ──▶ film.mp4, .srt, .vtt
-```
+<p align="center"><sub>
+  A coding agent made this film with reelsmith: it wrote and narrated the script, drew and animated the pictures,<br>
+  captured the sentence that proves the claim, cut the timeline and rendered it.<br>
+  <a href="docs/media/sea.mp4">Watch it with sound</a> · <a href="examples/sea">the project it wrote</a>
+</sub></p>
+
+A model can write a script and call a renderer, but it works blind: it does not see the title that runs off the
+screen, the caption over a face or the cut that lands mid-word. reelsmith is an editing app built for it. The agent
+builds the film clip by clip from footage, pictures, narration and React components, the way a person works in an
+editor. reelsmith keeps every edit valid and undoable, times each clip to what it follows, measures where the words
+land on the rendered frames, masters the loudness and holds the film to its delivery rules.
 
 There is no pipeline and no template. Every tool can be called at any time, `project.json` can be edited by hand,
-and the agent decides the story, the cut, the sound and the look. reelsmith takes care of the mechanics: valid and
-undoable edits, timing, rendering, layout measurement, loudness and the delivery rules.
+and the agent decides the story, the cut, the sound and the look.
+
+## It looks at its own work
+
+<p align="center">
+  <img src="docs/media/preview.webp" width="100%" alt="A contact sheet of eight stills from the film with the safe area outlined; in the seventh, a number card is cut off by the right edge">
+</p>
+
+This is what `preview` hands the agent: stills at the moments it asked for, the safe area outlined, and the layout
+measured on those frames. In the seventh still it had pushed a card too far right, and was told so:
+
+```text
+layout: 1 problem(s), 1 would block render
+[error] n1 @ 24.2s: text "of salt in every litre o" is cut by the canvas edge (right, 66 px): move it in or make it smaller
+```
+
+`render` measures the whole film the same way before it encodes, and refuses:
+
+```text
+NOT DELIVERED (stopped at layout): words sit where the viewer cannot read them (listed in layout): fix and render again
+The previous out/film.mp4 is kept.
+```
+
+One `undo` later:
+
+```text
+DELIVERED: out/film.mp4 (29.44 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 29.8 MB; rendered in 83.3 s). Look at it with review.
+```
 
 ## Quick start
 
@@ -43,9 +73,7 @@ title card."* or *"Make a 60-second vertical explainer on why tea leaves curl."*
 Needs Python 3.10+, Node.js 20+ and ffmpeg on `PATH`; `reelsmith doctor` checks all of it, and what each optional
 tool needs. reelsmith reads its manual and renderer from the checkout, so keep the editable install.
 
-## Let your coding agent set it up
-
-Paste this into Claude Code, Codex, Cursor or any coding agent:
+Or let the agent set it up. Paste this into Claude Code, Codex, Cursor or any coding agent:
 
 ```text
 Read https://raw.githubusercontent.com/wangkant/reelsmith/main/docs/setup-for-agents.md and set up reelsmith for me.
@@ -68,13 +96,11 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
 - **Time to anything.** Times anchor on narration lines, clips, markers or source seconds (`"line:5+0.3"`,
   `"clip:c2.end-0.5"`, `"mark:intro"`, `"end-2"`): re-record the voice or recut a clip and the edit follows.
 - **Look at its own work.** `describe` prints the editor's window as text; `preview` renders any moments in seconds
-  with a contact sheet and measured layout problems; a draft render shows a stretch as video; `review` shows frames
-  of the delivered film.
+  with a contact sheet and measured layout problems; a draft render shows a stretch as video; `review` shows the
+  delivered film a frame a second, with the line heard at each frame.
 - **Make assets.** Narration (text-to-speech, cached per line), pictures (Codex image generation), evidence
   screenshots of web pages with the proving sentence boxed, short clips from a picture (image-to-video), and
   imports of local or downloaded media, animated GIFs included.
-- **Write its own components.** Nine built-in React presets, and a documented kit for the agent's own components in
-  the workspace library, type-checked and import-guarded.
 - **Any canvas, any language.** `landscape` (the default, 1920×1080), `vertical`, `square`, `portrait`, platform
   profiles (`youtube`, `tiktok`, `shorts`, `reels`, `douyin`) and custom sizes and frame rates (NTSC included); a
   `locale` sets caption phrasing, the words components add, capture language and web requests; workspaces can add
@@ -83,6 +109,22 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
   frames), loudness, black or frozen stretches, length, size and the workspace's own rules. A failed render keeps
   the previous film and says what to fix, with clip ids and times. Films of any length render.
 - **Spend control.** Paid calls go through a ledger with a per-project budget and an account balance floor.
+
+## Scenes it can reach for
+
+<p align="center">
+  <img src="docs/media/presets.webp" width="100%" alt="Twelve built-in components: Parties, QuoteCard, NewsBrief, Versus, StoryBeats, Seesaw, Receipt, BarCompare, CountUp, TimelineRule, DotGrid and Stamp">
+</p>
+
+Fifteen React components are built in; twelve are shown above. Six are whole scenes for telling what happened (who
+pays whom, what someone said, what a report found, two versions compared, events in order, winners and losers); the
+rest are single moves: a receipt that prints, bars that grow, a number that counts up, a dated rule, a dot grid, a
+stamp, an arrow, a highlighter, an evidence card. Each lands its parts at the times the agent gives and sizes
+itself to its box, on any canvas.
+
+The agent can also write its own. A component is a `.tsx` file and a JSON schema in the workspace's library, built
+on a small documented kit ([docs/kit.md](docs/kit.md)), type-checked and import-guarded, and every project in the
+workspace can use it afterwards.
 
 ## Coding agents
 
@@ -112,8 +154,9 @@ studio/
   projects/<film>/  project.json, assets/, voice/, build/ (previews), out/ (film, subtitles, chapters)
 ```
 
-[examples/workspace](examples/workspace) is a starter; [examples](examples) also has one channel's setup to show
-what a workspace can pin down. Every agent tool is also a command, for scripts and people (`reelsmith --help`):
+[examples/workspace](examples/workspace) is a starter; [examples](examples) also has one channel's setup, to show
+what a workspace can pin down, and the project of the film at the top of this page. Every agent tool is also a
+command, for scripts and people (`reelsmith --help`):
 
 ```sh
 P=~/studio/projects/first
@@ -127,6 +170,8 @@ reelsmith render $P                            # out/film.mp4, mastered and chec
 
 ## Optional services
 
+The editor, the previews, the checks and the render run on your machine and cost nothing. These tools need more:
+
 | for | you need |
 |---|---|
 | `capture` (web page evidence) | the `capture` extra and Edge, Chrome or `python -m playwright install chromium` |
@@ -137,7 +182,8 @@ reelsmith render $P                            # out/film.mp4, mastered and chec
 | `reelsmith run` | a model API key (OpenRouter by default; DeepSeek, OpenAI or a local server), or Codex or DeepSeek Harness installed; the `runner` extra for the Claude Agent SDK engine |
 
 Paid calls estimate first and are refused over `budget.per_project_usd` (default $1) or under the account floor
-`budget.min_balance_usd` (default $5); narration is cached per line, so only changed lines are paid for again.
+`budget.min_balance_usd` (default $5); narration is cached per line, so only changed lines are paid for again. The
+film at the top of this page cost $0.32: three animated clips and five lines of narration.
 
 ## Documentation
 

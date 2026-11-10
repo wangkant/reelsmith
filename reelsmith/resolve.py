@@ -29,6 +29,7 @@ PHRASE_MIN = 4
 _BREAK = re.compile(r"(?:[，。！？；：、!?;:…\n]|(?<!\d)[.,]|[.,](?!\d))+")
 _CLOSERS = "”’」』）》】〕〉)]}"               # stay with the text before them
 _OPENERS = "“‘「『（《【〔〈([{"               # stay with the text after them
+_JOINER = re.compile(r"(?<=[^\W_])[-‑–'’/](?=[^\W_])")   # a mark inside a word joins its halves
 _NUMERAL = "零〇一二三四五六七八九十百千万亿两"
 _NUMBER = re.compile(rf"\d+(?:[.,]\d+)*[{_NUMERAL}]*|[{_NUMERAL}](?:[{_NUMERAL}点]*[{_NUMERAL}])?")
 _UNITS = ("块钱", "元钱", "美元", "港元", "日元", "欧元", "英镑", "平方米", "平米", "公里", "千米", "厘米", "毫米",
@@ -441,6 +442,8 @@ def _cut_rules(text: str) -> tuple[list[bool], list[bool]]:
     for i in range(1, len(text)):
         if text[i] in _CLOSERS or text[i - 1] in _OPENERS:
             locked[i] = True
+    for m in _JOINER.finditer(text):            # thirty-five, don't, 2019–2024: the segmenter cuts at the mark
+        locked[m.start()] = locked[m.end()] = True
     return locked, number
 
 

@@ -288,6 +288,19 @@ console.log("word-by-word captions");
   check(texts(15, "kp").map((i) => `${i.text} ${i.color}`).join("|") === `one two three ${WHITE}`, "phrase: the item shows whole");
 }
 
+console.log("text a component clips away inside itself");
+{
+  const w = writeMini("window", [comp("win", "Window")]);
+  const r = run(["inspect", w.file, w.dir, path.join(w.dir, "out"), "3"], { REELSMITH_LIBRARY: library });
+  const out = path.join(w.dir, "out", "inspect.json");
+  const data = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : { frames: [] };
+  const texts = (data.frames[0]?.items ?? []).filter((i) => i.clip === "win" && i.kind === "text");
+  const bottom = (t) => { const i = texts.find((x) => x.text === t); return i ? i.rect[1] + i.rect[3] : null; };
+  check(r.result?.ok === true && texts.map((i) => i.text).join("|") === "shown|half",
+    `a row outside the window is not measured (${r.s} s): ${texts.map((i) => i.text).join("|")} ${r.result?.error ?? ""}`);
+  check(bottom("half") === 200 && bottom("shown") < 200, `a row half under the edge is measured by the part that shows: bottom ${bottom("half")}`);
+}
+
 console.log("the film's locale reaches components (EvidenceCard's source line)");
 {
   const ev = { src: "assets/evidence.png", kind: "evidence", size: [1290, 960], box: [358, 446, 330, 66], site: "www.example.org" };
