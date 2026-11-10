@@ -73,7 +73,9 @@ title card."* or *"Make a 60-second vertical explainer on why tea leaves curl."*
 Needs Python 3.10+, Node.js 20+ and ffmpeg on `PATH`; `reelsmith doctor` checks all of it, and what each optional
 tool needs. reelsmith reads its manual and renderer from the checkout, so keep the editable install.
 
-Or let the agent set it up. Paste this into Claude Code, Codex, Cursor or any coding agent:
+## Let your coding agent set it up
+
+Paste this into Claude Code, Codex, Cursor or any coding agent:
 
 ```text
 Read https://raw.githubusercontent.com/wangkant/reelsmith/main/docs/setup-for-agents.md and set up reelsmith for me.
