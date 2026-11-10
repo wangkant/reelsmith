@@ -89,12 +89,15 @@ def codex_follows_system_proxy(env=None) -> bool:
     return not (env.get("HTTPS_PROXY") or env.get("https_proxy"))
 
 
-def server_spec(root=None, python=None) -> dict:
+def server_spec(root=None, python=None, watch: bool = False) -> dict:
     """The stdio server every target gets: this interpreter (not resolved: a venv's python is often a symlink)
-    running the reelsmith MCP server, kept off the agent's cwd for imports."""
+    running the reelsmith MCP server, kept off the agent's cwd for imports. `watch`: the first tool call on a
+    project opens the user's watch window on it (REELSMITH_WATCH=1)."""
     env = {"PYTHONSAFEPATH": "1"}
     if root:
         env["REELSMITH_ROOT"] = os.path.abspath(str(root))
+    if watch:
+        env["REELSMITH_WATCH"] = "1"
     return {"command": os.path.abspath(str(python or sys.executable)), "args": ["-m", "reelsmith.mcp_server"],
             "env": env}
 
@@ -325,7 +328,7 @@ def _fence(base: Path, *paths: Path) -> None:
 
 
 def plan(target: str, cwd=None, home=None, env=None, user: bool = False, uninstall: bool = False, root=None,
-         python=None) -> Plan:
+         python=None, watch: bool = False) -> Plan:
     """What `reelsmith setup <target>` would change. cwd, home and env default to the process's own."""
     target = str(target or "").strip().lower()
     if target not in TARGETS:
@@ -333,7 +336,7 @@ def plan(target: str, cwd=None, home=None, env=None, user: bool = False, uninsta
     cwd = Path(os.path.abspath(cwd or os.getcwd()))
     home = Path(home or Path.home())
     env = os.environ if env is None else env
-    spec = server_spec(root, python)
+    spec = server_spec(root, python, watch)
     p = Plan(target, uninstall)
 
     def add(*changes):
@@ -520,13 +523,15 @@ def parser():
     ap.add_argument("--print", action="store_true", dest="dry", help="show what would be written; write nothing")
     ap.add_argument("--uninstall", action="store_true", help="remove what setup added")
     ap.add_argument("--root", help="set REELSMITH_ROOT: the tools refuse projects outside this folder")
+    ap.add_argument("--watch", action="store_true", help="set REELSMITH_WATCH=1: the agent's first tool call on a "
+                    "project opens a reelsmith watch window on it, for the user to watch the work")
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        p = plan(args.target, user=args.user, uninstall=args.uninstall, root=args.root)
+        p = plan(args.target, user=args.user, uninstall=args.uninstall, root=args.root, watch=args.watch)
         lines = show(p) if args.dry else apply(p)
     except SetupError as exc:
         print(f"reelsmith setup: {exc}", file=sys.stderr)
