@@ -20,7 +20,7 @@ declare namespace JSX {
   const LOADED_AT = Date.now()
   /** The tools rows are registered for before the Host reports its list (reelsmith's, and footage tools). */
   const KNOWN_TOOLS = [
-    'manual', 'notes', 'note', 'new_project', 'describe', 'edit', 'undo', 'check', 'library', 'typecheck',
+    'manual', 'notes', 'note', 'new_project', 'describe', 'edit', 'undo', 'redo', 'check', 'library', 'typecheck',
     'preview', 'render', 'review', 'speak', 'capture', 'draw', 'animate', 'import_asset', 'assets',
     'look', 'probe', 'scenes', 'silences', 'transcribe', 'frames', 'export_captions',
   ]
@@ -125,7 +125,8 @@ declare namespace JSX {
   }
   const TOOL_LABELS: Record<string, [string, string]> = {
     manual: ['Manual', '手册'], notes: ['Notes', '笔记'], note: ['Note', '记笔记'], new_project: ['New project', '新建项目'],
-    describe: ['Timeline', '时间线'], edit: ['Edit', '编辑'], undo: ['Undo', '撤销'], check: ['Check', '检查'],
+    describe: ['Timeline', '时间线'], edit: ['Edit', '编辑'], undo: ['Undo', '撤销'], redo: ['Redo', '重做'],
+    check: ['Check', '检查'],
     library: ['Library', '组件库'], typecheck: ['Type-check', '类型检查'], preview: ['Preview', '预览'],
     render: ['Render', '渲染'], review: ['Review', '审片'], speak: ['Narration', '配音'], capture: ['Capture', '截图'],
     draw: ['Draw', '画图'], animate: ['Animate', '动画'], import_asset: ['Import', '导入素材'], assets: ['Assets', '素材'],

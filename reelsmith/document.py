@@ -1191,6 +1191,11 @@ class _Check:
                                  f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "
                                  f"{over:.2f} s, more than {c2.id}'s transition ({tr.dur:g} s): a clip may overlap "
                                  "the clip before it by at most its transition's dur")
+                    elif over < tr.dur - 0.5 / self.fps:
+                        self.add("warning", f"clip {c2.id}.transition",
+                                 f"the {tr.type} lasts {tr.dur:g} s but {c2.id} overlaps {c1.id} by only {over:.2f} s: "
+                                 f"for {tr.dur - over:.2f} s it transitions in over what is beneath; start {c2.id} at "
+                                 f"clip:{c1.id}.end-{tr.dur:g}, or set dur {round(over, 3):g}")
                     continue
                 self.add("error", f"track {track.id}",
                          f"clips {c1.id} ({a1:.2f}-{b1:.2f} s) and {c2.id} ({a2:.2f}-{b2:.2f} s) overlap by "

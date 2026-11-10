@@ -164,16 +164,17 @@ def test_time_of_reads_marks_and_source_seconds(cut):
 # ------------------------------------------------------------------ ripple_delete
 def test_ripple_delete_splits_removes_and_closes_the_gap(cut):
     s = ok(cut, {"op": "ripple_delete", "start": 3, "end": 4})
-    assert "ripple-deleted 3.00-4.00 s (1.00 s)" in s and "removed c1_2, m1_2" in s and "split c1, m1" in s
+    assert "ripple-deleted 3.00-4.00 s (1.00 s)" in s and "removed" not in s
+    assert "split c1 (the rest is c1_2), m1 (the rest is m1_2)" in s
     d = raw(cut)
-    assert spans(cut) == {"c1": (0, 3), "c1_3": (3, 5), "c2": (5, 8), "note": (1, 2), "title": (5, 8),
-                          "m1": (0, 3), "m1_3": (3, 8)}
-    assert clip(d, "c1_3")["trim_in"] == 6 and clip(d, "m1_3")["trim_in"] == 4      # source moved past the cut
+    assert spans(cut) == {"c1": (0, 3), "c1_2": (3, 5), "c2": (5, 8), "note": (1, 2), "title": (5, 8),
+                          "m1": (0, 3), "m1_2": (3, 8)}
+    assert clip(d, "c1_2")["trim_in"] == 6 and clip(d, "m1_2")["trim_in"] == 4      # source moved past the cut
     assert clip(d, "title")["start"] == "clip:c2" and clip(d, "title")["end"] == "clip:c2.end"     # still true
     assert clip(d, "title")["keyframes"]["opacity"][1]["t"] == "clip:c2+0.5"
     assert d["markers"] == {"hit": 3.5, "late": "clip:c2+1"} and d["duration"] == 8
     assert [(i["start"], i["end"], i["text"]) for i in track(d, "cap")["items"]] == [(0.5, 1.5, "a"), (6, 7, "c")]
-    assert "fade_out" not in clip(d, "m1") and clip(d, "m1_3")["fade_out"] == 1 and "fade_in" not in clip(d, "m1_3")
+    assert "fade_out" not in clip(d, "m1") and clip(d, "m1_2")["fade_out"] == 1 and "fade_in" not in clip(d, "m1_2")
     assert errors(cut) == []
     ok_, text = ops.undo(cut)
     assert ok_ and raw(cut) == json.loads(json.dumps(BASE))
@@ -191,14 +192,51 @@ def test_ripple_delete_from_source_seconds_and_back_to_front(cut):
     assert errors(cut) == []
 
 
-def test_ripple_delete_on_some_tracks_leaves_the_rest_in_place(cut):
-    s = ok(cut, {"op": "ripple_delete", "start": 3, "end": 4, "tracks": ["v1"]})
-    assert "on v1" in s
-    sp = spans(cut)
-    assert sp["c2"] == (5, 8) and sp["title"] == (6, 9) and sp["m1"] == (0, 9)
+def test_jump_cuts_first_to_last_name_the_piece_that_plays_each_source_second(cut):
+    # c1 plays source 2-8; after the first cut it ends at source 3, so src:c1@5 is a moment c1_2 plays
+    s = ok(cut, {"op": "ripple_delete", "start": "src:c1@3", "end": "src:c1@3.5", "tracks": ["v1"]},
+       {"op": "ripple_delete", "start": "src:c1@5", "end": "src:c1@5.5", "tracks": ["v1"]})
+    sp, d = spans(cut), raw(cut)
+    assert sp["c1"] == (0, 1) and sp["c1_2"] == (1, 2.5) and sp["c1_3"] == (2.5, 5) and sp["c2"] == (5, 8)
+    assert [clip(d, k).get("trim_in") for k in ("c1", "c1_2", "c1_3")] == [2, 3.5, 5.5]
+    assert "split c1 (the rest is c1_2)" in s and "split c1_2 (the rest is c1_3)" in s
+    why = refused(cut, {"op": "ripple_delete", "start": "src:c1@3.2", "end": "src:c1@3.3"})
+    assert "no piece of v on track v1 plays source second 3.2" in why
+    assert "c1 2.00-3.00 s, c1_2 3.50-5.00 s, c1_3 5.50-8.00 s" in why
+    ok(cut, {"op": "split_clip", "id": "c1_3", "at": "src:c1@6", "new_id": "c1x"})    # c1_3 plays it
+    assert spans(cut)["c1x"] == (3, 5) and clip(raw(cut), "c1x")["trim_in"] == 6
+    assert errors(cut) == []
+
+
+def test_chapters_move_with_ripple_edits_as_markers_do(cut):
+    data = raw(cut)
+    data["chapters"] = [{"at": 0, "title": "Start"}, {"at": 4.5, "title": "Hit"}, {"at": "mark:hit", "title": "Again"},
+                        {"at": 8.5, "title": "Last"}]
+    write(cut, data)
+    ok(cut, {"op": "ripple_delete", "start": 3, "end": 4})
     d = raw(cut)
-    assert clip(d, "title")["start"] == 6 and clip(d, "title")["end"] == 9        # its anchor moved: pinned
-    assert clip(d, "title")["keyframes"]["opacity"][1]["t"] == 0.5                 # still 0.5 s into the title
+    assert d["markers"]["hit"] == 3.5 and [ch["at"] for ch in d["chapters"]] == [0, 3.5, "mark:hit", 7.5]
+    ok(cut, {"op": "insert_gap", "at": 1, "dur": 0.5})
+    assert [ch["at"] for ch in raw(cut)["chapters"]] == [0, 4, "mark:hit", 8]
+    assert errors(cut) == []
+
+
+def test_ripple_delete_on_some_tracks_moves_what_is_anchored_on_its_clips(cut):
+    data = raw(cut)
+    track(data, "cap")["items"][2].update({"start": "clip:c2", "end": "clip:c2+1"})
+    data["chapters"] = [{"at": "clip:c2", "title": "Two"}, {"at": "src:c1@5.5", "title": "Gone"}]
+    clip(data, "note").update({"start": "src:c1@5.5", "end": "src:c1@5.9"})    # inside the cut: pinned
+    write(cut, data)
+    s = ok(cut, {"op": "ripple_delete", "start": 3, "end": 4, "tracks": ["v1"]})
+    assert "on v1" in s and "title moved with the clips they are timed from" in s
+    sp = spans(cut)
+    assert sp["c2"] == (5, 8) and sp["title"] == (5, 8) and sp["m1"] == (0, 9) and sp["note"] == (3.5, 3.9)
+    d = raw(cut)
+    assert clip(d, "title")["start"] == "clip:c2" and clip(d, "title")["end"] == "clip:c2.end"
+    assert clip(d, "title")["keyframes"]["opacity"][1]["t"] == "clip:c2+0.5"
+    assert [(i["start"], i["end"]) for i in track(d, "cap")["items"]] == [(0.5, 1.5), (3, 4), ("clip:c2", "clip:c2+1")]
+    assert [ch["at"] for ch in d["chapters"]] == ["clip:c2", 3] and d["markers"]["late"] == "clip:c2+1"
+    assert (clip(d, "note")["start"], clip(d, "note")["end"]) == (3.5, 3.9)
     assert errors(cut) == []
     assert "no track 'zz'" in refused(cut, {"op": "ripple_delete", "start": 1, "end": 2, "tracks": ["zz"]})
     assert "at least a frame after" in refused(cut, {"op": "ripple_delete", "start": 3, "end": 3})
@@ -222,7 +260,8 @@ def test_insert_gap_splits_and_pushes_later_clips(cut):
     d = raw(cut)
     assert clip(d, "c1_2")["trim_in"] == 5
     assert d["markers"] == {"hit": 5.5, "late": "clip:c2+1"}       # markers follow the picture
-    assert sp["title"] == (6, 9)                                   # t1 untouched: pinned where it was
+    assert sp["title"] == (7, 10) and clip(d, "title")["start"] == "clip:c2"     # t1 untouched: follows c2
+    assert sp["note"] == (1, 2)
     assert errors(cut) == []
 
 
@@ -250,6 +289,20 @@ def test_trim_clip_with_ripple_pulls_the_rest_of_the_track(cut):
     assert raw(cut)["markers"]["hit"] == 4.5                                         # markers stay
     ok(cut, {"op": "trim_clip", "id": "c2", "out": 4, "ripple": True})                # rate 2: 2 s of film
     assert spans(cut)["c2"] == (5, 7)
+
+
+def test_trim_clip_without_ripple_leaves_clips_anchored_on_it_in_place(cut):
+    data = raw(cut)
+    clip(data, "c2")["start"] = "clip:c1.end"
+    write(cut, data)
+    s = ok(cut, {"op": "trim_clip", "id": "c1", "out": 6})                         # c1 ends at 4 s, not 6
+    sp, d = spans(cut), raw(cut)
+    assert sp["c1"] == (0, 4) and sp["c2"] == (6, 9) and sp["title"] == (6, 9)
+    assert clip(d, "c2")["start"] == 6 and clip(d, "title")["start"] == "clip:c2"   # title's anchor did not move
+    assert "c2 stay where they were: their times anchored on c1's moved edge are now numbers" in s
+    s = ok(cut, {"op": "trim_clip", "id": "c2", "out": 4})                         # rate 2: c2 now ends at 8
+    assert spans(cut)["title"] == (6, 9) and clip(raw(cut), "title")["end"] == 9 and "title stay" in s
+    assert errors(cut) == []
 
 
 def test_trim_clip_extends_the_head_and_refuses_past_the_source(cut):
@@ -284,6 +337,20 @@ def test_split_video_with_rate_and_audio_fades(cut):
     assert clip(d, "c2b")["trim_in"] == 2 and clip(d, "c2b")["rate"] == 2           # 1 film s at rate 2
     assert clip(d, "m1")["fade_in"] == 0.5 and "fade_out" not in clip(d, "m1")
     assert clip(d, "m1b")["fade_out"] == 1 and "fade_in" not in clip(d, "m1b")
+    assert errors(cut) == []
+
+
+def test_split_of_a_clip_timed_from_another_keeps_both_halves_moving_with_it(cut):
+    data = raw(cut)
+    clip(data, "c2").pop("end")
+    clip(data, "c2").update({"start": "clip:c1.end", "dur": 3})
+    write(cut, data)
+    ok(cut, {"op": "split_clip", "id": "c2", "at": 7, "new_id": "c2b"})
+    d = raw(cut)
+    assert clip(d, "c2")["dur"] == 1 and "end" not in clip(d, "c2") and clip(d, "c2b")["start"] == "clip:c2.end"
+    ok(cut, {"op": "update_clip", "id": "c1", "set": {"dur": 5}})
+    sp = spans(cut)
+    assert sp["c2"] == (5, 6) and sp["c2b"] == (6, 8) and clip(raw(cut), "c2b")["trim_in"] == 2
     assert errors(cut) == []
 
 
@@ -331,6 +398,18 @@ def test_a_transition_lets_a_clip_overlap_the_one_before_by_its_dur(cut):
     assert "must not overlap" in rows
     rows = refused(cut, {"op": "update_clip", "id": "note", "set": {"transition": {"type": "zoom", "dur": 2}}})
     assert "longer than the clip" in rows
+
+
+
+def test_a_transition_longer_than_its_overlap_is_warned_of(cut):
+    ok(cut, {"op": "move_clip", "id": "c2", "start": "clip:c1.end-0.2"},
+       {"op": "update_clip", "id": "c2", "set": {"transition": {"type": "crossfade", "dur": 1}}})
+    warned = [str(i) for i in D.check_data(cut, raw(cut))[1] if i.level == "warning" and "transition" in i.where]
+    assert warned == ["[warning] clip c2.transition: the crossfade lasts 1 s but c2 overlaps c1 by only 0.20 s: for "
+                      "0.80 s it transitions in over what is beneath; start c2 at clip:c1.end-1, or set dur 0.2"]
+    for start in ("clip:c1.end-1", "clip:c1.end"):                  # the whole overlap, or none: as documented
+        ok(cut, {"op": "move_clip", "id": "c2", "start": start})
+        assert not [i for i in D.check_data(cut, raw(cut))[1] if "c2.transition" in i.where]
 
 
 def test_every_transition_type_resolves_and_the_first_clip_comes_from_nothing(cut):
@@ -444,6 +523,33 @@ def test_captions_from_a_transcript_survive_a_ripple_cut(cut):
     assert items[-2]["from"] == round((6.0 - 2 - 1.4) * 30)
 
 
+def test_renames_carry_caption_sources_and_ducking(cut):
+    transcript(cut, WORDS)
+    caption_track(cut)
+    ok(cut, {"op": "update_clip", "id": "m1", "set": {"duck": {"under": "v1"}}})
+    s = ok(cut, {"op": "update_clip", "id": "c1", "set": {"id": "talk"}})
+    assert "renamed to talk; captions cap follow it" in s and track(raw(cut), "cap")["source"] == "clip:talk"
+    s = ok(cut, {"op": "update_track", "id": "v1", "set": {"id": "main"}})
+    assert "m1 now duck under main" in s and clip(raw(cut), "m1")["duck"]["under"] == "main"
+    assert errors(cut) == []
+
+
+def test_removing_a_clip_others_are_timed_from_pins_them(cut):
+    data = raw(cut)
+    data["markers"]["c2in"] = "src:c2@1"
+    data["chapters"] = [{"at": "clip:c2", "title": "Two"}]
+    track(data, "cap")["items"][2].update({"start": "clip:c2+1", "end": "clip:c2.end-1"})
+    write(cut, data)
+    s = ok(cut, {"op": "remove_clip", "id": "c2"})
+    assert "title, markers.late, markers.c2in, chapters[0], captions cap items were timed from c2 and stay" in s
+    d = raw(cut)
+    assert (clip(d, "title")["start"], clip(d, "title")["end"]) == (6, 9)
+    assert clip(d, "title")["keyframes"]["opacity"][1]["t"] == 0.5                 # 0.5 s into the title
+    assert d["markers"] == {"hit": 4.5, "late": 7, "c2in": 6.5} and d["chapters"][0]["at"] == 6
+    assert track(d, "cap")["items"][2] == {"start": 7, "end": 8, "text": "c"}
+    assert errors(cut) == []
+
+
 def test_captions_from_a_transcript_are_checked(cut):
     caption_track(cut)
     assert any("has no transcript: transcribe v first" in e for e in errors(cut))
@@ -533,7 +639,7 @@ def test_a_ripple_cut_ending_inside_a_crossfade_keeps_what_is_left_of_it(cut):
     assert crossfade(cut)["c2"] == (5.5, 8.5)                  # overlaps c1 (0-6) by 0.5 s
     s = ok(cut, {"op": "ripple_delete", "start": "src:c1@6.6", "end": "src:c1@7.9", "tracks": ["v1"]})
     d = raw(cut)
-    assert spans(cut)["c1_3"] == (4.6, 4.7) and spans(cut)["c2"] == (4.6, 7.2)
+    assert spans(cut)["c1_2"] == (4.6, 4.7) and spans(cut)["c2"] == (4.6, 7.2)
     assert clip(d, "c2")["transition"] == {"type": "crossfade", "dur": 0.1} and "c2 keeps its crossfade" in s
     assert errors(cut) == []
 
@@ -542,7 +648,7 @@ def test_a_ripple_cut_starting_inside_a_crossfade_shortens_it(cut):
     crossfade(cut)
     s = ok(cut, {"op": "ripple_delete", "start": 5.7, "end": 6.5, "tracks": ["v1"]})
     d = raw(cut)
-    assert spans(cut)["c1"] == (0, 5.7) and spans(cut)["c2"] == (5.5, 5.7) and spans(cut)["c2_3"] == (5.7, 7.7)
+    assert spans(cut)["c1"] == (0, 5.7) and spans(cut)["c2"] == (5.5, 5.7) and spans(cut)["c2_2"] == (5.7, 7.7)
     assert clip(d, "c2")["transition"]["dur"] == 0.2 and "shortened to 0.2 s" in s
     assert errors(cut) == []                                  # c2 may end where c1 does
 
@@ -555,6 +661,20 @@ def test_a_gap_inside_a_crossfade_keeps_it_on_both_sides(cut):
     assert sp["c1"] == (0, 5.8) and sp["c2"] == (5.5, 5.8) and sp["c1_2"] == (6.8, 7) and sp["c2_2"] == (6.8, 9.5)
     assert clip(d, "c2")["transition"]["dur"] == 0.3 and clip(d, "c2_2")["transition"]["dur"] == 0.2
     assert errors(cut) == []
+
+
+@pytest.mark.parametrize("fps", [30, 29.97])
+def test_a_gap_at_the_start_of_a_crossfade_does_not_split_the_clip_it_comes_from(cut, fps):
+    data = raw(cut)
+    data["profile"] = {"width": 1280, "height": 720, "fps": fps}
+    clip(data, "c2").pop("end")
+    clip(data, "c2").update({"start": "clip:c1.end-0.4", "dur": 3, "transition": {"type": "crossfade", "dur": 0.4}})
+    write(cut, data)
+    s = ok(cut, {"op": "insert_gap", "at": "clip:c2", "dur": 2, "tracks": ["v1"]})
+    sp = spans(cut)
+    assert set(sp) == {"c1", "c2", "note", "title", "m1"}
+    assert sp["c1"] == (0, 6) and abs(sp["c2"][0] - 7.6) < 0.02
+    assert "c1 is not split at c2's crossfade" in s and errors(cut) == []
 
 
 def test_insert_gap_off_the_millisecond_grid_still_opens_a_gap(cut):
@@ -618,3 +738,8 @@ def test_describe_shows_markers_transcripts_transitions_and_sound(cut):
     assert "from the transcript of v through c1" in text
     at = R.describe(cut, at=1)
     assert "now: volume" in at and 'caption "' in at
+
+
+def test_describe_prints_a_numeric_end_after_an_anchored_start(cut):
+    ok(cut, {"op": "update_clip", "id": "note", "set": {"start": "clip:c1+1"}})
+    assert "note text 1.00-2.00 (clip:c1+1 -> 2)" in R.describe(cut)

@@ -314,11 +314,20 @@ def edit(project: str, ops: list[dict] | str) -> str:
 
 @tool
 def undo(project: str, steps: int = 1) -> str:
-    """Undo the last `steps` edit batches: project.json goes back to the snapshot taken before them."""
+    """Undo the last `steps` edit batches: project.json goes back to the snapshot taken before them. Registering an
+    asset (import_asset, speak, draw, capture, animate, transcribe) is a batch too. redo puts back what undo
+    replaced."""
     root = _project(project)
     if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
         raise ToolInputError("steps must be a whole number >= 1")
     ok, text = _mod("ops").undo(root, steps)
+    return ToolResult(text, ok)
+
+
+@tool
+def redo(project: str) -> str:
+    """Put back what the last undo replaced (until another edit is made); undo takes it back again."""
+    ok, text = _mod("ops").redo(_project(project))
     return ToolResult(text, ok)
 
 
@@ -709,6 +718,6 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
                      prompt=prompt or None)
 
 
-TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, check, library, preview, render, review,
-                                 export_captions, speak, capture, draw, animate, import_asset, assets, probe, frames,
-                                 scenes, silences, transcribe, notes, note, typecheck)}
+TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, redo, check, library, preview, render,
+                                 review, export_captions, speak, capture, draw, animate, import_asset, assets, probe,
+                                 frames, scenes, silences, transcribe, notes, note, typecheck)}

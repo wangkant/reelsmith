@@ -1468,8 +1468,8 @@ class _Window:
             when = f"?-? ({_short(span, 70)})"
         else:
             written = [_written(c.start), _written(c.end)]
-            note = f" ({written[0] or f'{span[0]:g}'} -> {written[1] or ('dur ' + format(c.dur, 'g') if c.dur else '')})" \
-                if any(written) else ""
+            end = written[1] or (f"dur {c.dur:g}" if c.dur is not None else f"{span[1]:g}")
+            note = f" ({written[0] or f'{span[0]:g}'} -> {end})" if any(written) else ""
             when = f"{span[0]:.2f}-{span[1]:.2f}{note}"
         box = "" if c.type == "audio" else f"  [{_fmt_box(c.box, self.profile)}]"
         return f"{c.id} {c.type} {when}{box}  {_clip_summary(c, self.doc)}".rstrip()

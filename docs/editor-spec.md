@@ -172,8 +172,8 @@ reads the file's header) plays from the clip's start and loops; a still one hold
   captions.
 
 **Chapters**: `{"at": Time, "title": 1-100 characters}`, in any order (they are sorted by time). `at` must fall
-inside the film (an error otherwise); two chapters on one frame are a warning. Anchor them on markers (`"mark:intro"`)
-or clips so that ripple edits carry them; a number stays where it is.
+inside the film (an error otherwise); two chapters on one frame are a warning. Ripple edits move them as they move
+markers.
 
 ### 3.1 Time
 
@@ -277,7 +277,8 @@ transitions in over whatever is beneath it. `crossfade` fades it in over the pre
 1.2× while the previous clip grows. Wipes, slides and zooms ease in and out; fades and dips are linear. A clip
 with sound fades its sound in over `dur`, and a previous clip with sound fades out over the overlap (audio clips
 take only `crossfade`, which crossfades their volume the same way). A transition longer than either clip, an
-overlap longer than the transition, and an overlap with any clip other than the previous one are errors.
+overlap longer than the transition, and an overlap with any clip other than the previous one are errors; an overlap
+shorter than the transition (by more than half a frame) is a warning.
 
 ### 3.3 Component props and Times
 
@@ -387,43 +388,50 @@ half keeps `fade_in` and loses `fade_out`, the second keeps
 `fade_out` and loses `fade_in`, `enter` and `transition`; `src:<id>@S` Times with S in the second half are pointed
 at the new clip. The halves meet at `at` as written, unless it is a number or a Time that moves with the clip itself
 (`clip:<id>...`, `src:<id>@S`, a marker on one): then at the cut's frame in seconds (3 decimals), which the second
-half's `trim_in` and keyframes agree with.
+half's `trim_in` and keyframes agree with; when the clip's start is not a number, the first half gets the `dur` it
+has and the second starts at `clip:<first>.end`, so the pair moves as the clip did.
 
-**Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, the duration,
-caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts it and
-written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end"`, `"mark:x"`, `"src:c@3"`) is put
-back wherever it still lands on the same frame. Anchors survive where they stay true (a clip timed from a clip that
-moved with it); the others become numbers (a clip after the cut timed from a voice line, since the voice is not
-cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
-(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. Whether a Time is at,
-before or after an edit point is decided in frames. Where an edit point falls inside a transition's overlap, a piece
-that still overlaps the clip before it keeps the transition, shortened to the overlap left, and a piece that kept
-it but got shorter than it is shortened to fit. Captions from a transcript whose clip is cut away (or removed with
-`remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
+**Ripple edits** move many Times at once. Every Time of the project (clip starts and ends, markers, chapters, the
+duration, caption items, the anchored Times inside clips) is measured before the edit, moved to where the edit puts
+it and written as a number; then each Time that was an anchor (`"line:4"`, `"clip:a.end"`, `"mark:x"`,
+`"src:c@3"`) is put back wherever it still lands on the same frame. Anchors survive where they stay true (a clip
+timed from a clip that moved with it); the others become numbers (a clip after the cut timed from a voice line,
+since the voice is not cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
+(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. A `src:<id>@S` argument
+(`start`, `end`, `at`, `in`, `out`) whose S clip `<id>` does not play names the piece of the same recording on its
+track that does, and is refused when none does. Whether a Time is at, before or after an edit point is decided in
+frames. Where an edit point falls inside a transition's overlap, a piece that still overlaps the clip before it keeps
+the transition, shortened to the overlap left, and one that kept it but is longer than its overlap or either clip
+is shortened to fit. Captions from a transcript whose clip is cut away (or removed with `remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
 
 - `ripple_delete`: the range `start`-`end` (frames) goes from the given tracks (default: every visual and audio
   track and every captions track with `items`). Clips inside it are removed, clips crossing an edge are split
   there (video and audio move their `trim_in` by the time cut × rate), and everything after it on those tracks
-  moves earlier by its length. Caption items are clipped to what is left. Clips on tracks it does not touch stay
-  where they are (an anchor that would drag them becomes a number). Markers and a set `duration` move with the
-  cut. The narration is never cut: a note says so when the range falls inside it. To cut several source ranges of
-  one clip (`silences`), cut from the last back: an earlier `src:<clip>@S` still names the first piece; name the
-  footage's tracks, or a music bed on its own track is cut (and skips) at every cut too.
+  moves earlier by its length. Caption items are clipped to what is left. On tracks it does not touch, numbers
+  stay where they are and a Time anchored on a clip (as are markers and chapters anchored on one) follows that
+  clip; one whose anchor was cut away becomes the number it was. Markers, chapters and a set `duration` move with
+  the cut. The narration is never cut: a note says so when the range falls inside it. Several source ranges of one
+  clip (`silences`) are cut in one batch in any order; name the footage's tracks, or a music bed on its own track
+  is cut (and skips) at every cut too.
 - `insert_gap`: everything at or after `at` on the given tracks moves later by `dur` (a clip that starts at `at`
-  moves, one that ends there stays; a clip across it is split); markers at or after it and a set `duration` move.
+  moves, one that ends there stays; a clip across it is split, except the clip a transition starting at `at` comes
+  from, which keeps its place); markers and chapters at or after it and a set `duration` move.
 - `trim_clip`: for a video or audio clip, `in` and `out` are seconds of its source (its new `trim_in` and the
   source second where it ends); for any other clip, Times of its new start and end. Without `ripple` the picture
   stays where it is on the timeline and only the clip's edges move (extending past a neighbour is refused as an
-  overlap); with `ripple` the clip keeps its start, and the clips after it on its track move by the change in its
-  length. Other clips anchored on it follow their anchors. An out point past the end of a non-looping source, an
-  in point that would start the clip before 0 s without ripple, and a reversed, held or speed-curved video clip
-  (its source seconds are not in film order) are refused.
+  overlap; clips timed from a moved edge stay where they were, as numbers); with `ripple` the clip keeps its start,
+  and the clips after it on its track move by the change in its length. Other clips anchored on it follow their
+  anchors. An out point past the end of a non-looping source, an in point that would start the clip before 0 s
+  without ripple, and a reversed, held or speed-curved video clip (its source seconds are not in film order) are
+  refused.
 
 A batch is refused, and project.json left untouched, when an op fails or when the result has validation errors the
 project did not have before: errors that were already there do not block edits that leave them alone. Before each
 write the previous project.json is kept as `.history/NNNN.json` (the last 500); `undo` puts one back and keeps the
-version it replaces as `.history/redo.json`. The project may also be edited as a file directly; every tool reads it
-fresh and validates it.
+version it replaces as `.history/redo.json` (saying so when project.json had changed since the last batch wrote it),
+and `redo` puts that version back as a batch of its own until another batch is applied. `remove_clip` of a clip
+others are timed from turns those anchors into the numbers they were. The project may also be edited as a file
+directly; every tool reads it fresh and validates it.
 
 ## 6. Components (presets and the agent's library)
 
@@ -717,6 +725,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 | `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
 | `edit(project, ops)` | apply a batch of ops (section 5) | `edit` (JSON, `@file` or `-`) |
 | `undo(project, steps=1)` | undo applied batches | `undo --steps` |
+| `redo(project)` | put back what the last undo replaced | `redo` |
 | `check(project)` | validation, hard rules, advice (section 14) | `check` |
 | `library(project, name?)` | components with their props; one in full with its schema, example and source path | `library` |
 | `typecheck(project)` | type-check the library's components | `typecheck` |
