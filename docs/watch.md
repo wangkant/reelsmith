@@ -1,6 +1,7 @@
 # reelsmith watch
 
-`reelsmith watch` opens an editor window in your browser on the project your coding agent is editing. It is for
+`reelsmith watch` opens an editor window on the project your coding agent is editing: a desktop window of its
+own when the `app` extra is installed (`pip install -e ".[app]"`), else a tab in your browser. It is for
 watching the work as it happens, the way you would look over someone's shoulder in an editing app: a monitor that
 plays the current cut, a multi-track timeline that changes with every edit, and a feed of what the agent just did.
 
@@ -13,8 +14,9 @@ nothing but its own caches under `build/watch/`.
 reelsmith watch path/to/project
 ```
 
-It prints the address (a free port on 127.0.0.1) and opens it in your browser. `--port 8765` picks the port,
-`--no-open` only prints the address. Ctrl+C stops it.
+It opens the window and prints its local address (a free port on 127.0.0.1); closing the window stops it.
+`--browser` opens a browser tab instead, `--no-open` only serves and prints the address (Ctrl+C stops those),
+`--port 8765` picks the port.
 
 Give it a workspace folder instead (the one holding `workspace.json`) and the first page lists its projects; each
 opens in the same window at `/p/<name>/`.

@@ -316,12 +316,33 @@ def test_the_watch_command(monkeypatch, demo, capsys):
 
     def fake_forever(self):
         started["url"] = self.url
-        raise KeyboardInterrupt
+        if threading.current_thread() is threading.main_thread():
+            raise KeyboardInterrupt
     monkeypatch.setattr(W.WatchServer, "serve_forever", fake_forever)
     opened = []
     monkeypatch.setattr(W.webbrowser, "open", opened.append)
+    from reelsmith.watch import window
+    shown = []
+    monkeypatch.setattr(window, "open_window", lambda url, title, ready=None: shown.append((url, title)))
+    monkeypatch.setattr(W.WatchServer, "shutdown", lambda self: None)
     assert cli.main(["watch", str(demo), "--no-open"]) == 0
-    assert started["url"] in capsys.readouterr().out and opened == []
-    assert cli.main(["watch", str(demo)]) == 0 and opened
+    assert started["url"] in capsys.readouterr().out and opened == [] and shown == []
+    monkeypatch.setattr(window, "available", lambda: True)          # the app extra is installed: a desktop window
+    assert cli.main(["watch", str(demo)]) == 0 and opened == []
+    assert shown[0][0].startswith("http://127.0.0.1:") and shown[0][1].startswith("reelsmith · ")
+    assert cli.main(["watch", str(demo), "--browser"]) == 0 and len(opened) == 1 and len(shown) == 1
+    monkeypatch.setattr(window, "available", lambda: False)         # without it: the browser, and how to get the window
+    assert cli.main(["watch", str(demo)]) == 0 and len(opened) == 2
+    assert 'pip install "reelsmith[app]"' in capsys.readouterr().out
     assert cli.main(["watch", str(demo / "assets")]) == 2
     assert cli.command_parser("watch").parse_args([str(demo), "--port", "0"]).port == 0
+
+
+def test_the_feed_has_a_row_for_every_batch_the_log_missed():
+    history = [{"n": 1, "at": "2026-01-01T10:00:00", "summary": "added clip a"},
+               {"n": 2, "at": "2026-01-01T10:05:00", "summary": "moved clip a"}]
+    logged = [{"ts": "2026-01-01T10:05:00", "tool": "edit", "ok": True, "seconds": 0.2, "summary": "applied", "batch": 2},
+              {"ts": "2026-01-01T10:06:00", "tool": "check", "ok": True, "seconds": 0.1, "summary": "OK", "batch": None}]
+    feed = S.with_batches(logged, history)
+    assert [(r["tool"], r["batch"]) for r in feed] == [("edit", 1), ("edit", 2), ("check", None)]
+    assert feed[0]["summary"] == "added clip a" and S.with_batches(logged, history[1:]) is logged

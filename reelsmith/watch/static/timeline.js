@@ -373,7 +373,7 @@ export function createTimeline(app) {
     if (c.rate != null && c.rate !== 1) out.push(`${+c.rate.toFixed(2)}×`);
     if (c.reverse) out.push("rev");
     if (c.hold != null) out.push("freeze");
-    if (c.volume === 0 && c.type !== "audio") out.push("mute");
+    if (c.muted) out.push("mute");
     else if (c.type === "audio" && c.volume != null && c.volume !== 1) out.push(`vol ${c.volume}`);
     if (c.loop) out.push("loop");
     return out;

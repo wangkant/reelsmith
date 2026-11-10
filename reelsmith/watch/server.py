@@ -650,25 +650,45 @@ def serve(target: str | Path, port: int = 0) -> WatchServer:
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith watch",
                                  description="Open a read-only editor window on a project (or a workspace of "
-                                             "projects) in the browser, to watch an agent edit it. Local only.")
+                                             "projects), to watch an agent edit it: a desktop window when the `app` "
+                                             "extra is installed, else a browser tab. Local only.")
     ap.add_argument("project", help="a project folder, or a workspace folder for all its projects")
     ap.add_argument("--port", type=int, default=0, help="the port on 127.0.0.1 (default: a free one)")
-    ap.add_argument("--no-open", action="store_true", help="print the URL without opening the browser")
+    ap.add_argument("--browser", action="store_true", help="open it in the browser instead of a desktop window")
+    ap.add_argument("--no-open", action="store_true", help="serve and print the URL without opening anything")
     return ap
 
 
+def _title(srv: WatchServer) -> str:
+    if srv.workspace is not None:
+        return f"reelsmith · {srv.workspace.root.name}"
+    state = srv.site(None).state()
+    return f"reelsmith · {state['project'].get('title') or state['project']['name']}"
+
+
 def main(argv: list[str] | None = None) -> int:
+    from . import window
     args = parser().parse_args(argv)
     try:
         srv = WatchServer(args.project, args.port)
     except (ValueError, WorkspaceError, OSError) as exc:
         print(f"reelsmith watch: {exc}", file=sys.stderr)
         return 2
-    print(f"reelsmith watch: {srv.url}  (read-only, local; Ctrl+C stops it)", flush=True)
-    if not args.no_open:
-        webbrowser.open(srv.url)
+    as_app = not args.no_open and not args.browser and window.available()
+    print(f"reelsmith watch: {srv.url}  (read-only, local; "
+          f"{'closing the window' if as_app else 'Ctrl+C'} stops it)", flush=True)
     try:
-        srv.serve_forever()
+        if as_app:
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            window.open_window(srv.url, _title(srv))
+            srv.shutdown()
+        else:
+            if not args.no_open:
+                if not args.browser:
+                    print('reelsmith watch: for a desktop window instead of a browser tab: pip install "reelsmith[app]"',
+                          flush=True)
+                webbrowser.open(srv.url)
+            srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

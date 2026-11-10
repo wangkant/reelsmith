@@ -214,7 +214,7 @@ function renderTop() {
   const d = s.render?.delivered, last = s.render?.last;
   const del = $("delivery");
   del.className = "pill";
-  if (last && !last.ok && (!d || last.at > d.at)) {
+  if (last && !last.ok && (!d || (last.at > d.at && !d.matches_cut))) {
     del.classList.add("is-error");
     del.textContent = `${t("top.lastFailed")}${last.stage ? ` · ${last.stage}` : ""}`;
     del.title = last.text || "";

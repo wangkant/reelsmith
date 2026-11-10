@@ -198,6 +198,7 @@ class Film:
             "keyframes": self.keyframes(c, span),
             "rate": getattr(c, "rate", None), "reverse": bool(getattr(c, "reverse", False)),
             "hold": getattr(c, "hold", None), "volume": getattr(c, "volume", None),
+            "muted": c.type == "video" and RS._muted(c, a, self.root),
             "loop": bool(getattr(c, "loop", False)),
             "box": None if c.type == "audio" else self.box_px(c.box),
             "raw": raw,
@@ -326,6 +327,15 @@ def activity_of(root: Path, limit: int = ACTIVITY_SHOWN) -> list[dict]:
     return out
 
 
+def with_batches(activity: list[dict], history: list[dict]) -> list[dict]:
+    """The feed with a row for every recorded batch the activity log does not have (edits made before the log
+    existed, or by hand through the Python API), in time order."""
+    logged = {row.get("batch") for row in activity}
+    extra = [{"ts": h["at"], "tool": "edit", "ok": True, "seconds": None, "summary": h["summary"], "batch": h["n"]}
+             for h in history if h["n"] not in logged]
+    return sorted(activity + extra, key=lambda row: str(row.get("ts") or "")) if extra else activity
+
+
 def history_of(root: Path) -> list[dict]:
     """Recorded batches that still have their snapshot, oldest first; a number reused after an undo shows its latest
     batch."""
@@ -444,8 +454,8 @@ def build_state(root: str | Path, base: str = "") -> dict:
         state["error"] = "project.json cannot be read"
     state["render"] = render_of(root, base, cut)
     state["spend"] = spend_of(root)
-    state["activity"] = activity_of(root)
     state["history"] = history_of(root)
+    state["activity"] = with_batches(activity_of(root), state["history"])
     state["revision"] = digest(state)
     return state
 
