@@ -609,6 +609,24 @@ def test_speak_failed_line_is_reported_and_the_rest_stay_cached(env):
     assert [c[0] for c in retry.calls] == ["坏句子"]
 
 
+def test_speak_waits_for_another_process_narrating_the_same_project(env, monkeypatch, tmp_path):
+    # the MCP server and a CLI call: the second must not pay for the lines the first is buying
+    script = tmp_path / "hold.py"
+    script.write_text("import sys, time\nfrom reelsmith.providers import config, tts\n"
+                      "with tts._project_lock(config.context(sys.argv[1])):\n"
+                      "    print('held', flush=True)\n    time.sleep(5)\n", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(script), str(env.project)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "held"
+        monkeypatch.setattr(TTS, "SPEAK_WAIT_S", 0.3)
+        engine = FakeTTS()
+        text, err = P.speak(env.project, lines=["一句"], engine=engine)
+        assert err and "another speak is narrating this project" in text and engine.calls == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 @pytest.mark.parametrize("lines, gap, says", [
     ([], 0.2, "non-empty list"),
     ("一句", 0.2, "non-empty list"),
@@ -1464,6 +1482,19 @@ def test_import_a_relative_path_from_the_project_folder(env):
     write_png(env.project / "assets" / "loose.png")
     text, err = P.import_asset(env.project, id="loose", source="assets/loose.png")
     assert not err and read_project(env.project)["assets"]["loose"]["path"] == "assets/loose.png"
+
+
+def test_cli_import_reads_a_relative_path_from_the_shells_folder(env, monkeypatch, capsys):
+    from reelsmith import cli
+    here = env.tmp / "shell"
+    here.mkdir()
+    write_png(here / "clip.png", 64, 48)
+    monkeypatch.chdir(here)
+    assert cli.main(["import", str(env.project), "shot", "./clip.png"]) == 0, capsys.readouterr().out
+    assert read_project(env.project)["assets"]["shot"]["path"] == "assets/shot.png"
+    write_png(env.project / "assets" / "loose.png")              # not in the shell's folder: the project's, as before
+    assert cli.main(["import", str(env.project), "loose", "assets/loose.png"]) == 0
+    capsys.readouterr()
 
 
 @pytest.mark.parametrize("source", ["file:///C:/Windows/win.ini", "ftp://example.com/a.png", "data:image/png;base64,AA",

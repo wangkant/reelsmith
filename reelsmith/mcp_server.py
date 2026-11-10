@@ -8,13 +8,16 @@ import argparse
 import hmac
 import inspect
 import ipaddress
+import json
 import os
 import sys
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
+from pydantic import ValidationError
 
 from . import __version__, tools
 
@@ -35,8 +38,43 @@ GUARD_ENV = "REELSMITH_GUARD_PROJECT"
 DEFAULT_PORT = 8765
 MIN_TOKEN = 16
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+JSON_KINDS = {"array": "a list", "object": "an object", "string": "a string", "number": "a number",
+              "integer": "a whole number", "boolean": "true or false"}
 
-mcp = MCPServer("reelsmith", instructions=INSTRUCTIONS, version=__version__)
+
+def _kinds(schema: dict) -> str:
+    kinds = list(dict.fromkeys(JSON_KINDS[s["type"]] for s in schema.get("anyOf", [schema])
+                               if s.get("type") in JSON_KINDS))
+    return ", ".join(kinds[:-1]) + " or " + kinds[-1] if len(kinds) > 1 else (kinds or ["another value"])[0]
+
+
+def argument_text(name: str, arguments: dict, exc: ValidationError, schema: dict) -> str:
+    """A schema rejection as a sentence per argument, instead of pydantic's report."""
+    props, rows = schema.get("properties") or {}, {}
+    for err in exc.errors():
+        field = str(err["loc"][0]) if err["loc"] else "arguments"
+        if field in rows:
+            continue
+        if err["type"] == "missing":
+            rows[field] = f"{field} is required"
+        else:
+            got = json.dumps(arguments.get(field), ensure_ascii=False, default=str)
+            rows[field] = f"{field} takes {_kinds(props.get(field, {}))}, not {got[:80]}"
+    return f"{name} was not run: " + "; ".join(rows.values()) + ". Fix the arguments and call it again."
+
+
+class Server(MCPServer):
+    async def call_tool(self, name, arguments, context=None):
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as exc:
+            if not isinstance(exc.__cause__, ValidationError):
+                raise
+            schema = next((t.input_schema for t in await self.list_tools() if t.name == name), {})
+            raise ToolError(argument_text(name, arguments, exc.__cause__, schema)) from exc.__cause__
+
+
+mcp = Server("reelsmith", instructions=INSTRUCTIONS, version=__version__)
 
 
 def guard_scope():

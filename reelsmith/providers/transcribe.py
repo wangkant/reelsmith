@@ -5,11 +5,14 @@ Providers (workspace.json providers.transcribe.provider):
 - "openai": any OpenAI-compatible POST {base_url}/audio/transcriptions (OpenAI, Groq, a local whisper server) asked
   for verbose_json with word timestamps. The sound is sent as 16 kHz mono MP3, in pieces cut at silences when it
   is over max_mb; each piece's times are moved back to the source's clock. Paid: estimated from usd_per_min and
-  booked in the ledger first.
+  booked in the ledger first. A finished piece is kept until the transcript is written, so a retry pays only for
+  the pieces still missing.
 - "local": faster-whisper in this process (the `transcribe` extra), free.
+A transcript of the same file (size and mtime), provider, model, language and prompt is reused, not bought again.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -272,22 +275,30 @@ def _estimate(cfg: dict, seconds: float) -> float:
 
 
 def _run(ctx: Context, engine: Engine, cfg: dict, audio: Path, dur: float, work: Path, language: str,
-         prompt: str) -> tuple[dict, str]:
+         prompt: str, kept: Path) -> tuple[dict, str]:
     quiet = silent_ranges(audio, 0.3, -35, dur) if engine.max_bytes and audio.stat().st_size > engine.max_bytes else []
     plan = pieces(dur, audio.stat().st_size, engine.max_bytes, quiet)
+    files = [kept / f"{n:03d}-{a:.3f}-{b:.3f}.json" for n, (a, b) in enumerate(plan)]
+    todo = sum(b - a for (a, b), f in zip(plan, files) if not f.is_file())
     res = None
-    if engine.paid:
+    if engine.paid and todo > 0:
         res = ctx.ledger().reserve(project=ctx.project_key, tool="transcribe", provider=engine.name,
-                                   est_usd=_estimate(cfg, dur), budget_usd=ctx.budget["per_project_usd"],
-                                   model=getattr(engine, "model", None), seconds=round(dur, 1), pieces=len(plan))
-    done, answers, error = 0.0, [], None
+                                   est_usd=_estimate(cfg, todo), budget_usd=ctx.budget["per_project_usd"],
+                                   model=getattr(engine, "model", None), seconds=round(todo, 1),
+                                   pieces=sum(not f.is_file() for f in files))
+    done, answers, error, reused = 0.0, [], None, 0
     try:
-        for n, (a, b) in enumerate(plan):
+        for n, ((a, b), f) in enumerate(zip(plan, files)):
+            if f.is_file():
+                answers.append((a, json.loads(f.read_text(encoding="utf-8"))))
+                reused += 1
+                continue
             piece = audio
             if len(plan) > 1:
                 piece = work / f"piece{n:03d}{audio.suffix}"
                 cut(audio, a, b, piece)
             answers.append((a, engine.run(piece, language, prompt)))
+            write_json(f, answers[-1][1])
             done += b - a
     except Exception as exc:  # noqa: BLE001 - settled below, then raised as it was
         error = exc
@@ -300,6 +311,7 @@ def _run(ctx: Context, engine: Engine, cfg: dict, audio: Path, dur: float, work:
                                 error=ctx.redact(str(error))[:200] if error is not None else None)
     spent = f" (est. ${_estimate(cfg, done):.4f})" if engine.paid else " (local, free)"
     note = f" in {len(plan)} pieces cut at silences" if len(plan) > 1 else ""
+    note += f", {reused} of them kept from an earlier try (free)" if reused else ""
     return stitch(answers), spent + note
 
 
@@ -329,23 +341,41 @@ def transcribe(project, asset, language=None, prompt=None, *, engine: Engine | N
         return "prompt is a hint of names and words (at most 800 characters)", True
     cfg = ctx.providers["transcribe"]
     engine = engine or make_engine(ctx)
+    out = ctx.assets_dir / f"{aid}.transcript.json"
+    st = path.stat()
+    # project-relative, so a hard-linked copy in another project (new_project from_project) is the same source
+    key = hashlib.sha256(json.dumps([entry.get("path"), st.st_size, st.st_mtime_ns, engine.identity(), language,
+                                     prompt], ensure_ascii=False).encode("utf-8")).hexdigest()[:20]
+    old = _saved(out)
+    if old.get("key") == key:
+        note = "" if entry.get("transcript") == rel(ctx, out) else set_transcript(ctx, aid, rel(ctx, out))
+        return _text(aid, entry, old, rel(ctx, out), " (cached, free)", note), False
     engine.check()
+    kept = ctx.cache_dir / "transcribe" / f"pieces-{key}"
     work = ctx.cache_dir / "transcribe" / uuid.uuid4().hex[:12]
     work.mkdir(parents=True, exist_ok=True)
     try:
         audio = work / f"sound{engine.suffix}"
         extract(path, audio)
-        result, spent = _run(ctx, engine, cfg, audio, dur, work, language, prompt)
+        result, spent = _run(ctx, engine, cfg, audio, dur, work, language, prompt, kept)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    out = ctx.assets_dir / f"{aid}.transcript.json"
     transcript = {"version": 1, "asset": aid, "source": entry.get("path"), "duration_s": round(dur, 3),
                   "language": result["language"] or language or None, "provider": engine.identity(),
-                  "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "text": result["text"],
-                  "words": result["words"], "segments": result["segments"]}
+                  "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "key": key,
+                  "text": result["text"], "words": result["words"], "segments": result["segments"]}
     write_json(out, transcript)
+    shutil.rmtree(kept, ignore_errors=True)
     note = set_transcript(ctx, aid, rel(ctx, out))
     return _text(aid, entry, transcript, rel(ctx, out), spent, note), False
+
+
+def _saved(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _text(aid: str, entry: dict, t: dict, out: str, spent: str, note: str) -> str:

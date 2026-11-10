@@ -619,10 +619,11 @@ paying again, and a finished clip whose download failed is collected again from 
 ### 9.5 import_asset and assets
 
 `import_asset(project, id, source, kind?)` brings a local file, or downloads an http(s) image, video or audio file,
-into `assets/` and registers it (a relative path is read from the project folder). The bytes are sniffed (and video
-and audio probed) whatever the name or the server says. A local file has no size limit: on the project's volume it
-is hard-linked into `assets/` (one file on disk under two names, so a multi-GB recording is not stored twice; no
-tool writes into an asset file, they only replace it, so the original is never changed), elsewhere it is copied
+into `assets/` and registers it (a relative path is read from the project folder; `reelsmith import` reads one
+the shell's folder holds from there). The bytes are sniffed (and video and audio probed) whatever the name or
+the server says. A local file has no size limit: on the project's volume it is hard-linked into `assets/` (one
+file on disk under two names, so a multi-GB recording is not stored twice; no tool writes into an asset file,
+they only replace it, so the original is never changed), elsewhere it is copied
 once the disk is found to have room for it (with 256 MB to spare); the reply says which. A download goes only to
 public hosts, every redirect included, and is capped by `providers.import.max_mb` (200). `kind` `evidence` takes a
 page screenshot you already have (PNG, JPEG or WebP); its box is the whole picture until `update_asset` sets one.
@@ -683,7 +684,10 @@ timeline. Text comes first, then the same facts as one `JSON: {...}` line.
 `transcript` set through the edit ops. The asset must be video or audio with sound. ffmpeg takes its sound out as
 16 kHz mono (MP3 at 32 kbit/s for an endpoint, WAV for the local model). `language` is an ISO code (empty: the
 provider detects it, or `providers.transcribe.language`); `prompt` (at most 800 characters) lists names and words
-to spell right. The result lists what is said by segment with source times.
+to spell right. The result lists what is said by segment with source times. A call on the same file (size and
+mtime), provider, model, language and prompt as the saved transcript returns it "(cached, free)"; each finished
+piece is kept in the cache until the transcript is written, so a retry after a failure pays only for the pieces
+still missing.
 
 `providers.transcribe`:
 
@@ -713,7 +717,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 |---|---|---|
 | `manual()` | the agent manual ([manual.md](manual.md)) | `manual` |
 | `notes(project)` / `note(project, text)` | read / append to the workspace's `library/NOTES.md` | `notes`, `note` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag | `new --profile --canvas --locale` |
+| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `profile` a name, `canvas` `"WxH"` or `"WxH@fps"` for an inline profile based on `profile` (or the workspace's), `locale` a BCP-47 tag; `from_project` copies another project's film (assets and voice hard-linked, the edit with every pixel box mapped from its safe area to the new one) | `new --profile --canvas --locale --from` |
 | `describe(project, at?)` | the editor's window as text (section 8) | `describe --at` |
 | `edit(project, ops)` | apply a batch of ops (section 5) | `edit` (JSON, `@file` or `-`) |
 | `undo(project, steps=1)` | undo applied batches | `undo --steps` |

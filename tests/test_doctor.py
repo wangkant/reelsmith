@@ -46,6 +46,10 @@ def machine(tmp_path, monkeypatch):
     (m.renderer / "package.json").write_text(json.dumps({"dependencies": {"remotion": "4.0.532"}}), encoding="utf-8")
     (modules / "remotion" / "package.json").write_text(json.dumps({"version": "4.0.532"}), encoding="utf-8")
     monkeypatch.setenv("REELSMITH_RENDERER", str(m.renderer))
+    m.codex_home = tmp_path / "codex-home"
+    m.codex_home.mkdir()
+    (m.codex_home / "auth.json").write_text('{"tokens": {"access_token": "' + SECRET + '"}}', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(m.codex_home))
     m.cwd = tmp_path / "here"
     m.cwd.mkdir()
     monkeypatch.chdir(m.cwd)
@@ -154,6 +158,15 @@ def test_optional_tools_missing_never_fail_the_run(machine):
     machine.modules = {"playwright"}
     machine.browsers = []
     assert rows(doctor.run_checks())["capture"]["fix"].endswith("-m playwright install chromium")
+
+
+def test_codex_installed_but_not_signed_in(machine, capsys):
+    (machine.codex_home / "auth.json").unlink()
+    got = rows(doctor.run_checks())["codex"]
+    assert not got["ok"] and got["fix"] == "codex login" and "not signed in" in got["detail"]
+    (machine.codex_home / "auth.json").write_text('{"tokens": {"access_token": "' + SECRET + '"}}', encoding="utf-8")
+    code, out = run(capsys, "--json")
+    assert rows(json.loads(out))["codex"]["ok"] and SECRET not in out          # the file is looked for, never read
 
 
 @pytest.mark.parametrize("os_name, shell, fix", [

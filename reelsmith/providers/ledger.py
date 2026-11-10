@@ -67,7 +67,7 @@ def row_cost(row: dict) -> float:
 
 
 @contextmanager
-def _os_lock(path: Path, timeout: float = LOCK_TIMEOUT_S):
+def _os_lock(path: Path, timeout: float = LOCK_TIMEOUT_S, busy: str = "ledger is locked by another process"):
     """An exclusive lock other processes respect (the MCP server and a CLI may share one ledger)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(path, "a+b")
@@ -82,7 +82,7 @@ def _os_lock(path: Path, timeout: float = LOCK_TIMEOUT_S):
                     break
                 except OSError:
                     if time.monotonic() > deadline:
-                        raise ProviderError(f"ledger is locked by another process ({path}); try again") from None
+                        raise ProviderError(f"{busy} ({path}); try again") from None
                     time.sleep(0.05)
             try:
                 yield
@@ -97,7 +97,7 @@ def _os_lock(path: Path, timeout: float = LOCK_TIMEOUT_S):
                     break
                 except OSError:
                     if time.monotonic() > deadline:
-                        raise ProviderError(f"ledger is locked by another process ({path}); try again") from None
+                        raise ProviderError(f"{busy} ({path}); try again") from None
                     time.sleep(0.05)
             try:
                 yield

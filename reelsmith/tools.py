@@ -237,17 +237,26 @@ def note(project: str, text: str) -> str:
 
 # ------------------------------------------------------------------ editing
 @tool
-def new_project(project: str, profile: str = "", title: str = "", canvas: str = "", locale: str = "") -> str:
+def new_project(project: str, profile: str = "", title: str = "", canvas: str = "", locale: str = "",
+                from_project: str = "") -> str:
     """Create a project folder with an empty project.json (no tracks yet), assets/, voice/ and script.md.
     Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys. profile: a profile name
     (landscape, vertical, square, portrait, youtube, douyin, douyin-long, tiktok, shorts, reels or one of the
     workspace's); empty takes the workspace's (else landscape). canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" (e.g.
     "1920x1080@25", "1920x1080@29.97") for a canvas of your own, starting from `profile` (or the workspace's): its
     safe area scales to the new size. locale: the film's language as a BCP-47 tag
-    ("en", "zh-CN", "ja"); empty takes the workspace's (else en)."""
+    ("en", "zh-CN", "ja"); empty takes the workspace's (else en). from_project: the folder of a project to put on
+    this canvas: its assets and voice (hard-linked like import_asset), tracks, markers, chapters, meta and theme
+    come along (its locale too unless `locale` is given), and every box is mapped from its safe area to this one;
+    look at the result with preview."""
     root = _project(project, must_exist=False)
     if (root / PROJECT_FILE).is_file():
         return _fail(f"{root / PROJECT_FILE} already exists: edit it instead")
+    src = old = None
+    if from_project:
+        src = _project(from_project)
+        old = json.loads((src / PROJECT_FILE).read_text(encoding="utf-8"))
+        locale = locale or old.get("locale") or ""
     ws = find_workspace(root)
     custom, own = (ws.profiles, ws.config.get("profile")) if ws else (None, None)
     value = None
@@ -269,6 +278,20 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
            "meta": {"title": title, "desc": "", "topic": "", "shape": "", "sources": []}, "assets": {}, "tracks": []}
     for sub in ("assets", "voice"):
         (root / sub).mkdir(parents=True, exist_ok=True)
+    mapped = ""
+    if old is not None:
+        doc.update({k: v for k, v in old.items() if k not in ("version", "profile", "locale")})
+        if title:
+            doc["meta"] = {**(doc.get("meta") or {}), "title": title}
+        try:
+            was = profile_for(src).safe
+        except ValueError as exc:
+            raise ToolInputError(f"the profile of {src} cannot be read: {exc}") from None
+        boxes = _map_boxes(doc.get("tracks") or [], was, made.safe)
+        files = _bring_media(src, root, old.get("assets") or {})
+        mapped = (f"\nfrom {src}: {files} file(s) brought in, {boxes} box(es) mapped from its safe area x {was.x}-"
+                  f"{was.x + was.w}, y {was.y}-{was.y + was.h} to this one; text sizes are as they were. Look at "
+                  "every scene with preview before render.")
     # LF on every OS: the files are diffed, hashed and edited by tools that expect it
     (root / PROJECT_FILE).write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8",
                                      newline="\n")
@@ -278,7 +301,49 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
     where = f"in workspace {ws.root}" if ws else "outside any workspace (no library, default rules, keys from env)"
     s = made.safe
     return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {fps_label(made.fps)} "
-            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}")
+            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}{mapped}")
+
+
+def _map_boxes(tracks: list, was, now) -> int:
+    """Every pixel box (and x/y/w/h keyframe) moved from safe area `was` to `now`, x and w by the safe width, y and
+    h by the safe height; "full" and "safe" stay."""
+    sx, sy = now.w / was.w, now.h / was.h
+    at = {"x": lambda v: now.x + (v - was.x) * sx, "y": lambda v: now.y + (v - was.y) * sy,
+          "w": lambda v: v * sx, "h": lambda v: v * sy}
+    count = 0
+    for track in tracks:
+        for item in [track] + list(track.get("clips") or []):
+            box = item.get("box")
+            if isinstance(box, dict):
+                item["box"] = {k: (round(at[k](v), 1) if k in at and isinstance(v, (int, float)) else v)
+                               for k, v in box.items()}
+                count += 1
+            for prop, frames in (item.get("keyframes") or {}).items():
+                for kf in frames if prop in at and isinstance(frames, list) else []:
+                    if isinstance(kf, dict) and isinstance(kf.get("v"), (int, float)):
+                        kf["v"] = round(at[prop](kf["v"]), 1)
+    return count
+
+
+def _bring_media(src: Path, root: Path, assets: dict) -> int:
+    """The first project's assets/ and voice/ files and every asset file elsewhere in it, at the same paths: media
+    hard-linked (else copied), JSON copied so an edit of one project's file never shows in the other."""
+    bring_in = _mod("providers.importer")._bring_in
+    files = {f for sub in ("assets", "voice") if (src / sub).is_dir() for f in (src / sub).rglob("*") if f.is_file()}
+    for entry in assets.values():
+        for key in ("path", "transcript"):
+            f = (src / str(entry.get(key) or "")).resolve() if isinstance(entry, dict) and entry.get(key) else None
+            if f is not None and f.is_file() and src in f.parents:
+                files.add(f)
+    for f in files:
+        dst = root / f.relative_to(src)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.unlink(missing_ok=True)
+        if f.suffix.lower() == ".json":
+            shutil.copyfile(f, dst)
+        else:
+            bring_in(f, dst)
+    return len(files)
 
 
 def _ops_arg(ops) -> list[dict]:
@@ -295,7 +360,7 @@ def _ops_arg(ops) -> list[dict]:
 
 
 @tool
-def edit(project: str, ops: list[dict] | str) -> str:
+def edit(project: str, ops: list[dict] | dict | str) -> str:
     """Apply a batch of edit ops atomically: all apply and validate, or nothing changes. Ops: add_track,
     update_track, remove_track, add_clip, update_clip, remove_clip, move_clip, split_clip, set_keyframes, add_asset
     (an existing id is replaced), update_asset ({"op": "update_asset", "id", "set": {...}}: deep merge, null
@@ -332,7 +397,8 @@ def _layout_rows(layout: list[str]) -> list[str]:
 
 
 @tool
-def preview(project: str, times: list[float | str] = [], sweep: bool = False) -> str:  # noqa: B006 - never mutated
+def preview(project: str, times: list[float | str] | float | str = [],  # noqa: B006 - never mutated
+            sweep: bool = False) -> str:
     """Render stills at the given moments straight from the project (no full render): seconds or Times like
     "line:3", "clip:c2+0.5", "end-1" ("clip:c2.end" = c2's last frame). Up to 24 per call. Returns PNG paths (look
     at them with Read), a contact sheet with the platform's UI bands darkened and the safe area outlined, and
@@ -666,8 +732,8 @@ def probe(project: str, source: str) -> str:
 
 
 @tool
-def frames(project: str, asset: str, times: list[float | str] = [], every: float = 0,  # noqa: B006 - never mutated
-           n: int = 0) -> str:
+def frames(project: str, asset: str, times: list[float | str] | float | str = [],  # noqa: B006 - never mutated
+           every: float = 0, n: int = 0) -> str:
     """Stills of a SOURCE video (an asset id, or a file inside the project) at source seconds, not the film's:
     `times` (seconds or m:ss, up to 24), or one every `every` seconds, or `n` evenly spaced (default 12). Returns
     PNG paths (look at them with Read) and a contact sheet with each still's source time burned in. Use it to see
@@ -704,7 +770,8 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
     """Word-level transcript of a video or audio asset (what is said and when, in source seconds), saved as
     assets/<id>.transcript.json and linked from the asset. `language`: an ISO code such as "en" or "zh" (empty:
     detected); `prompt`: names and words to spell right. Captions can then follow it (captions track "source":
-    "clip:<id>"). Paid with an API provider: estimates first and refuses over budget."""
+    "clip:<id>"). Paid with an API provider: estimates first and refuses over budget; the same file with the same
+    settings again comes back from the saved transcript, free."""
     return _provider("transcribe", _project(project), asset=_id_arg(asset, "asset"), language=language or None,
                      prompt=prompt or None)
 

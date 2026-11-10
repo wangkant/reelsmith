@@ -709,8 +709,38 @@ def test_mcp_exposes_every_tool_with_descriptions():
     assert all(len(t.description) > 30 for t in listed.values())
     from reelsmith.ops import OPS
     assert [op for op in OPS if op not in listed["edit"].description] == []        # clients see only this text
-    assert listed["preview"].input_schema["properties"]["times"]["type"] == "array"
+    times = listed["preview"].input_schema["properties"]["times"]["anyOf"]
+    assert [t["type"] for t in times] == ["array", "number", "string"]
     assert bad.is_error and "new_project" in bad.content[0].text
+
+
+def test_mcp_takes_one_op_and_one_time_and_explains_bad_arguments(project, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from reelsmith.mcp_server import mcp
+    seen, asked = [], []
+    fake_module(monkeypatch, "ops", apply=lambda pr, ops: (seen.append(ops), (True, [], "1 op"))[1])
+    monkeypatch.setattr(R, "preview", lambda pr, times, sweep=False: asked.append(times) or {"ok": False,
+                                                                                             "error": "x"})
+    op = {"op": "set", "path": "meta.title", "value": "t"}
+
+    async def go():
+        done = [await mcp.call_tool("edit", {"project": str(project.path), "ops": op}),
+                await mcp.call_tool("preview", {"project": str(project.path), "times": 1.5}),
+                await mcp.call_tool("preview", {"project": str(project.path), "times": "line:2"})]
+        errors = []
+        for name, args in (("edit", {"project": str(project.path), "ops": 5}), ("undo", {"project": "p", "steps": "x"}),
+                           ("check", {})):
+            with pytest.raises(ToolError) as exc:
+                await mcp.call_tool(name, args)
+            errors.append(str(exc.value))
+        return done, errors
+    done, errors = asyncio.run(go())
+    assert not done[0].is_error and seen == [[op]] and asked == [[1.5], ["line:2"]]
+    assert errors == ["edit was not run: ops takes a list, an object or a string, not 5. Fix the arguments and call "
+                      "it again.",
+                      'undo was not run: steps takes a whole number, not "x". Fix the arguments and call it again.',
+                      "check was not run: project is required. Fix the arguments and call it again."]
 
 
 def test_cli_exit_codes_and_files(project, monkeypatch, tmp_path, capsys):

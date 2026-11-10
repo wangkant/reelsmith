@@ -217,12 +217,13 @@ class FakeWhisper(http.server.BaseHTTPRequestHandler):
     """An OpenAI-compatible /audio/transcriptions: two words per piece, 0.1-0.5 and 0.6-0.9 s into it."""
     seen: list = []
     status = 200
+    refuse_call = 0                 # the nth call is refused with 400
 
     def do_POST(self):  # noqa: N802
         body = self.rfile.read(int(self.headers["Content-Length"]))
         FakeWhisper.seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
-        if FakeWhisper.status != 200:
-            self.send_response(FakeWhisper.status)
+        if FakeWhisper.status != 200 or len(FakeWhisper.seen) == FakeWhisper.refuse_call:
+            self.send_response(400 if FakeWhisper.status == 200 else FakeWhisper.status)
             self.end_headers()
             self.wfile.write(b'{"error": {"message": "bad key sk-test-0123456789abcdefghij"}}')
             return
@@ -244,7 +245,7 @@ class FakeWhisper(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture
 def whisper(ws, monkeypatch):
-    FakeWhisper.seen, FakeWhisper.status = [], 200
+    FakeWhisper.seen, FakeWhisper.status, FakeWhisper.refuse_call = [], 200, 0
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeWhisper)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     direct = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
@@ -286,6 +287,36 @@ def test_transcribe_cuts_long_sound_at_silences_and_stitches_the_clock(ws, whisp
     words = json.loads((ws.project / "assets" / "talk.transcript.json").read_text(encoding="utf-8"))["words"]
     second = [w for w in words if w["word"] == "world2"][0]
     assert 1.2 + 0.6 <= second["start"] <= 2.4 + 0.6               # the cut sits in the silence; times moved back
+
+
+def test_transcribe_reuses_a_transcript_of_the_same_file_and_settings(ws, whisper):
+    assert tools.transcribe(str(ws.project), "talk", language="en").ok
+    ledger = (ws.root / "ledger.jsonl").read_text(encoding="utf-8")
+    r = tools.transcribe(str(ws.project), "talk", language="en")
+    assert r.ok and "(cached, free)" in r and "Hello world1" in r, r
+    assert len(FakeWhisper.seen) == 1 and (ws.root / "ledger.jsonl").read_text(encoding="utf-8") == ledger
+    assert tools.transcribe(str(ws.project), "talk", language="de").ok and len(FakeWhisper.seen) == 2
+    (ws.project / "assets" / "talk.wav").write_bytes((ws.project / "assets" / "talk.wav").read_bytes() + b"ZZ")
+    assert "cached" not in tools.transcribe(str(ws.project), "talk", language="de") and len(FakeWhisper.seen) == 3
+
+
+def test_a_failed_piece_keeps_the_pieces_already_paid_for(ws, whisper):
+    cfg = json.loads((ws.root / "workspace.json").read_text(encoding="utf-8"))
+    cfg["providers"]["transcribe"]["max_mb"] = 0.012               # two pieces
+    (ws.root / "workspace.json").write_text(json.dumps(cfg), encoding="utf-8")
+    FakeWhisper.refuse_call = 2
+    r = tools.transcribe(str(ws.project), "talk")
+    assert not r.ok and "HTTP 400" in r and len(FakeWhisper.seen) == 2
+    r = tools.transcribe(str(ws.project), "talk")
+    assert r.ok and "in 2 pieces" in r and "1 of them kept from an earlier try" in r, r
+    assert len(FakeWhisper.seen) == 3                              # only the missing piece is sent again
+    words = [w["word"] for w in json.loads((ws.project / "assets" / "talk.transcript.json")
+                                           .read_text(encoding="utf-8"))["words"]]
+    assert words == ["Hello", "world1", "Hello", "world3"]
+    rows = [json.loads(x) for x in (ws.root / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [x["status"] for x in rows] == ["reserved", "partial", "reserved", "success"]
+    assert rows[1]["cost_usd"] + rows[3]["cost_usd"] == pytest.approx(0.04, abs=0.002)   # 4 s paid once
+    assert not list((ws.root / ".cache" / "transcribe").glob("pieces-*"))
 
 
 def test_transcribe_refuses_over_budget_and_without_a_key(ws, whisper):

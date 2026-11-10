@@ -207,6 +207,43 @@ def test_new_project_with_a_profile_a_canvas_and_a_locale(tmp_path, monkeypatch)
     assert raw(root / "projects" / "f")["profile"]["fps"] == 60
 
 
+def test_new_project_from_another_puts_the_same_film_on_a_new_canvas(demo):
+    from reelsmith import cli
+    wide, tall = demo.parent / "wide", demo.parent / "tall"
+    r = T.new_project(str(wide), profile="landscape", from_project=str(demo))
+    assert r.ok and "7 box(es) mapped" in r and "preview" in r, r
+    assert cli.main(["new", str(tall), "--profile", "vertical", "--from", str(wide)]) == 0
+    first, second = raw(demo), raw(tall)
+    assert second["profile"] == "vertical" and second["locale"] == "zh-CN" and second["meta"] == first["meta"]
+    assert [k for k in ("assets", "voice", "markers", "chapters") if second.get(k) != first.get(k)] == []
+    assert os.path.samefile(demo / "assets" / "clip.mp4", tall / "assets" / "clip.mp4")      # linked, not copied
+    assert (tall / "voice" / "voice.wav").is_file() and (tall / "voice" / "voice.json").is_file()
+    assert [i for i in D.validate(tall, D.load(tall)) if i.level == "error"] == []
+    was, now = W.profile_for(demo).safe, W.profile_for(tall).safe
+
+    def boxes(doc):
+        return {c["id"]: c["box"] for t in doc["tracks"] for c in t.get("clips") or [] if isinstance(c.get("box"), dict)}
+    old, new = boxes(first), boxes(second)
+    assert set(old) == set(new) and len(new) == 7
+    for cid, b in old.items():
+        n = new[cid]
+        assert (n["x"] - now.x) / now.w == pytest.approx((b["x"] - was.x) / was.w, abs=0.002), cid
+        assert (n["y"] - now.y) / now.h == pytest.approx((b["y"] - was.y) / was.h, abs=0.002), cid
+        assert (n["w"] / now.w, n["h"] / now.h) == pytest.approx((b["w"] / was.w, b["h"] / was.h), abs=0.002)
+        if was.x <= b["x"] <= was.x + was.w - b["w"] and was.y <= b["y"] <= was.y + was.h - b["h"]:
+            assert now.x <= n["x"] <= now.x + now.w - n["w"] + 0.1, cid                  # inside stays inside
+            assert now.y <= n["y"] <= now.y + now.h - n["h"] + 0.1, cid
+    tracks = [{"id": "cap", "kind": "captions", "box": {"x": 120, "y": 1260, "w": 760, "h": 200}},
+              {"id": "v", "kind": "visual", "clips": [{"id": "a", "box": "safe", "keyframes": {
+                  "x": [{"t": 0, "v": 500}], "opacity": [{"t": 0, "v": 0.5}]}}]}]
+    assert T._map_boxes(tracks, was, now) == 1
+    assert tracks[0]["box"] == {"x": 54, "y": 1540.7, "w": 972, "h": 283.3}               # the captions band
+    assert tracks[1]["clips"][0] == {"id": "a", "box": "safe", "keyframes": {
+        "x": [{"t": 0, "v": 54 + round((500 - 120) * 972 / 760, 1)}], "opacity": [{"t": 0, "v": 0.5}]}}
+    r = T.new_project(str(demo.parent / "nope"), from_project=str(demo.parent / "missing"))
+    assert not r.ok and "no project at" in r and not (demo.parent / "nope" / "project.json").exists()
+
+
 # ------------------------------------------------------------------ 3. the canvas scales px thresholds
 def text_item(clip, rect, size, words="words"):
     return {"clip": clip, "track": "v1", "kind": "text", "rect": rect, "opacity": 1, "text": words, "size": size,
