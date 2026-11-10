@@ -106,9 +106,9 @@ def test_the_checker_catches_a_wrong_command():
 
 def test_readme_prompt_names_the_raw_guide():
     text = README.read_text(encoding="utf-8")
-    section = text.split("## Let your coding agent set it up", 1)[1].split("\n## ", 1)[0]
+    section = text.split("## Installation by a coding agent", 1)[1].split("\n## ", 1)[0]
     assert RAW_URL in section
-    assert text.index("## Let your coding agent set it up") > text.index("## Quick start")
+    assert text.index("## Installation by a coding agent") > text.index("## Installation\n")
     assert "setup-for-agents.md" in (ROOT / "docs" / "agents.md").read_text(encoding="utf-8")
 
 
