@@ -29,6 +29,9 @@ const pick = (mod: Record<string, unknown>, name: string): Comp | null => {
   return typeof c === "function" || (typeof c === "object" && c !== null) ? (c as Comp) : null;
 };
 
+/** Every component name this bundle holds (the live player holds them all). */
+export const componentNames = (): string[] => [...new Set([...LIBRARY.keys(), ...PRESETS.keys()])].sort();
+
 /** The component called `name` (library first), or an Error saying what exists. */
 export const findComponent = (name: string): Comp | Error => {
   const lib = LIBRARY.get(name);
@@ -40,7 +43,13 @@ export const findComponent = (name: string): Comp | Error => {
       `component "${name}" not found: it is neither a built-in preset nor library/components/${name}.tsx in the workspace`,
     );
   }
-  const mod = lib ? library(key) : presets(key);
+  let mod: Record<string, unknown>;
+  try {
+    mod = lib ? library(key) : presets(key);
+  } catch (err) {
+    // a component file that throws while loading crashes like one that throws while drawing
+    return crashed(name, err);
+  }
   const comp = pick(mod, name);
   if (!comp) return new Error(`component "${name}" (${lib ? "library" : "preset"}) has no default export`);
   return comp;

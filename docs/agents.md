@@ -15,8 +15,14 @@ reelsmith setup claude-code            # or codex, dsh, cursor, generic
 reelsmith setup codex --print          # show exactly what would be written, write nothing
 reelsmith setup cursor --user          # the agent's user-level config instead of this folder's
 reelsmith setup claude-code --root ~/studio     # the tools refuse projects outside ~/studio
+reelsmith setup claude-code --watch    # the agent's first tool call on a project opens a watch window on it
 reelsmith setup dsh --uninstall        # take out what setup added
 ```
+
+`--watch` sets `REELSMITH_WATCH=1` in the server's environment: the first tool call on a project in that server
+opens [reelsmith watch](watch.md) on it, a desktop window in which the user follows the edit (only where the `app`
+extra can open the window, and not when a window on that project is already open). `"watch": true` in a
+workspace's `workspace.json` does the same for that workspace whatever the agent's config says.
 
 | target | MCP server: this folder (default) | MCP server: `--user` | skill: this folder / `--user` |
 |---|---|---|---|

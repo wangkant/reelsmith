@@ -101,17 +101,50 @@ def kill_live_trees() -> None:
             kill_tree(proc)
 
 
+def _follow(proc: subprocess.Popen, timeout: float, on_line) -> tuple[bytes, bytes, bool]:
+    """communicate() that hands each stdout line to on_line as it arrives."""
+    out: list[bytes] = []
+    err: list[bytes] = []
+
+    def pump(pipe, into: list, follow: bool) -> None:
+        for raw in pipe:
+            into.append(raw)
+            if follow:
+                try:
+                    on_line(raw.decode("utf-8", "replace").rstrip())
+                except Exception:  # noqa: BLE001, S110 - a progress listener never breaks the run
+                    pass
+
+    pumps = [threading.Thread(target=pump, args=(proc.stdout, out, True), daemon=True),
+             threading.Thread(target=pump, args=(proc.stderr, err, False), daemon=True)]
+    for t in pumps:
+        t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_tree(proc)
+    for t in pumps:
+        t.join(30)
+    return b"".join(out), b"".join(err), timed_out
+
+
 def run_tree(cmd: list, cwd: str | Path | None = None, env: dict | None = None,
-             timeout: float = 600) -> tuple[int, str, str, bool]:
+             timeout: float = 600, on_line=None) -> tuple[int, str, str, bool]:
     """(returncode, stdout, stderr, timed_out) of a fixed argument list. A timeout, an interrupt (KeyboardInterrupt,
-    SystemExit) or this process exiting kills the whole process tree, so no node or browser is left behind."""
+    SystemExit) or this process exiting kills the whole process tree, so no node or browser is left behind.
+    `on_line(text)` hears each stdout line while it runs."""
     proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env=env,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             creationflags=NO_WINDOW, start_new_session=os.name != "nt")
     _adopt(proc)
     timed_out = False
     try:
-        out, err = proc.communicate(timeout=timeout)
+        if on_line is None:
+            out, err = proc.communicate(timeout=timeout)
+        else:
+            out, err, timed_out = _follow(proc, timeout, on_line)
     except subprocess.TimeoutExpired:
         timed_out = True
         kill_tree(proc)

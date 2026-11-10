@@ -49,7 +49,7 @@ The previous out/film.mp4 is kept.
 One `undo` later:
 
 ```text
-DELIVERED: out/film.mp4 (29.44 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 29.8 MB; rendered in 83.3 s). Look at it with review.
+DELIVERED: out/film.mp4 (29.43 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 35.4 MB; rendered in 82.0 s). Look at it with review.
 ```
 
 ## Quick start
@@ -185,7 +185,7 @@ The editor, the previews, the checks and the render run on your machine and cost
 
 Paid calls estimate first and are refused over `budget.per_project_usd` (default $1) or under the account floor
 `budget.min_balance_usd` (default $5); narration is cached per line, so only changed lines are paid for again. The
-film at the top of this page cost $0.32: three animated clips and five lines of narration.
+film at the top of this page cost $0.53: five animated clips and five lines of narration.
 
 ## Documentation
 

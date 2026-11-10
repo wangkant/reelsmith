@@ -58,7 +58,7 @@ class Node:
         self.calls, self.items_for, self.film_ok = [], items_for or (lambda f: []), film_ok
         self.stills_waiting = []                 # stills already in the folder when each inspect call starts
 
-    def __call__(self, mode, resolved, project, out, frames=None, timeout=None, extra=None):
+    def __call__(self, mode, resolved, project, out, frames=None, timeout=None, extra=None, on_line=None):
         data = json.loads(Path(resolved).read_text(encoding="utf-8"))
         frames, extra, out = list(frames or []), list(extra or []), Path(out)
         self.calls.append({"mode": mode, "frames": frames, "timeout": timeout, "extra": extra,

@@ -41,6 +41,17 @@ def test_server_spec_is_absolute(tmp_path):
     assert spec["args"] == ["-m", "reelsmith.mcp_server"]
     assert Path(spec["env"]["REELSMITH_ROOT"]).is_absolute() and spec["env"]["PYTHONSAFEPATH"] == "1"
     assert "REELSMITH_ROOT" not in agentconf.server_spec()["env"]
+    assert agentconf.server_spec(watch=True)["env"]["REELSMITH_WATCH"] == "1"
+    assert "REELSMITH_WATCH" not in agentconf.server_spec()["env"]
+
+
+def test_watch_opens_the_window_from_the_agents_server(dirs):
+    cwd, home = dirs
+    setup("cursor", cwd, home, watch=True)
+    server = json.loads((cwd / ".cursor" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]["reelsmith"]
+    assert server["env"]["REELSMITH_WATCH"] == "1"
+    assert agentconf.parser().parse_args(["codex", "--watch"]).watch is True
+    assert agentconf.parser().parse_args(["codex"]).watch is False
 
 
 def test_claude_code_project(dirs):

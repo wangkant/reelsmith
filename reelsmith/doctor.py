@@ -324,6 +324,22 @@ def check_whisper(os_name: str) -> Check:
                  pip_extra("transcribe", os_name), enables)
 
 
+def check_watch_window(os_name: str) -> Check:
+    enables = "reelsmith watch as a desktop window of its own (without it, a browser tab), and setup --watch"
+    from .watch import window
+    if not has_module("webview"):
+        return Check("watch window", False, False, "the app extra (pywebview) is not installed",
+                     pip_extra("app", os_name), enables)
+    if os_name == "windows" and os.name == "nt":
+        version = window.webview2_version()
+        if version is None:
+            return Check("watch window", False, False, "pywebview is installed, but the Microsoft Edge WebView2 "
+                                                       "Runtime it draws with is not",
+                         "winget install --id Microsoft.EdgeWebView2Runtime", enables)
+        return Check("watch window", True, False, f"pywebview, WebView2 {version}", enables=enables)
+    return Check("watch window", True, False, "pywebview is installed", enables=enables)
+
+
 def check_on_path(os_name: str) -> Check:
     enables = "the Claude Code and DSH plugins, which start reelsmith-mcp from PATH (reelsmith setup does not need it)"
     found = which("reelsmith-mcp")
@@ -485,6 +501,7 @@ def run_checks(workspace=None, cwd=None, os_name: str | None = None) -> dict:
               check_ffmpeg("ffmpeg", os_name), check_ffmpeg("ffprobe", os_name),
               check_workspace(ws, named, cwd, os_name),
               check_remotion_browser(os_name), check_capture(os_name), check_codex(os_name), check_whisper(os_name),
+              check_watch_window(os_name),
               *check_keys(ws if ws is not None and (ws / WORKSPACE_FILE).is_file() else None, os_name),
               check_agents(folders, os_name), check_on_path(os_name)]
     return {"ok": all(c.ok for c in checks if c.required), "reelsmith": __version__, "system": os_name,

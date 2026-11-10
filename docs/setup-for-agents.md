@@ -132,10 +132,11 @@ for this OS) and `enables` (what an optional check unlocks). Exit status 0 means
 
 - For each check with `"required": true` and `"ok": false`, run its `fix` (asking first when it installs system
   software), then run doctor again. Repeat until `ok` is true.
-- Optional checks (`remotion-browser`, `capture`, `codex`, `faster-whisper`, the `key:` rows, `agents`, `on-path`)
-  never block. Note them for your report. If `capture` lacks only a browser, offer its fix (it downloads
-  Playwright's Chromium) for users who want web screenshots. `remotion-browser` downloads itself on the first
-  preview or render.
+- Optional checks (`remotion-browser`, `capture`, `codex`, `faster-whisper`, `watch window`, the `key:` rows,
+  `agents`, `on-path`) never block. Note them for your report. If `capture` lacks only a browser, offer its fix (it
+  downloads Playwright's Chromium) for users who want web screenshots. `remotion-browser` downloads itself on the
+  first preview or render. `watch window` says whether `reelsmith watch` can open its desktop window, in which the
+  user watches the work; without it the window is a browser tab.
 - `codex`'s fix is a global npm install (rule 3); after it the user runs `codex login` themselves (it opens a
   browser). When its fix is `codex login`, Codex is installed but not signed in: that is the user's to run too.
   `on-path` matters only for the Claude Code and DSH plugins (step 6), not for `reelsmith setup`; its fix

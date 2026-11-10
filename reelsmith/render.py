@@ -158,8 +158,9 @@ def is_transient(res: dict) -> bool:
     return bool(_TRANSIENT.search(f"{res.get('error') or ''}\n{res.get('log') or ''}"))
 
 
-def _node_once(cmd: list, project: Path, mode: str, timeout: float) -> dict:
-    rc, stdout, stderr, timed = media.run_tree(cmd, cwd=RENDERER, env=node_env(project), timeout=timeout)
+def _node_once(cmd: list, project: Path, mode: str, timeout: float, on_line=None) -> dict:
+    rc, stdout, stderr, timed = media.run_tree(cmd, cwd=RENDERER, env=node_env(project), timeout=timeout,
+                                               on_line=on_line)
     if timed:
         return {"ok": False, "stage": "timeout",
                 "error": f"render.mjs {mode} ran over {timeout / 60:.0f} minutes and was stopped: the picture may be "
@@ -174,10 +175,10 @@ def _node_once(cmd: list, project: Path, mode: str, timeout: float) -> dict:
 
 
 def run_node(mode: str, resolved: Path, project: Path, out: Path, frames: list[int] | None = None,
-             timeout: float = STILLS_TIMEOUT_S, extra: list[str] | None = None) -> dict:
+             timeout: float = STILLS_TIMEOUT_S, extra: list[str] | None = None, on_line=None) -> dict:
     """`node scripts/render.mjs <mode> <resolved> <project> <out> [frame...] [--option...]`; its last JSON line, or
     a failure shaped like one ({"ok": false, "stage", "error"}). A transient failure is retried once; if it fails
-    again the result has stage "infra" and "transient": true."""
+    again the result has stage "infra" and "transient": true. `on_line` hears its log lines as they come."""
     node = shutil.which("node")
     script = RENDERER / "scripts" / "render.mjs"
     if not node:
@@ -187,10 +188,10 @@ def run_node(mode: str, resolved: Path, project: Path, out: Path, frames: list[i
     cmd = [node, str(script), mode, str(Path(resolved).resolve()), str(Path(project).resolve()),
            str(Path(out).resolve()), *map(str, frames or []), *(extra or [])]
     with _NODE_LOCK:
-        res = _node_once(cmd, project, mode, timeout)
+        res = _node_once(cmd, project, mode, timeout, on_line)
         if is_transient(res):
             first = str(res.get("error") or "").strip().splitlines()[:1]
-            res = _node_once(cmd, project, mode, timeout)
+            res = _node_once(cmd, project, mode, timeout, on_line)
             res["retried"] = first or ["transient failure"]
     if is_transient(res):
         res.update(stage="infra", transient=True)
@@ -403,14 +404,32 @@ def _merge_res(into: dict, res: dict) -> None:
         into["retried"] = res["retried"]
 
 
+_STILL_LINE = re.compile(r"^still (\d+)/\d+ ")
+_FILM_LINE = re.compile(r"^render (\d+)% ")
+
+
+def _quiet(stage: str, progress: float | None = None) -> None:
+    """The progress listener when nobody listens."""
+
+
+def _film_listener(progress):
+    """render.mjs's "render N% (...)" lines as the film stage's progress."""
+    def heard(line: str) -> None:
+        m = _FILM_LINE.match(line)
+        if m:
+            progress("film", min(1.0, int(m.group(1)) / 100))
+    return heard
+
+
 def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profile: Profile, resolved: dict,
-            keep: set[int] | None = None) -> dict:
+            keep: set[int] | None = None, progress=None) -> dict:
     """Stills of `frames`, measured (section 12), LAYOUT_BATCH a render.mjs call. With `keep` (a sweep or render's
     layout pass) each batch's stills with no problem on them, other than the frames in `keep`, are deleted before
     the next batch, so disk and memory stay bounded however long the film; without it every still stays.
     {ok, layout, frames: [{frame, png}], measured, crashes, res (the calls' results merged)}; a failure is
-    {ok: false, node: render.mjs's result}."""
+    {ok: false, node: render.mjs's result}. `progress(fraction)` hears how far it is."""
     fps = float(resolved.get("fps") or profile.fps)
+    total = max(1, len(frames))
     check = LayoutCheck(profile, resolved)
     crashes: dict[str, str] = {}
     merged: dict = {"ok": True, "notes": [], "browserErrors": [], "timings": {}}
@@ -418,8 +437,13 @@ def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profi
     measured = 0
     for i in range(0, len(frames), LAYOUT_BATCH):
         batch = frames[i:i + LAYOUT_BATCH]
+
+        def heard(line: str, done: int = i) -> None:
+            m = _STILL_LINE.match(line)
+            if m:
+                progress(min(1.0, (done + int(m.group(1))) / total))
         res = run_node("inspect", json_path, root, out_dir, batch,
-                       timeout=max(STILLS_TIMEOUT_S, STILL_TIMEOUT_S * len(batch)))
+                       timeout=max(STILLS_TIMEOUT_S, STILL_TIMEOUT_S * len(batch)), on_line=heard if progress else None)
         if not res.get("ok"):
             return {"ok": False, "node": res}
         inspect = _read_inspect(out_dir)
@@ -504,9 +528,10 @@ def _kept_layout(paths, key: str) -> dict | None:
 
 # ------------------------------------------------------------------ preview
 @_one_at_a_time
-def preview(project: str | Path, times: list | None, sweep: bool = False) -> dict:
+def preview(project: str | Path, times: list | None, sweep: bool = False, progress=_quiet) -> dict:
     """Stills at the given Times straight from the project, measured: {ok, frames, contact, layout, ...}. With
-    `sweep`, also the layout pass render makes (layout_frames, not encoded): only flagged stills are kept."""
+    `sweep`, also the layout pass render makes (layout_frames, not encoded): only flagged stills are kept.
+    `progress(stage, fraction)` hears how far it is."""
     root = project_root(project)
     paths = project_paths(root)
     times = list(times or [])
@@ -530,7 +555,10 @@ def preview(project: str | Path, times: list | None, sweep: bool = False) -> dic
         past = [t for t in times if to_frame(seconds_of(root, t), fps) > last + 1]      # "end" is the last frame
         frames = sorted(asked | (set(layout_frames(resolved)) if sweep else set()))
         _fresh_stills(paths.stills)
-        got = measure(json_path, root, paths.stills, frames, profile, resolved, keep=asked if sweep else None)
+        stage = "sweep" if sweep else "stills"
+        progress(stage, 0.0)
+        got = measure(json_path, root, paths.stills, frames, profile, resolved, keep=asked if sweep else None,
+                      progress=lambda f: progress(stage, f))
         if sweep and got["ok"] and frames == layout_frames(resolved):
             _keep_layout(paths, layout_key(root, resolved, frames, profile), got)
     if not got["ok"]:
@@ -646,11 +674,12 @@ def _sidecars(root: Path, paths, resolved: dict, chapters: list, duration: float
 
 
 @_one_at_a_time
-def render(project: str | Path) -> dict:
+def render(project: str | Path, progress=_quiet) -> dict:
     """The film into <project>/out/film.mp4, mastered and checked, with its captions as out/captions/<track>.srt and
     .vtt and its chapters as out/chapters.txt (and in the mp4). Every attempt's report goes to build/report.json
     (the latest attempt, delivered or not); a delivered one also to out/report.json. On any failure the previous
-    film stays. Returns the report: {ok, stage, film, issues, layout, film_check, timings, ...}."""
+    film stays. Returns the report: {ok, stage, film, issues, layout, film_check, timings, ...}. `progress(stage,
+    fraction or None)` hears each stage (check, layout, film, master, film check) as it starts and moves."""
     started = time.time()
     root = project_root(project)
     paths = project_paths(root)
@@ -689,6 +718,7 @@ def render(project: str | Path) -> dict:
         return finish(stage, failure_text(res))
 
     with _NODE_LOCK:
+        progress("check")
         issues = check_project(root)
         report["issues"] = [str(i) for i in issues]
         report["inputs"] = film_inputs(root)
@@ -709,9 +739,11 @@ def render(project: str | Path) -> dict:
         grid = layout_frames(resolved)
         key = layout_key(root, resolved, grid, profile)
         got = _kept_layout(paths, key)
+        progress("layout", None if got else 0.0)
         if got is None:
             _clear(paths.inspect)
-            got = measure(inspect_json, root, paths.inspect, grid, profile, resolved, keep=set())
+            got = measure(inspect_json, root, paths.inspect, grid, profile, resolved, keep=set(),
+                          progress=lambda f: progress("layout", f))
             if not got["ok"]:
                 return node_failed("layout", got["node"])
             _keep_layout(paths, key, got)
@@ -732,7 +764,9 @@ def render(project: str | Path) -> dict:
 
         raw, mastered = paths.build / "film.raw.mp4", paths.build / "film.mastered.mp4"
         raw.unlink(missing_ok=True)
-        res = run_node("film", paths.build / "resolved.film.json", root, raw, timeout=film_timeout(frames))
+        progress("film", 0.0)
+        res = run_node("film", paths.build / "resolved.film.json", root, raw, timeout=film_timeout(frames),
+                       on_line=_film_listener(progress))
         if not res.get("ok"):
             return node_failed("film", res)
         if not raw.is_file():
@@ -740,6 +774,7 @@ def render(project: str | Path) -> dict:
         lap("film", res)
 
     length = frames / fps if fps else 0.0
+    progress("master")
     try:
         sound = _has_audio(raw)
         if not sound and profile.require_audio:
@@ -774,6 +809,7 @@ def render(project: str | Path) -> dict:
             report.setdefault("notes", []).append(f"the chapters could not be put in the mp4 ({exc}); chapters.txt "
                                                   "still has them")
     lap("master")
+    progress("film check")
     report["film_check"] = check_film(mastered, profile, resolved)
     lap("film_check")
     if not report["film_check"]["ok"]:
@@ -832,7 +868,7 @@ def _delivered_cut(paths) -> str | None:
 
 # ------------------------------------------------------------------ draft
 @_one_at_a_time
-def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE) -> dict:
+def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE, progress=_quiet) -> dict:
     """A quick look at the film, or at the part from `start` to `end` (Times): build/draft.mp4 at `scale` of the
     canvas (0.1-1), fast-encoded and not mastered, with no layout pass and no delivery checks. out/ and the reports
     are untouched. {ok, film, from_s, to_s, width, height, render_s} or {ok: false, stage, error}."""
@@ -863,7 +899,9 @@ def draft(project: str | Path, start=None, end=None, scale=DRAFT_SCALE) -> dict:
             raise RenderError(f"end ({b / fps:.2f} s) must come after start ({a / fps:.2f} s)")
         raw.unlink(missing_ok=True)
         extra = ["--draft", f"--scale={scale:g}"] + ([f"--range={a}-{b}"] if (a, b) != (0, last) else [])
-        res = run_node("film", json_path, root, raw, timeout=film_timeout(b - a + 1), extra=extra)
+        progress("film", 0.0)
+        res = run_node("film", json_path, root, raw, timeout=film_timeout(b - a + 1), extra=extra,
+                       on_line=_film_listener(progress))
     if not res.get("ok"):
         return {"ok": False, "stage": res.get("stage"), "error": failure_text(res),
                 "transient": bool(res.get("transient"))}

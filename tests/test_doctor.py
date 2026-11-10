@@ -1,6 +1,7 @@
 """reelsmith doctor on a faked machine: PATH, versions, modules and the renderer folder are all stand-ins."""
 import importlib
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -143,6 +144,19 @@ def test_remotion_browser_found(machine):
     assert got["ok"] and "149.0.7790.0" in got["detail"] and got["fix"] == ""
 
 
+def test_the_watch_window(machine, monkeypatch):
+    from reelsmith.watch import window
+    machine.modules = {"webview"}
+    got = rows(doctor.run_checks())["watch window"]
+    assert got["ok"] and not got["required"] and got["fix"] == "" and "pywebview" in got["detail"]
+    if os.name == "nt":                     # the WebView2 runtime is read from the registry
+        monkeypatch.setattr(window, "webview2_version", lambda: None)
+        got = rows(doctor.run_checks(os_name="windows"))["watch window"]
+        assert not got["ok"] and "WebView2" in got["detail"] and "EdgeWebView2Runtime" in got["fix"]
+        monkeypatch.setattr(window, "webview2_version", lambda: "142.0.1.2")
+        assert "WebView2 142.0.1.2" in rows(doctor.run_checks(os_name="windows"))["watch window"]["detail"]
+
+
 def test_optional_tools_missing_never_fail_the_run(machine):
     machine.modules = set()
     machine.codex = None
@@ -150,7 +164,7 @@ def test_optional_tools_missing_never_fail_the_run(machine):
     report = doctor.run_checks()
     got = rows(report)
     assert report["ok"]
-    for name, extra in (("capture", "[capture]"), ("faster-whisper", "[transcribe]")):
+    for name, extra in (("capture", "[capture]"), ("faster-whisper", "[transcribe]"), ("watch window", "[app]")):
         assert not got[name]["ok"] and not got[name]["required"] and f"{ROOT}{extra}" in got[name]["fix"]
         assert got[name]["fix"].startswith(doctor.quote(sys.executable, "linux") + " -m pip install -e")
     assert got["codex"]["fix"] == "npm install -g @openai/codex" and "codex login" in got["codex"]["detail"]

@@ -277,8 +277,9 @@ class FakeNode:
         self.film_audio, self.film_ok, self.film_still = film_audio, film_ok, film_still
         self.inspect_fail, self.browser_errors, self.on_inspect = inspect_fail, list(browser_errors), on_inspect
 
-    def __call__(self, mode, resolved, project, out, frames=None, timeout=None):
+    def __call__(self, mode, resolved, project, out, frames=None, timeout=None, on_line=None):
         data = json.loads(Path(resolved).read_text(encoding="utf-8"))
+        say = on_line or (lambda line: None)
         self.calls.append((mode, data["inspect"], list(frames or []), Path(resolved).name))
         out = Path(out)
         if mode == "inspect":
@@ -288,13 +289,16 @@ class FakeNode:
                 return dict(self.inspect_fail)
             out.mkdir(parents=True, exist_ok=True)
             rows = []
-            for f in frames:
+            for n, f in enumerate(frames, 1):
                 write_png(out / f"still_{f:05d}.png")
                 rows.append({"frame": f, "png": f"still_{f:05d}.png", "items": self.items_for(f)})
+                say(f"still {n}/{len(frames)} frame {f} (5 ms)")             # as render.mjs logs them
             (out / "inspect.json").write_text(json.dumps({"frames": rows}), encoding="utf-8")
             return {"ok": True, "frames": len(rows), "bundleMs": 1200, "browserErrors": self.browser_errors}
         if not self.film_ok:
             return {"ok": False, "stage": "bundle", "error": "Module not found: fs", "browserErrors": []}
+        for pct in (0, 50, 100):
+            say(f"render {pct}% ({pct}/100 frames)")
         make_film(out, audio=self.film_audio, still=self.film_still)
         return {"ok": True, "out": str(out), "bundleMs": 900, "renderMs": 2000}
 
@@ -428,6 +432,25 @@ def test_render_delivers_and_review(project, monkeypatch):
     assert list((project.path / "build" / "inspect").glob("*.png")) == []          # clean frames are dropped
     rv = T.review(str(project.path), 4)
     assert rv.ok and rv.count(".png") == 5 and "contact sheet" in rv
+
+
+@needs_ffmpeg
+def test_render_tells_the_running_file_its_stages(project, monkeypatch):
+    from reelsmith.watch import presence
+    written = []
+    real = presence._write
+    monkeypatch.setattr(presence, "_write", lambda path, row: written.append(dict(row)) or real(path, row))
+    monkeypatch.setattr(presence, "WRITE_EVERY_S", 0)              # every step, so the test sees each one
+    monkeypatch.setattr(R, "run_node", FakeNode())
+    assert T.render(str(project.path)).ok
+    steps = [(w["stage"], w["progress"]) for w in written]
+    assert steps[0] == (None, None) and all(w["tool"] == "render" for w in written)
+    stages = [s for i, (s, _) in enumerate(steps) if i == 0 or s != steps[i - 1][0]]
+    assert stages == [None, "check", "layout", "film", "master", "film check"]
+    assert ("layout", 1.0) in steps and ("film", 0.5) in steps and ("film", 1.0) in steps
+    assert not (project.path / ".history" / "running.json").exists()
+    activity = json.loads((project.path / ".history" / "activity.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert activity["tool"] == "render" and activity["text"].startswith("DELIVERED:")
 
 
 @needs_ffmpeg
@@ -729,8 +752,8 @@ def test_mcp_takes_one_op_and_one_time_and_explains_bad_arguments(project, monke
     from reelsmith.mcp_server import mcp
     seen, asked = [], []
     fake_module(monkeypatch, "ops", apply=lambda pr, ops: (seen.append(ops), (True, [], "1 op"))[1])
-    monkeypatch.setattr(R, "preview", lambda pr, times, sweep=False: asked.append(times) or {"ok": False,
-                                                                                             "error": "x"})
+    monkeypatch.setattr(R, "preview", lambda pr, times, sweep=False, progress=None: asked.append(times) or {
+        "ok": False, "error": "x"})
     op = {"op": "set", "path": "meta.title", "value": "t"}
 
     async def go():
