@@ -49,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--locale", default="", help="the film's language, a BCP-47 tag (en, zh-CN, ja)")
     proj(cmd("edit", tools.edit)).add_argument("ops", help="JSON list of ops, @file.json, or - for stdin")
     proj(cmd("undo", tools.undo)).add_argument("--steps", type=int, default=1)
+    proj(cmd("redo", tools.redo))
     proj(cmd("check", tools.check))
     proj(cmd("library", tools.library)).add_argument("name", nargs="?", default="")
     p = proj(cmd("preview", tools.preview))
@@ -147,6 +148,8 @@ def _call(args) -> tools.ToolResult:
         return tools.edit(args.project, _text_arg(args.ops))
     if c == "undo":
         return tools.undo(args.project, args.steps)
+    if c == "redo":
+        return tools.redo(args.project)
     if c == "library":
         return tools.library(args.project, args.name)
     if c == "preview":

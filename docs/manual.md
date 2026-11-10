@@ -266,7 +266,7 @@ come from the transcript; voice lines and given `items` are timed by characters.
 ## Edit ops
 
 `edit(project, ops)` applies a list of ops as one batch: all apply and the result validates, or nothing changes.
-Each applied batch can be undone with `undo`.
+Each applied batch can be undone with `undo`; `redo` puts back what the last undo replaced.
 
 ```json
 {"op": "add_track", "track": {"id": "v3", "kind": "visual", "clips": []}, "index": 2}
@@ -289,7 +289,8 @@ Each applied batch can be undone with `undo`.
 
 `set` replaces the value at a dotted path (not inside `tracks` or `assets`). `update_*` deep-merge; `null` removes a
 key. `add_asset` with an id that exists replaces that asset. An asset still used by a clip (directly or through
-component props) cannot be removed. The last three are ripple edits for footage (next section).
+component props) cannot be removed; removing a clip others are timed from leaves them where they were (their
+anchors on it become numbers). The last three are ripple edits for footage (next section).
 
 ## Editing footage
 
@@ -309,18 +310,22 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    until source second 95. `trim_in` skips the head, `rate` speeds it up; give video `volume` 1 to hear it.
 4. Cut. `ripple_delete` takes a range out and closes the gap: clips crossing its edges are split (the part after
    the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on; a clip whose head is cut keeps its id), later
-   clips, markers and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence from
-   `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), **from the last silence back** in
-   one batch, so each `src:a@...` still names the piece that plays it. Name the tracks to cut
+   clips, markers, chapters and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence
+   from `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), all in one batch, in any
+   order: a `src:a@...` that an earlier cut left to a later piece names that piece, and a second no piece plays any
+   more is refused. Name the tracks to cut
    (`"tracks": ["v1"]`, plus the track of its sound if that is separate, and a captions track with `items`): left
    out, every track is cut, a music bed included, and the music skips at each jump; or cut first and lay the bed
    after. A cut that falls inside a transition keeps what is left of it (shortened to fit). `trim_clip` sets a clip's
    in/out in source seconds (`ripple: true` pulls the rest of its track along; without it the picture stays put and
-   only the edges move), `insert_gap` opens room, and `split_clip` cuts a clip in two. Anchors that stay true after
-   a ripple edit stay; the rest become numbers.
+   only the edges move, and clips timed from a moved edge stay where they were), `insert_gap` opens room, and
+   `split_clip` cuts a clip in two (a clip timed from another stays a chain: its second half starts at
+   `clip:<first>.end`). Anchors that stay true after a ripple edit stay; the rest become numbers. On tracks the edit
+   does not cut, a time anchored on a clip follows that clip, and a number stays put.
 5. Join shots: give the later clip `"transition": {"type": "crossfade", "dur": 0.4}` and start it that long before
    the previous one ends (`"start": "clip:a.end-0.4"`); that is the only overlap a track allows. Without the
-   overlap it transitions in over whatever is beneath it. `dip_black`/`dip_white` go through a colour,
+   overlap it transitions in over whatever is beneath it (an `insert_gap` at its start leaves that: the clip it
+   came from is not split). `dip_black`/`dip_white` go through a colour,
    `wipe_left`/`wipe_right`/`wipe_up` sweep an edge, `slide_left` pushes the old shot out, `zoom` zooms through. A
    clip with sound crossfades its sound over the same time.
 6. Sound: `volume` keyframes ride a clip's level (`{"t": 3, "v": 0.2}`); a music bed with `"duck": {"under": "v1"}`
@@ -330,8 +335,8 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
    you can hear), drops the words you cut, and phrases by pauses and sentence ends, then within `max_chars` the way
    voice captions are. `"mode": "words"` lights each word as it is said, `"build"` adds the words one by one.
 8. Name moments you will come back to: `"markers": {"punch": "src:a@41.2"}`, then `"mark:punch"` wherever a Time
-   goes; markers move with ripple edits. Chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"}, ...]`)
-   anchored on markers move with them too.
+   goes; markers move with ripple edits, and so do chapters (`"chapters": [{"at": "mark:intro", "title": "Intro"},
+   ...]`).
 9. Time effects, on a piece of its own (split first; do these after the cuts that use `src:` on it):
    - speed ramp: `rate` keyframes, e.g. `[{"t": 0, "v": 1}, {"t": 0.4, "v": 0.25, "ease": "inOut"}, {"t": 1.6, "v":
      0.25}, {"t": 2, "v": 1, "ease": "inOut"}]`; the source walks on by the curve, frame-accurately;
@@ -398,7 +403,8 @@ transcript. No narration: the film lasts until `a_2` ends.
 | `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
-| `undo(project, steps=1)` | undo applied batches | `undo(p)` |
+| `undo(project, steps=1)` | undo applied batches (an asset registration is one too) | `undo(p)` |
+| `redo(project)` | put back what the last undo replaced | `redo(p)` |
 | `check(project)` | errors (block render), warnings, advice | `check(p)` |
 | `library(project, name?)` | components with their prop names; with a name, schema, example and source | `library(p, "Receipt")` |
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |

@@ -30,7 +30,7 @@ TINY = replace(DOUYIN, name="tiny", width=108, height=192, safe=Box(8, 20, 92, 1
                target_s=(1, 10), lufs=-16.0, max_still_s=2.0)
 META = {"title": "油价为什么又涨了", "desc": "一句 #油价", "topic": "油价", "shape": "",
         "sources": [{"title": "示例日报", "url": "https://www.example.org/x"}]}
-SPEC_TOOLS = {"manual", "describe", "edit", "undo", "check", "library", "preview", "render", "review", "speak",
+SPEC_TOOLS = {"manual", "describe", "edit", "undo", "redo", "check", "library", "preview", "render", "review", "speak",
               "capture", "draw", "animate", "import_asset", "assets", "notes", "note", "typecheck"}
 
 
@@ -194,6 +194,9 @@ def test_undo_result_shapes(project, monkeypatch):
     fake_module(monkeypatch, "ops", undo=lambda pr, steps: (True, f"restored .history/000{steps}.json"))
     assert T.undo(str(project.path), 2) == "restored .history/0002.json"
     assert not T.undo(str(project.path), 0).ok
+    fake_module(monkeypatch, "ops", redo=lambda pr: (False, "nothing to redo"))
+    r = T.redo(str(project.path))
+    assert not r.ok and r == "nothing to redo"
 
 
 # ------------------------------------------------------------------ library, notes, providers
