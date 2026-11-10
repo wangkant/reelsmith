@@ -4,7 +4,9 @@ import dataclasses
 import io
 import json
 import os
+import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -1141,3 +1143,129 @@ def test_api_run_with_the_real_toolbox(api_ws, no_checks):
     assert all(t["type"] == "function" and t["function"]["parameters"].get("type") == "object" for t in specs)
     assert {"render", "check", "preview"} <= names and set(TOOLS) & names
     assert not rep["delivered"] and rep["engine"] == "api" and len(rep["sessions"]) == 1
+
+
+# ------------------------------------------------------------------ the conversation (the watch window's chat)
+def listening(project):
+    heard = []
+    log = runner.SessionLog(project, io.StringIO(), "chat.jsonl", lambda kind, data: heard.append((kind, data)))
+    return log, heard
+
+
+@needs_sdk
+def test_the_log_tells_a_listener_each_step_of_an_sdk_session(ws):
+    from claude_agent_sdk import ToolResultBlock, UserMessage
+    _, project = ws
+    log, heard = listening(project)
+    log.message(AssistantMessage(content=[TextBlock("Looking."), ToolUseBlock("t1", "mcp__reelsmith__preview",
+                                                                             {"project": "p", "at": "10"})],
+                                 model="m"))
+    log.message(UserMessage(content=[ToolResultBlock("t1", "bad time", True)]))
+    log.message(UserMessage(content=[ToolResultBlock("t2", "fine", False)]))
+    log.close()
+    assert heard == [("say", {"text": "Looking."}),
+                     ("call", {"name": "mcp__reelsmith__preview", "brief": '{"at": "10"}', "id": "t1"}),
+                     ("result", {"id": "t1", "ok": False, "text": "bad time", "name": None}),
+                     ("result", {"id": "t2", "ok": True, "text": "", "name": None})]
+
+
+def test_the_cli_streams_tell_a_listener_too(ws):
+    from reelsmith import cli_engines
+    _, project = ws
+    log, heard = listening(project)
+    codex = cli_engines.CodexStream(log)
+    for ev in ({"type": "item.started", "item": {"id": "i1", "type": "mcp_tool_call", "tool": "render",
+                                                 "arguments": {"project": "p"}}},
+               {"type": "item.completed", "item": {"id": "i1", "type": "mcp_tool_call", "tool": "render",
+                                                   "status": "failed", "error": {"message": "no film"}}},
+               {"type": "item.completed", "item": {"id": "i2", "type": "command_execution", "command": "ls",
+                                                   "exit_code": 2}},
+               {"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "Done."}}):
+        codex.feed(ev)
+    dsh = cli_engines.DshStream(log)
+    for ev in ({"type": "tool_call", "callId": "c1", "tool": "check", "input": {"project": "p"}},
+               {"type": "tool_result", "callId": "c1", "status": "completed", "result": "ok"},
+               {"type": "text", "text": "All good."}):
+        dsh.feed(ev)
+    log.close()
+    assert [(k, d.get("id"), d.get("ok")) for k, d in heard] == [
+        ("call", "i1", None), ("result", "i1", False), ("call", "i2", None), ("result", "i2", False),
+        ("say", None, None), ("call", "c1", None), ("result", "c1", True), ("say", None, None)]
+    assert heard[0][1]["brief"] == "" and heard[2][1]["name"] == "shell" and heard[1][1]["text"] == "no film"
+
+
+def test_a_stopped_cli_session_ends_at_once(tmp_path):
+    from reelsmith import cli_engines
+
+    class Quiet:
+        def event(self, kind, **data):
+            pass
+
+        def line(self, text):
+            pass
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+    t0 = time.monotonic()
+    out = cli_engines.drive(cmd, tmp_path, dict(os.environ), "", cli_engines.CodexStream(Quiet()), stop=stop)
+    assert out["aborted"] == runner.STOPPED and time.monotonic() - t0 < 10
+
+
+@needs_sdk
+def test_a_conversation_on_the_sdk_stops_and_resumes(ws, monkeypatch):
+    w, project = ws
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (w.root / ".env").write_text("", encoding="utf-8")         # no key: the claude CLI's sign-in
+    w = Workspace.load(w.root)
+    calls = []
+
+    async def endless(prompt, options):
+        calls.append({"prompt": prompt, "options": options})
+        yield init("s9")
+        yield AssistantMessage(content=[TextBlock("On it.")], model="m")
+        await asyncio.sleep(60)
+    heard = []
+    stop = threading.Event()
+    conv = runner.Conversation(project, runner.settings_for(w), w, lambda k, d: heard.append(k), query_fn=endless,
+                               stop=stop)
+    threading.Timer(0.5, stop.set).start()
+    t0 = time.monotonic()
+    row = asyncio.run(conv.turn("make it brighter", {"clip": "a", "playhead": 2.0}))
+    assert row["aborted"] == runner.STOPPED and time.monotonic() - t0 < 10 and "say" in heard
+    opts = calls[0]["options"]
+    assert opts.env["ANTHROPIC_API_KEY"] == "" and "talking to you" in opts.system_prompt["append"]
+    assert "Nobody is online" not in opts.system_prompt["append"] and opts.resume is None
+    assert calls[0]["prompt"].startswith("(reelsmith watch)") and "[selected clip a; playhead at 2.00 s]" in \
+        calls[0]["prompt"]
+    state = json.loads((project / "build" / "chat_state.json").read_text(encoding="utf-8"))
+    assert state["session_id"] == "s9" and state["status"] == "stopped" and state["engine"] == "agent-sdk"
+    assert not (project / "build" / "run_state.json").exists()
+    stop.clear()
+    again = runner.Conversation(project, runner.settings_for(w), w, query_fn=fake_query([init("s9"), result(0.1)],
+                                                                                      calls=calls), stop=stop)
+    row = asyncio.run(again.turn("and now?"))
+    assert calls[1]["options"].resume == "s9" and calls[1]["prompt"] == "and now?" and row["subtype"] == "success"
+    assert row["spent_usd"] == 0.1
+    with pytest.raises(runner.WorkspaceError, match="ANTHROPIC_API_KEY"):     # a headless run still needs the key
+        runner.build_options(project, w, runner.settings_for(w), guard.scope_for(project, w),
+                             runner.SessionLog(project, io.StringIO()))
+
+
+def test_a_conversation_switching_engine_starts_a_new_session(api_ws):
+    w, project = api_ws
+    (project / "build").mkdir(exist_ok=True)
+    (project / "build" / "chat_state.json").write_text(json.dumps(
+        {"session_id": "old", "engine": "agent-sdk", "model": "claude-opus-5-5", "backend": "anthropic",
+         "cost_usd": 0.5}), encoding="utf-8")
+    client = FakeClient(reply("Hello."))
+    conv = runner.Conversation(project, runner.settings_for(w), w, client_factory=lambda s: client,
+                               tools_factory=fake_tools())
+    row = asyncio.run(conv.turn("hi"))
+    state = _state_of(project, "chat_state.json")
+    assert row["subtype"] == "success" and state["session_id"] != "old" and state["engine"] == "api"
+    assert state["cost_usd"] == 0.51                                    # the budget counts across the conversation
+    assert client.calls[0]["messages"][1]["content"].startswith("(reelsmith watch)")
+
+
+def _state_of(project: Path, name: str) -> dict:
+    return json.loads((project / "build" / name).read_text(encoding="utf-8"))

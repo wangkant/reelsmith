@@ -304,7 +304,12 @@ def check_codex(os_name: str) -> Check:
     enables = "draw: original pictures through Codex image generation, on the user's Codex sign-in"
     from .providers.draw import find_codex
     path = find_codex()
-    auth = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json"
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    auth = home / "auth.json"
+    if path and not auth.is_file() and _codex_keyring(home):
+        return Check("codex", True, False, f"Codex CLI at {path}; its sign-in is kept in the OS keyring "
+                                           "(cli_auth_credentials_store in config.toml), which doctor does not read: "
+                                           "`codex login status` says whether it is signed in", enables=enables)
     if path and not auth.is_file():
         return Check("codex", False, False, f"Codex CLI at {path}, but not signed in ({auth} is missing): the user "
                                             "runs `codex login` once (it opens a browser)", "codex login", enables)
@@ -313,6 +318,14 @@ def check_codex(os_name: str) -> Check:
     return Check("codex", False, False, "the Codex CLI was not found (CODEX_EXE, the desktop app, PATH); after the "
                                         "install the user signs in once with `codex login` (it opens a browser)",
                  f"{npm(os_name)} install -g @openai/codex", enables)
+
+
+def _codex_keyring(home: Path) -> bool:
+    try:
+        text = (home / "config.toml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(re.search(r"""^\s*cli_auth_credentials_store\s*=\s*["'](keyring|auto)["']""", text, re.M))
 
 
 def check_whisper(os_name: str) -> Check:

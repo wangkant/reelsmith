@@ -240,6 +240,7 @@ class _Now:
         except ValueError as exc:
             raise OpError(str(exc)) from None
         self.fps = self.profile.fps
+        self.redirects: list[str] = []          # src: arguments that named another piece of their clip
 
     def span(self, cid: str) -> tuple[float, float]:
         try:
@@ -267,18 +268,31 @@ class _Now:
         if lo - 1e-6 <= e.at <= hi + 1e-6:
             return self.time(value, what), value
         track, _, clip = _find_clip(data, e.ref)
-        rows = []
-        for x in track.get("clips") or []:
-            if not isinstance(x, dict) or x.get("type") != clip.get("type") or x.get("asset") != clip.get("asset") \
-                    or x.get("loop") or D.retimed(x) or self.sched.clips[x["id"]].rate != c.rate:
-                continue
-            plo, phi = self.source_range(x["id"])
-            if plo - 1e-6 <= e.at <= phi + 1e-6:
-                value = str(T.TimeExpr("src", x["id"], False, e.offset, e.at))
-                return self.time(value, what), value
-            rows.append(f"{x['id']} {plo:.2f}-{phi:.2f} s")
-        raise OpError(f"{what} {value!r}: no piece of {clip.get('asset')} on track {track.get('id')} plays source "
-                      f"second {e.at:g} (it was cut away); the pieces play {', '.join(rows)}")
+        ranges = {x["id"]: self.source_range(x["id"]) for x in track.get("clips") or []
+                  if isinstance(x, dict) and x.get("type") == clip.get("type") and x.get("asset") == clip.get("asset")
+                  and not x.get("loop") and not D.retimed(x) and self.sched.clips[x["id"]].rate == c.rate}
+        # its pieces: named from its stem by a cut, or playing on from where one of them stops in the source
+        kin = {x for x in ranges if _stem(x) == _stem(e.ref)}
+        near = 0.5 / self.fps * (c.rate or 1.0)
+        grew = True
+        while grew:
+            more = {x for x in ranges if x not in kin and any(
+                abs(ranges[x][0] - ranges[k][1]) < near or abs(ranges[x][1] - ranges[k][0]) < near for k in kin)}
+            kin |= more
+            grew = bool(more)
+        plays = [x for x in ranges if ranges[x][0] - 1e-6 <= e.at <= ranges[x][1] + 1e-6]
+        for x in plays:
+            if x in kin:
+                new = str(T.TimeExpr("src", x, False, e.offset, e.at))
+                self.redirects.append(f"{value} is played by {x}, so {what} counts from it")
+                return self.time(new, what), new
+        rows = [f"{x} {ranges[x][0]:.2f}-{ranges[x][1]:.2f} s" for x in ranges if x in kin]
+        why = f"{what} {value!r}: no piece of {e.ref} on track {track.get('id')} plays source second {e.at:g}"
+        if plays:
+            raise OpError(f"{why}; {', '.join(plays)} also play{'s' if len(plays) == 1 else ''} {clip.get('asset')} "
+                          f"there but {'is' if len(plays) == 1 else 'are'} not cut from {e.ref}: name the clip meant, "
+                          f"e.g. src:{plays[0]}@{e.at:g} (the pieces of {e.ref} play {', '.join(rows)})")
+        raise OpError(f"{why} (it was cut away); the pieces play {', '.join(rows)}")
 
     def source_range(self, cid: str) -> tuple[float, float]:
         c = self.sched.clips[cid]
@@ -680,7 +694,7 @@ def _split_clip(root, data, op) -> tuple[str, list]:
     at_expr = snapped if numeric else copy.deepcopy(at)
     rel = cut_f - start_f
     had_end = "end" in clip
-    notes = []
+    notes = list(now.redirects)
 
     first = clip
     motion = clip.get("motion") if clip.get("type") in ("image", "video") else None
@@ -985,9 +999,13 @@ def _ripple_tracks(data: dict, ids) -> list[dict]:
     return [_find_track(data, i)[1] for i in dict.fromkeys(ids)]
 
 
+def _stem(cid) -> str:
+    return re.sub(r"(?:_\d+|-\d+)$", "", str(cid))
+
+
 def _fresh_id(data: dict, base: str) -> str:
     used = _used_ids(data)
-    stem = re.sub(r"(?:_\d+|-\d+)$", "", str(base))[:58] or "clip"
+    stem = _stem(base)[:58] or "clip"
     n = 2
     while f"{stem}_{n}" in used:
         n += 1
@@ -1206,7 +1224,7 @@ def _ripple_delete(root, data, op) -> tuple[str, list]:
     cut_s, cut_e = sf / now.fps, ef / now.fps
     gone = cut_e - cut_s
     tracks = _ripple_tracks(data, op.get("tracks"))
-    notes: list[str] = []
+    notes: list[str] = list(now.redirects)
     split = []
     heads = {}                                  # the piece left after a cut head -> the clip's own id
     temp = set()                                # pieces inside the range, made only to be removed
@@ -1283,7 +1301,7 @@ def _insert_gap(root, data, op) -> tuple[str, list]:
         raise OpError("dur is under one frame")
     at, gap = at_f / now.fps, gap_f / now.fps
     tracks = _ripple_tracks(data, op.get("tracks"))
-    notes: list[str] = []
+    notes: list[str] = list(now.redirects)
     split = []
     kept: dict = {}
     whole = set()                               # clips a transition at the point comes from: not split, not moved
@@ -1374,7 +1392,7 @@ def _trim_clip(root, data, op) -> tuple[str, list]:
                       "move the clip later first")
     before = _measure(now, data)
     placed: dict = {}                           # only this clip and, with ripple, the ones after it move
-    notes: list[str] = []
+    notes: list[str] = list(now.redirects)
     if head > 0:
         # cut the head off a scratch copy (split_clip carries keyframes, motion, loops and inner Times over)
         scratch = copy.deepcopy(data)
@@ -1431,7 +1449,26 @@ def _trim_clip(root, data, op) -> tuple[str, list]:
     if pinned:
         text += (f"; {', '.join(pinned)} stay where they were: their times anchored on {cid}'s moved edge are now "
                  "numbers (ripple: true moves them with it)")
+    if not ripple:
+        text += _gaps_opened(data, track, cid, before["clips"], (a, b), (start, start + span), fps)
     return text + (f" ({'; '.join(notes)})" if notes else ""), [cid, *pinned]
+
+
+def _gaps_opened(data: dict, track: dict, cid: str, was: dict, old: tuple, new: tuple, fps: float) -> str:
+    """The holes a trim without ripple opened beside clips of its track that touched the old edges."""
+    mine = [oid for oid, (t, _) in _clip_index(data).items() if oid != cid and t is track and oid in was]
+    holes = []
+    if new[1] < old[1] - 0.5 / fps:
+        after = [o for o in mine if abs(was[o][0] - old[1]) < 1 / fps]
+        if after:
+            holes.append(f"{new[1]:.2f}-{old[1]:.2f} s before {', '.join(after)}")
+    if new[0] > old[0] + 0.5 / fps:
+        prior = [o for o in mine if abs(was[o][1] - old[0]) < 1 / fps]
+        if prior:
+            holes.append(f"{old[0]:.2f}-{new[0]:.2f} s after {', '.join(prior)}")
+    if not holes:
+        return ""
+    return f"; this leaves a gap on {track.get('id')} at {' and '.join(holes)} (ripple: true closes it)"
 
 
 def _rebase(clip: dict, seconds: float) -> None:

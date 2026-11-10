@@ -376,7 +376,17 @@ def test_a_clip_running_past_its_source(tmp_path):
     assert set(found) == {"a_3", "fast", "past"}
     assert found["a_3"].level == "warning" and "its source ends at 8.0 s, film 8.0 s" in found["a_3"].msg
     assert "film 22.0 s" in found["fast"].msg                     # from 18 s, 8 s of source at double speed
-    assert found["past"].level == "error" and "trim_in 9.00 s" in found["past"].msg
+    assert found["past"].level == "error" and "trim_in 9 s" in found["past"].msg
+
+
+def test_a_trim_that_only_rounds_to_the_source_end_is_a_warning(tmp_path):
+    r = resolved([video("near", 0, 300, trimIn=240)], 10)              # 7.99 s rounds to frame 240 = 8.00 s
+    [near] = C.overrun_issues(r, tmp_path, {"near": 7.99})
+    assert near.level == "warning" and "film 0.0 s" in near.msg
+    [at] = C.overrun_issues(r, tmp_path, {"near": 8.0})
+    assert at.level == "error" and "trim_in 8 s" in at.msg
+    short = resolved([video("short", 0, 6, trimIn=240)], 10)           # held for 0.2 s: passes for a cut
+    assert C.overrun_issues(short, tmp_path, {"short": 7.99}) == []
 
 
 @needs_ffmpeg
@@ -407,7 +417,8 @@ def fake_doc(monkeypatch, meta=None, issues=(), load_exc=None):
     def load(project):
         if load_exc:
             raise load_exc
-        return types.SimpleNamespace(meta=types.SimpleNamespace(model_dump=lambda: dict(meta or GOOD_META)))
+        return types.SimpleNamespace(meta=types.SimpleNamespace(model_dump=lambda: dict(meta or GOOD_META)),
+                                     tracks=[])
     return fake_module(monkeypatch, "document", load=load, validate=lambda project, doc: list(issues))
 
 
@@ -543,6 +554,20 @@ def test_layout_right_rail_and_cut_edge_and_overflow():
     assert "outside the safe area (right)" in found[("rail", "error")]
     assert "cut by the canvas edge (right" in found[("big", "error")]
     assert "overflows its clip box" in found[("big", "warning")]
+
+
+def test_layout_text_its_own_card_keeps_cut():
+    def cut(f, share, words="这句话被卡片切掉了一半"):
+        return frame(f, box("card", [40, 600, 800, 400]), dict(text("card", [80, 900, 700, 100], words=words), cut=share))
+    held = C.check_layout({"frames": [cut(30, 0.4), cut(60, 0.405)]}, DOUYIN)
+    assert [(i.level, i.where) for i in held] == [("warning", "card @ 2.0s")]
+    assert "is cut by its own card: 40% of it stays hidden by the component's own edges" in held[0].msg
+    entering = {"frames": [cut(30, 0.6), cut(45, 0.3), cut(60, 0.0)]}               # a row rising past the edge
+    assert C.check_layout(entering, DOUYIN) == []
+    close = {"frames": [cut(30, 0.4), cut(39, 0.4)]}                                # 0.3 s apart: not yet kept
+    assert C.check_layout(close, DOUYIN) == []
+    sliver = {"frames": [cut(30, 0.01), cut(60, 0.01)]}                             # a pixel row of descender
+    assert C.check_layout(sliver, DOUYIN) == []
 
 
 def test_layout_ignores_faint_offcanvas_and_small_overhang():

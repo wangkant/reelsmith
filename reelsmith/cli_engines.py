@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from . import agentconf, backends, guard
+from .agent.loop import STOPPED
 from .providers.config import NO_WINDOW, _kill_tree
 
 ENGINES = ("codex", "dsh")
@@ -215,6 +216,25 @@ class Stream:
     def handle(self, event: dict) -> None:
         raise NotImplementedError
 
+    # a SessionLog hears the steps themselves; another log gets the same console lines
+    def say(self, text) -> None:
+        if hasattr(self.log, "say"):
+            self.log.say(text)
+        elif str(text or "").strip():
+            self.log.line("say " + _flat(text))
+
+    def called(self, name, args, call_id=None, line: str | None = None) -> None:
+        if hasattr(self.log, "called"):
+            self.log.called(str(name), args, call_id, line=line)
+        else:
+            self.log.line(line or f"-> {name} {guard.brief_input(str(name), args)}")
+
+    def returned(self, call_id, ok: bool, text="", name=None, line: str | None = None) -> None:
+        if hasattr(self.log, "returned"):
+            self.log.returned(call_id, ok, text, name=name, line=line)
+        elif line:
+            self.log.line(line)
+
     def session(self, sid) -> None:
         if sid and sid != self.outcome["session_id"]:
             self.outcome["session_id"] = str(sid)
@@ -254,31 +274,38 @@ class CodexStream(Stream):
             self.outcome["errors"].append(_flat(ev.get("message"), 400))
             self.log.line(f"codex: {_flat(ev.get('message'))}")
         elif kind == "item.started" and item.get("type") == "mcp_tool_call":
-            self.log.line(f"-> {item.get('tool')} {guard.brief_input(item.get('tool'), item.get('arguments'))}")
+            self.called(item.get("tool"), item.get("arguments"), item.get("id"))
         elif kind == "item.completed":
             self.item(item)
 
     def item(self, item: dict) -> None:
-        kind = item.get("type")
+        kind, iid = item.get("type"), item.get("id")
         if kind == "agent_message":
             self.outcome["result"] = str(item.get("text") or "")
-            if self.outcome["result"].strip():
-                self.log.line("say " + _flat(self.outcome["result"]))
+            self.say(self.outcome["result"])
         elif kind == "mcp_tool_call":
             self.outcome["tool_calls"] += 1
             if item.get("status") == "failed" or item.get("error"):
                 why = (item.get("error") or {}).get("message") if isinstance(item.get("error"), dict) else ""
-                self.log.line(f"<- error {item.get('tool')} {_flat(why)}")
+                self.returned(iid, False, why, item.get("tool"), f"<- error {item.get('tool')} {_flat(why)}")
+            else:
+                self.returned(iid, True, name=item.get("tool"))
         elif kind == "command_execution":
             self.outcome["tool_calls"] += 1
-            self.log.line(f"$ {_flat(item.get('command'), 160)} (exit {item.get('exit_code')})")
+            code = item.get("exit_code")
+            self.called("shell", {"command": _flat(item.get("command"), 160)}, iid,
+                        f"$ {_flat(item.get('command'), 160)} (exit {code})")
+            self.returned(iid, code in (0, None), "" if code in (0, None) else f"exit {code}", "shell")
         elif kind == "file_change":
             self.outcome["tool_calls"] += 1
             paths = ", ".join(str(c.get("path")) for c in item.get("changes") or [] if isinstance(c, dict))
-            self.log.line(f"edit {_flat(paths, 160)}")
+            self.called("edit_file", {"path": _flat(paths, 160)}, iid, f"edit {_flat(paths, 160)}")
+            self.returned(iid, item.get("status") != "failed", name="edit_file")
         elif kind == "web_search":
             self.outcome["tool_calls"] += 1
-            self.log.line(f"search {_flat(item.get('query'), 160)}")
+            self.called("web_search", {"query": _flat(item.get("query"), 160)}, iid,
+                        f"search {_flat(item.get('query'), 160)}")
+            self.returned(iid, True, name="web_search")
         elif kind == "error":
             self.log.line(f"codex: {_flat(item.get('message'))}")
 
@@ -318,12 +345,15 @@ class DshStream(Stream):
                 self.outcome["aborted"] = f"max_turns ({self.max_turns}) reached"
         elif kind == "text" and str(ev.get("text") or "").strip():
             self.outcome["result"] = str(ev["text"])
-            self.log.line("say " + _flat(ev["text"]))
+            self.say(ev["text"])
         elif kind == "tool_call":
             self.outcome["tool_calls"] += 1
-            self.log.line(f"-> {ev.get('tool')} {guard.brief_input(str(ev.get('tool')), ev.get('input'))}")
+            self.called(ev.get("tool"), ev.get("input"), ev.get("callId"))
         elif kind == "tool_result" and ev.get("status") == "error":
-            self.log.line("<- error " + _flat(ev.get("result") or (ev.get("error") or {}).get("reason")))
+            why = _flat(ev.get("result") or (ev.get("error") or {}).get("reason"))
+            self.returned(ev.get("callId"), False, why, line="<- error " + why)
+        elif kind == "tool_result":
+            self.returned(ev.get("callId"), True)
         elif kind == "final":
             if str(ev.get("text") or "").strip():
                 self.outcome["result"] = str(ev["text"])
@@ -352,9 +382,11 @@ class DshStream(Stream):
 
 # ------------------------------------------------------------------ the process
 def drive(cmd: list[str], cwd: Path, env: dict, prompt: str, stream: Stream, stall_s: float = 3600,
-          wall_s: float = 7200, budget_usd: float | None = None, stderr_path: Path | None = None) -> dict:
+          wall_s: float = 7200, budget_usd: float | None = None, stderr_path: Path | None = None,
+          stop: threading.Event | None = None) -> dict:
     """Run one headless session to its end and fold its events. Never raises: the outcome says what happened. A
-    stall, the wall clock, the budget (when the stream prices its usage) or the stream's own limit kills the tree."""
+    stall, the wall clock, the budget (when the stream prices its usage), the stream's own limit or `stop` being set
+    kills the tree."""
     out = stream.outcome
     try:
         proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd), env=env, stdin=subprocess.PIPE,
@@ -414,7 +446,9 @@ def drive(cmd: list[str], cwd: Path, env: dict, prompt: str, stream: Stream, sta
                     if isinstance(event, dict):
                         stream.feed(event)
             if not out["aborted"]:
-                if now - last > stall_s:
+                if stop is not None and stop.is_set():
+                    out["aborted"] = STOPPED
+                elif now - last > stall_s:
                     out["aborted"] = f"no event for {int(now - last)} s"
                 elif now - started > wall_s:
                     out["aborted"] = f"over the {wall_s / 60:g} minute limit"

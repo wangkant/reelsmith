@@ -139,4 +139,4 @@ npm run e2e -- --python <python with reelsmith>
   later shows DSH's generic row until the page reloads.
 - Tested on the Web UI and the headless profile; the desktop app and remote (non-loopback) Web hosts are untested.
 
-MIT, Qiankang (Kant) Wang.
+PolyForm Noncommercial License 1.0.0 (see LICENSE), Qiankang (Kant) Wang.

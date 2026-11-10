@@ -61,13 +61,16 @@ for (const id of ids) {
   }
 }
 
-console.log("example props in an 840x700 box: nothing under 24 px (the library PriceTag: 40 px)");
+// presets size their text to the canvas, so the floor is the renderer's own (28 px at a 1080 short side), not a
+// fixed 24 px: on this 920x780 canvas that would ask for 33 px on a phone's 1080
+console.log("example props in an 840x700 box: nothing under the floor, 28 px at a 1080 short side (the library PriceTag: 40 px)");
 for (const id of ids.filter((i) => /-(base|dark)$/.test(i) || i === "x-PriceTag-600x500")) {
-  const ts = shown(probeOf(id));
+  const p = probeOf(id);
+  const ts = shown(p);
   if (!ts.length) continue;
-  const floor = id.startsWith("PriceTag") ? 40 : 24;
-  const small = ts.filter((t) => t.s < floor);
-  check(!small.length, `${id}: text under ${floor} px: ${small.map(fmtT).join(", ")}`);
+  const floor = id.startsWith("PriceTag") ? 40 : (28 * Math.min(p.w + 80, p.h + 80)) / 1080;
+  const small = ts.filter((t) => t.s < floor - 0.5);
+  check(!small.length, `${id}: text under ${floor.toFixed(1)} px: ${small.map(fmtT).join(", ")}`);
 }
 
 console.log("EvidenceCard: the source line is never under 28 px; a hostname loses its www.");

@@ -28,6 +28,9 @@ LOW_CONTRAST = 2.0             # between the two, a clearly different hue still 
 DISTINCT_DELTA_E = 50.0
 STEADY_OPACITY = 0.75          # text fading in or out is judged where it is whole
 OVERLAP_OPACITY = 0.35         # fainter text under other text is a backdrop, not a collision
+HELD_CUT = 0.02                # a text this much hidden by its own component's edges is cut ...
+HELD_CUT_SAME = 0.01           # ... and when it is hidden by the same share (within this) ...
+HELD_CUT_S = 0.5               # ... in samples this far apart, it is not passing an edge but kept cut
 EVIDENCE_MIN_PX = 40           # the house minimum for anything a viewer must read
 EVIDENCE_SAFE_SLACK_PX = 6     # an evidence panel may poke this far past the safe area (its fading margin)
 EVIDENCE_MAX_ZOOM = 2.0        # EvidenceCrop.tsx MAX_ZOOM
@@ -608,9 +611,11 @@ def screen_issues(resolved: dict, profile: Profile) -> list[Issue]:
 OVERRUN_S = 0.25             # a held last frame shorter than this passes for a cut
 
 
-def overrun_issues(resolved: dict, root: Path) -> list[Issue]:
-    """Video and audio clips that run past the end of their source (a frozen last frame, or silence)."""
+def overrun_issues(resolved: dict, root: Path, written: dict | None = None) -> list[Issue]:
+    """Video and audio clips that run past the end of their source (a frozen last frame, or silence). `written`:
+    each clip's trim_in as the project gives it, since the resolved one is rounded to a frame."""
     fps = _fps(resolved)
+    written = written or {}
     rows = [(c.get("id"), "video", c.get("from") or 0, c.get("dur") or 0, c.get("content") or {})
             for c in _screen_clips(resolved) if c.get("type") == "video"]
     rows += [(a.get("id"), "audio", a.get("from") or 0, a.get("dur") or 0, a)
@@ -623,12 +628,12 @@ def overrun_issues(resolved: dict, root: Path) -> list[Issue]:
         if not length:
             continue
         rate = float(src.get("rate") or 1)
-        trim = (src.get("trimIn") or 0) / fps
+        trim = written.get(cid, (src.get("trimIn") or 0) / fps)
         frozen = "its last frame" if kind == "video" else "silence"
-        if trim >= length - 0.5 / fps:
-            out.append(Issue("error", str(cid), f"trim_in {trim:.2f} s is at or past the end of its source "
-                                                f"({length:.2f} s): the clip is {frozen} throughout; set trim_in "
-                                                f"under {length:.2f}"))
+        if trim >= length - 1e-6:
+            out.append(Issue("error", str(cid), f"trim_in {trim:g} s is at or past the end of its source "
+                                                f"({length:g} s): the clip is {frozen} throughout; set trim_in "
+                                                f"under {length:g}"))
             continue
         runs_out = start / fps + (length - trim) / rate
         if (start + dur) / fps - runs_out > OVERRUN_S:
@@ -681,7 +686,8 @@ def check_project(project: str | Path) -> list[Issue]:
     except Exception as exc:  # noqa: BLE001 - a render would stop at the same place
         return sort_issues(issues + [Issue("error", "resolve", f"the project does not resolve: {exc}")])
     issues += duration_issues(resolved, profile) + advice_issues(resolved, rules, profile)
-    issues += screen_issues(resolved, profile) + overrun_issues(resolved, root) + sound_issues(resolved, root)
+    trims = {c.id: c.trim_in for t in doc.tracks for c in getattr(t, "clips", None) or [] if hasattr(c, "trim_in")}
+    issues += screen_issues(resolved, profile) + overrun_issues(resolved, root, trims) + sound_issues(resolved, root)
     issues += (cover_issues(resolved) if cover_matters(profile, rules) else []) + \
         evidence_issues(resolved, root, profile)
     return sort_issues(issues)
@@ -897,6 +903,7 @@ class LayoutCheck:
         self.ignore = set(ignore or ())
         self.stills = _Stills(profile.width)
         self.found: dict[tuple[str, str], dict] = {}
+        self.cuts: dict[tuple[str, str], list[tuple[int, float]]] = {}
 
     def note(self, kind, who, frame, px, side, text, worst=max, **extra):
         entry = self.found.setdefault((kind, who), {"frames": [], "px": px, "side": side, "text": text, **extra})
@@ -946,6 +953,13 @@ class LayoutCheck:
                     px, side = _sticks_out(rect, box)
                     if px > tol:
                         note("overflow", who, frame, px, side, text)
+                cut = it.get("cut")
+                if isinstance(cut, (int, float)) and cut >= HELD_CUT:
+                    seen = self.cuts.setdefault((who, text), [])
+                    if any(abs(cut - c) <= HELD_CUT_SAME and frame - f >= HELD_CUT_S * self.profile.fps
+                           for f, c in seen):
+                        note("held_cut", who, frame, cut, "", text)
+                    seen.append((frame, cut))
                 size = it.get("size")
                 if isinstance(size, (int, float)) and 0 < size < self.small:
                     note("tiny" if size < self.tiny else "small", who, frame, size, "", text, worst=min)
@@ -988,6 +1002,10 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
         other = f"text \"{e['other_text']}\" of {e['other']}" if e.get("other_text") else e["other"]
         return Issue("warning", where, f"{quote} overlaps {other}{also}: move one of them (captions sit at the bottom "
                                        "of the safe area) or keep them apart in time")
+    if kind == "held_cut":
+        return Issue("warning", where, f"{quote} is cut by its own card: {e['px']:.0%} of it stays hidden by the "
+                                       f"component's own edges{also}; give it room (fewer words, a smaller size or "
+                                       "a bigger card) so it shows whole")
     if kind == "contrast":
         return Issue("warning", where, f"{quote} ({e['color']}) on a background of about {e['bg']} has contrast "
                                        f"{e['px']:.1f}:1{also} (aim for {MIN_CONTRAST:g}:1 or more): change the text "

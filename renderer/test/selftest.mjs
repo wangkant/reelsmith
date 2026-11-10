@@ -232,6 +232,10 @@ console.log("import guard");
   check(r4.result?.stage === "bundle" && r4.result?.error ===
     "Component UsesFs imports 'fs': only react, remotion, @remotion/*, @reelsmith/kit and files in the same folder are allowed",
   `an unresolvable forbidden import is refused by name, without a resolve trace (${r4.s} s): ${r4.result?.error ?? ""}`);
+  const h = writeMini("guard-dotdot", [comp("c", "DotDot")]);
+  const r5 = run(["stills", h.file, h.dir, path.join(h.dir, "out"), "0"], { REELSMITH_LIBRARY: badlib });
+  check(r5.result?.stage === "bundle" && /^Component DotDot imports 'react\/\.\.\/\.\.\/react-dom\/server\.browser' \(a package path may not hold \. or \.\. segments\)/.test(r5.result?.error ?? ""),
+    `"react/../../<package>" does not reach other installed packages (${r5.s} s): ${r5.result?.error ?? ""}`);
 }
 
 console.log("narrowing, missing and crashing components");
@@ -302,6 +306,19 @@ console.log("text a component clips away inside itself");
   check(bottom("half") === 200 && bottom("shown") < 200, `a row half under the edge is measured by the part that shows: bottom ${bottom("half")}`);
 }
 
+console.log("text a component keeps cut");
+{
+  // the window does not move: in two samples its half row is hidden by the same share, which the check calls kept cut
+  const w = writeMini("window-held", [comp("win", "Window")]);
+  const r = run(["inspect", w.file, w.dir, path.join(w.dir, "out"), "2", "9"], { REELSMITH_LIBRARY: library });
+  const out = path.join(w.dir, "out", "inspect.json");
+  const data = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : { frames: [] };
+  const cuts = (t) => data.frames.map((fr) => fr.items.find((i) => i.clip === "win" && i.text === t)?.cut);
+  check(r.result?.ok === true && cuts("half").every((c) => Math.abs(c - 0.5) < 0.02) && cuts("half").length === 2,
+    `a row half under its window's edge reports cut 0.5 in both samples (${r.s} s): ${cuts("half")} ${r.result?.error ?? ""}`);
+  check(cuts("shown").every((c) => c === 0), `a whole row reports cut 0: ${cuts("shown")}`);
+}
+
 console.log("the film's locale reaches components (EvidenceCard's source line)");
 {
   const ev = { src: "assets/evidence.png", kind: "evidence", size: [1290, 960], box: [358, 446, 330, 66], site: "www.example.org" };
@@ -350,6 +367,13 @@ console.log("word-aware line breaking (unit)");
   check(has("GPT-5发布了", "GPT-5") && covid.includes("COVID-19") && !covid.some((l) => /^-/.test(l)),
     `a hyphenated Latin or digit run is one piece and no line starts with its hyphen (${covid.join(" / ")})`);
   check(has("高さ634メートル、価格は1,200円", "634メートル、", "1,200円"), "Japanese units stay with their number");
+  const { hanLines } = await import("../src/elements/linebreak.ts");
+  const bread = hanLines("附近三家面包店生意少了一半", 5, byChar);
+  check(bread.join("/") === "附近三家/面包店生意/少了一半", `Han lines are evened between words when that takes no more lines (${bread.join(" / ")})`);
+  const queue = hanLines("门店外排起长队绕了整个街区", 6, byChar);
+  check(queue.length === 3 && !queue.some((l) => l.endsWith("整")), `a two-character word is not split to even the lines (${queue.join(" / ")})`);
+  const tight = hanLines("一家连锁面包店把面包价格砍掉一半", 3, byChar);
+  check(tight.length === 6 && tight.every((l) => byChar(l) <= 3), `between characters when word breaks would cost a line (${tight.join(" / ")})`);
 }
 
 console.log("text layout, default colour, fonts and evidence crops (layout.resolved.json)");
@@ -662,8 +686,10 @@ console.log("live player");
   const bad = build(path.join(OUT, "player-bad"), badlib);
   const skipped = bad.result?.skipped ?? {};
   check(bad.result?.ok === true && JSON.stringify(bad.result.components) === '["Crash"]' &&
-    ["Escape", "Pkg", "UsesFs"].every((n) => /only react, remotion/.test(skipped[n] ?? "")),
+    ["Escape", "Pkg", "UsesFs", "DotDot"].every((n) => /only react, remotion/.test(skipped[n] ?? "")),
   `components the guard refuses are left out, the build still passes (${JSON.stringify(skipped)})`);
+  check(/not installed in the renderer/.test(skipped.NotInstalled ?? "") && /'\.\/missing\.css', which is not there/.test(skipped.NoCss ?? ""),
+    "an allowed import that webpack could not resolve (a package not installed, a missing stylesheet) is left out too");
 
   // the page in a browser: /player/ is the bundle, /project/ the test folder, / a host page that frames it
   const host = `<!doctype html><iframe id="p" src="/player/index.html" style="width:540px;height:480px"></iframe><script>

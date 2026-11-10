@@ -95,7 +95,7 @@ def project(tmp_path, monkeypatch):
         sched = TE.Schedule([(0.0, 1.0), (1.2, 2.4)], clips, duration=r["durationInFrames"] / fps)
         return TE.resolve(value, sched)
     meta = types.SimpleNamespace(model_dump=lambda: dict(META))
-    fake_module(monkeypatch, "document", load=lambda pr: types.SimpleNamespace(meta=meta),
+    fake_module(monkeypatch, "document", load=lambda pr: types.SimpleNamespace(meta=meta, tracks=[]),
                 validate=lambda pr, doc: list(state.issues))
     fake_module(monkeypatch, "resolve", resolve=lambda pr: json.loads(json.dumps(state.resolved)), time_of=time_of,
                 describe=lambda pr, at=None: f"window of {Path(pr).name} at {at}")
@@ -476,6 +476,11 @@ def test_review_watches_the_film_a_second_at_a_time_with_the_voice(project, monk
     assert "the picture does not change" in rv and "- 4-7 s" in rv and "0-9 s" not in rv
     quick = T.review(str(project.path), 3)                                   # n: the quick look, as before
     assert quick.ok and "contact sheet" in quick and not list(review.glob("sheet_*.png"))
+
+
+def test_review_keeps_still_runs_shorter_than_the_film_check_records():
+    same = [False, True, False, True, True, True, False, True]
+    assert R._short_runs([0, 1, 2, 3, 4, 5, 6, 7], same) == [False, True, False, False, False, False, False, True]
 
 
 @needs_ffmpeg

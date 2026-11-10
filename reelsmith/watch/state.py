@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import threading
 from collections import deque
 from datetime import datetime
@@ -332,6 +333,39 @@ def summary_of(state: dict) -> dict:
             "errors": levels.count("error"), "warnings": levels.count("warning"), "batches": len(state["history"])}
 
 
+def tidier(root: Path):
+    """text -> text for the window: the project's own path read relative to it, the workspace's and the home folder
+    named, keys masked (rows logged before tools masked them, or that name other folders)."""
+    from ..providers import config
+    try:
+        ws = find_workspace(root)
+    except WorkspaceError:
+        ws = None
+    try:
+        redact = config.context(root).redact
+    except Exception:  # noqa: BLE001 - a workspace whose keys cannot be read: the shape-based masking still runs
+        redact = config.redact
+    fold = str.lower if sys.platform.startswith("win") else str
+    names: dict[str, str] = {}
+    for folder, name in ((Path.home(), "~"), (ws.root if ws else None, "<workspace>"), (root, ".")):
+        for form in ({str(folder), folder.as_posix(), str(folder).replace("\\", "\\\\")} if folder else ()):
+            names[fold(form)] = name
+    forms = sorted(names, key=len, reverse=True)
+    # a folder followed by a separator, or ending there (not the start of a longer name: projects/sea2)
+    pattern = re.compile(f"({'|'.join(re.escape(f) for f in forms)})(?:([\\\\/]+)|(?![\\w.-]))",
+                         re.I if fold is str.lower else 0)
+
+    def swap(m: re.Match) -> str:
+        name = names[fold(m.group(1))]
+        if name == ".":
+            return "" if m.group(2) else "."
+        return name + ("/" if m.group(2) else "")
+
+    def tidy(text) -> str:
+        return redact(pattern.sub(swap, str(text or "")))
+    return tidy
+
+
 def activity_of(root: Path, limit: int = ACTIVITY_SHOWN) -> list[dict]:
     path = root / ".history" / ACTIVITY
     try:
@@ -339,6 +373,7 @@ def activity_of(root: Path, limit: int = ACTIVITY_SHOWN) -> list[dict]:
             lines = deque(f, maxlen=limit)
     except OSError:
         return []
+    tidy = tidier(root)
     out = []
     for line in lines:
         try:
@@ -346,17 +381,25 @@ def activity_of(root: Path, limit: int = ACTIVITY_SHOWN) -> list[dict]:
         except ValueError:
             continue
         if isinstance(row, dict):
+            for key in ("summary", "text"):
+                if isinstance(row.get(key), str):
+                    row[key] = tidy(row[key])
             out.append(row)
     return out
 
 
-def with_batches(activity: list[dict], history: list[dict]) -> list[dict]:
+def with_batches(activity: list[dict], history: list[dict], limit: int = ACTIVITY_SHOWN) -> list[dict]:
     """The feed with a row for every recorded batch the activity log does not have (edits made before the log
-    existed, or by hand through the Python API), in time order."""
+    existed, or by hand through the Python API), in time order, at most `limit` rows. When the log itself was cut
+    to `limit`, only batches newer than its oldest row shown are added."""
     logged = {row.get("batch") for row in activity}
+    since = min((str(r.get("ts") or "") for r in activity), default="") if len(activity) >= limit else ""
     extra = [{"ts": h["at"], "tool": "edit", "ok": True, "seconds": None, "summary": h["summary"], "batch": h["n"],
-              "files": [], "text": h["summary"]} for h in history if h["n"] not in logged]
-    return sorted(activity + extra, key=lambda row: str(row.get("ts") or "")) if extra else activity
+              "files": [], "text": h["summary"]} for h in history
+             if h["n"] not in logged and str(h["at"] or "") >= since]
+    if not extra:
+        return activity
+    return sorted(activity + extra, key=lambda row: str(row.get("ts") or ""))[-limit:]
 
 
 def history_of(root: Path) -> list[dict]:
@@ -480,6 +523,9 @@ def build_state(root: str | Path, base: str = "") -> dict:
     state["history"] = history_of(root)
     state["activity"] = with_batches(activity_of(root), state["history"])
     state["summary"] = summary_of(state)
+    # the components draw the picture: an edit to one is a change the window must hear of
+    parts = sorted(p for p in ws.components_dir.rglob("*") if p.is_file()) if ws and ws.components_dir.is_dir() else []
+    state["library"] = hashlib.sha1("".join(f"{p}|{_stamp(p)}\n" for p in parts).encode()).hexdigest()[:12]
     state["running"] = presence.running(root)          # moves on its own: not part of the revision
     state["revision"] = digest(state)
     return state
@@ -498,6 +544,8 @@ def watched(root: Path) -> list[Path]:
              root / "build" / "draft.mp4", root / "ledger.jsonl"]
     if ws is not None:
         files += [ws.ledger_path, ws.root / "workspace.json", ws.root / "rules.json", ws.components_dir]
+        if ws.components_dir.is_dir():     # a component edited in place changes the picture, not the folder
+            files += sorted(p for p in ws.components_dir.rglob("*") if p.is_file())
     return files
 
 

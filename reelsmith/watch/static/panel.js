@@ -1,80 +1,585 @@
-import { t } from "./i18n.js";
-import { bytes, clock, h, timecode, typeColor, writtenText } from "./util.js";
+import { lang, t } from "./i18n.js";
+import { clamp, clock, closeOnBackdrop, disable, elapsed, h, note, pressable, shortTime, storage, store, timecode, tip, typeColor, writtenText } from "./util.js";
 
-const TABS = ["activity", "issues", "clip", "assets"];
+const TABS = ["chat", "activity", "issues", "clip", "assets"];
+// Served files carry the project in a workspace: /p/<name>/project/...
+export const BASE = (/^\/p\/[^/]+/.exec(location.pathname) || [""])[0];
+const SVG = "http://www.w3.org/2000/svg";
+const GROUP_MIN = 3;            // a run of this many calls to one tool collapses into one row
+const GROUP_GAP_S = 300;        // and a pause this long breaks the run (and puts a time divider in the feed)
+const PAID = new Set(["speak", "draw", "animate", "capture", "transcribe", "footage"]);
+const ICONS = {
+  edit: "i-pencil", undo: "i-undo", redo: "i-undo", preview: "i-eye", frames: "i-eye", inspect: "i-eye", review: "i-eye",
+  check: "i-check", render: "i-film", speak: "i-mic", transcribe: "i-mic", draw: "i-brush", animate: "i-brush",
+  capture: "i-pic", footage: "i-import", import_asset: "i-import", new_project: "i-spark",
+};
+const KINDS = {
+  edit: "edit", undo: "edit", redo: "edit", preview: "look", frames: "look", inspect: "look", review: "look",
+  check: "check", render: "render", speak: "make", transcribe: "make", draw: "make", animate: "make", capture: "make",
+  footage: "make", import_asset: "bring", new_project: "bring",
+};
 
+export function icon(name, cls = "") {
+  const s = document.createElementNS(SVG, "svg");
+  if (cls) s.setAttribute("class", cls);
+  s.setAttribute("aria-hidden", "true");
+  const u = document.createElementNS(SVG, "use");
+  u.setAttribute("href", `#${name}`);
+  s.append(u);
+  return s;
+}
+export const toolIcon = (tool) => ICONS[tool] || "i-dot";
+export const toolKind = (tool) => KINDS[tool] || "other";
+export function toolName(tool) {
+  const k = `tool.${tool}`;
+  return t(k) !== k ? t(k) : tool;
+}
+const has = (key) => t(key) !== key;
+
+// A centred empty state: a line icon, a heading and a hint.
+export function emptyState(iconName, title, body, ...extra) {
+  return h("div", { class: "empty-state" }, icon(iconName, "es-icon"), h("strong", { text: title }),
+    body ? h("p", { text: body }) : null, ...extra);
+}
+
+// A long list is one Tab stop: the arrow keys move between its controls, so Tab gets past it in one press.
+export function rove(box, label) {
+  const items = () => [...box.querySelectorAll("button")].filter((el) => el.offsetParent !== null);
+  const quiet = () => { for (const el of box.querySelectorAll("button")) el.tabIndex = -1; };
+  new MutationObserver(quiet).observe(box, { childList: true, subtree: true });
+  quiet();
+  box.setAttribute("aria-description", label);
+  box.addEventListener("keydown", (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const list = items();
+    if (!list.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = list.indexOf(document.activeElement);
+    const n = e.key === "Home" ? 0 : e.key === "End" ? list.length - 1
+      : i < 0 ? (e.key === "ArrowDown" ? 0 : list.length - 1) : clamp(i + (e.key === "ArrowDown" ? 1 : -1), 0, list.length - 1);
+    list[n].focus();
+    list[n].scrollIntoView({ block: "nearest" });
+  });
+}
+
+export function money(usd) {
+  if (usd == null) return "";
+  return usd > 0 && usd < 0.005 ? "<$0.01" : `$${usd.toFixed(2)}`;
+}
+
+// A disclosure button: aria-expanded on the button, the body hidden or shown, the choice kept by the caller.
+export function disclosure(label, body, open, onToggle, cls = "") {
+  const id = `d${Math.random().toString(36).slice(2, 9)}`;
+  body.id = id;
+  body.hidden = !open;
+  const btn = h("button", { type: "button", class: `disc ${cls}`, "aria-expanded": String(!!open), "aria-controls": id },
+    icon("i-chev", "disc-chev"), h("span", { text: label }));
+  btn.addEventListener("click", () => {
+    const now = btn.getAttribute("aria-expanded") !== "true";
+    btn.setAttribute("aria-expanded", String(now));
+    body.hidden = !now;
+    onToggle?.(now);
+  });
+  return btn;
+}
+
+// ---------------------------------------------------------------- what a tool call did, in a person's words
+const firstLine = (a) => String(a.text || a.summary || "").split("\n", 1)[0];
+const lines = (a) => String(a.text || a.summary || "").split("\n");
+const count = (key, n) => t(key, { n });
+
+function costOf(a) {
+  if (!PAID.has(a.tool)) return null;
+  const body = lines(a).filter((l) => !/^Paid spend/i.test(l)).join("\n");
+  const m = /\$(\d+\.\d+)/.exec(body);
+  return m ? Number(m[1]) : null;
+}
+
+function clipIds(text) {
+  const ids = new Set();
+  for (const m of text.matchAll(/\bclip (?!track)([A-Za-z0-9_][\w-]*)/g)) ids.add(m[1]);
+  const br = /\[([^\]]*)\]\s*$/.exec(text.split("\n", 1)[0]);
+  if (br) for (const m of br[1].matchAll(/([A-Za-z0-9_][\w-]*) \d+\.\d+-\d+\.\d+ s/g)) ids.add(m[1]);
+  return [...ids];
+}
+
+const OPS = [
+  ["add", /^added \S+ clip /], ["track", /^added \S+ track /], ["change", /^updated clip /], ["move", /^moved clip /],
+  ["remove", /^removed \S+ clip /], ["untrack", /^removed track /], ["cut", /^ripple-deleted /], ["insert", /^inserted /],
+  ["split", /^split clip /], ["trim", /^trimmed clip /], ["keys", /keyframe/], ["trackset", /^updated track /],
+  ["asset", /^(added|updated|removed) asset /], ["set", /^(set|removed) [a-z_]+[.=\s]/],
+];
+function editSentence(head) {
+  let body = head.replace(/^applied:\s*/, "");
+  const total = Number((/^(\d+) ops:\s*/.exec(body) || [])[1] || 1);
+  body = body.replace(/^\d+ ops:\s*/, "").replace(/\s*\[[^\]]*\]\s*$/, "");
+  const counts = {};
+  let known = 0;
+  for (const part of body.split("; ")) {
+    const hit = OPS.find(([, re]) => re.test(part));
+    if (hit) { counts[hit[0]] = (counts[hit[0]] || 0) + 1; known += 1; }
+  }
+  const kinds = OPS.map(([k]) => k).filter((k) => counts[k]);
+  const quiet = kinds.length > 0 && kinds.every((k) => k === "asset" || k === "set");
+  if (kinds.length === 1 && kinds[0] === "asset") return { text: count("act.edit.files", counts.asset), quiet, files: true };
+  if (quiet) return { text: t("act.edit.details"), quiet };
+  if (!kinds.length) return { text: total > 1 ? count("act.edit.n", total) : t("act.edit.one") };
+  const parts = kinds.map((k) => count(`op.${k}`, counts[k]));
+  if (total > known && known) parts.push(count("op.more", total - known));
+  return { text: `${t("act.edit.head")}${parts.slice(0, 3).join(t("list.sep"))}${parts.length > 3 ? ` +${parts.length - 3}` : ""}` };
+}
+
+function spans(head, fps) {
+  const br = /\[([^\]]*)\]\s*$/.exec(head);
+  if (!br) return null;
+  const items = [...br[1].matchAll(/([A-Za-z0-9_][\w-]*) (\d+\.\d+)-(\d+\.\d+) s/g)]
+    .map((m) => `${m[1]} ${timecode(+m[2], fps)}–${timecode(+m[3], fps)}`);
+  return items.length ? items.slice(0, 3).join(" · ") + (items.length > 3 ? ` +${items.length - 3}` : "") : null;
+}
+
+// What the activity row says to a person: {text, sub, subKind, fail, cost, ids, next, action}.
+export function describe(a, fps = 30) {
+  const head = firstLine(a);
+  const all = lines(a);
+  const fail = a.ok === false;
+  const d = { icon: toolIcon(a.tool), kind: toolKind(a.tool), fail, cost: costOf(a), ids: [], sub: null, subKind: "" };
+  const reason = () => (all.slice(1).find((l) => l.trim()) || "").replace(/^\[(error|warning)\]\s*/, "").trim();
+  switch (a.tool) {
+    case "edit":
+      if (fail) {
+        d.text = t("act.edit.refused");
+        d.sub = reason() || head;
+        d.subKind = "is-error";
+        break;
+      }
+      {
+        const e = editSentence(head);
+        d.text = e.text;
+        d.quiet = !!e.quiet;           // nothing on the timeline changed: no history view, and runs of them group apart
+        d.files = !!e.files;
+        d.ids = clipIds(a.text || a.summary || "");
+        d.sub = e.files ? [...head.matchAll(/asset (\S+)/g)].map((m) => m[1]).join(" · ") : spans(head, fps);
+        d.mono = true;
+      }
+      break;
+    case "undo": d.text = fail ? t("act.undo.none") : t("act.undo"); d.sub = fail ? head : null; break;
+    case "redo": d.text = fail ? t("act.redo.none") : t("act.redo"); d.sub = fail ? head : null; break;
+    case "preview": {
+      if (fail) break;
+      const sweep = /^sweep: measured (\d+)/.exec(head);
+      const n = sweep ? +sweep[1] : +((/^(\d+) still/.exec(head) || [])[1] || 0);
+      d.text = sweep ? count("act.sweep", n) : count("act.preview", n);
+      const probs = /layout: (\d+) problem/.exec(a.text || "");
+      const times = [...String(a.text || "").matchAll(/^- (\d+(?:\.\d+)?)s \(frame/gm)].map((m) => timecode(+m[1], fps));
+      if (probs) { d.text += ` · ${count("act.problems", +probs[1])}`; d.sub = reason2(a); d.subKind = "is-warn"; }
+      else if (/layout: ok/.test(a.text || "")) d.sub = t("act.layoutOk");
+      if (!d.sub && times.length) d.sub = t("act.at", { times: times.slice(0, 6).join(", ") + (times.length > 6 ? " …" : "") });
+      break;
+    }
+    case "frames": case "review": {
+      if (fail) break;
+      const n = +((/(\d+) frame/.exec(head) || [])[1] || 0);
+      d.text = count(a.tool === "review" ? "act.review" : "act.frames", n);
+      break;
+    }
+    case "inspect": if (!fail) d.text = t("act.inspect"); break;
+    case "check": {
+      const errs = /^BLOCKED: (\d+) error/.exec(head);
+      const warns = /(\d+) warning/.exec(head);
+      if (errs) { d.text = `${t("act.check")} · ${count("act.errors", +errs[1])}`; d.fail = true; d.sub = reason(); d.subKind = "is-error"; }
+      else if (/no issues/.test(head) || (warns && +warns[1] === 0)) d.text = `${t("act.check")} · ${t("act.clean")}`;
+      else if (warns) d.text = `${t("act.check")} · ${count("act.warnings", +warns[1])}`;
+      else if (!fail) d.text = t("act.check");
+      break;
+    }
+    case "render": {
+      const ok = /^DELIVERED/.exec(head);
+      const stopped = /^NOT DELIVERED(?: \(stopped at ([^)]+)\))?: (.*)$/.exec(head);
+      if (ok) {
+        const m = /\((\d+(?:\.\d+)?) s,.*?([\d.]+ [KMG]?B); rendered in ([\d.]+) s\)/.exec(head);
+        d.text = t("act.rendered");
+        if (m) d.sub = [shortTime(+m[1]), m[2], t("act.took", { d: elapsed(+m[3]) })].join(" · ");
+        d.action = "watch";
+      } else if (stopped) {
+        d.text = stopped[1] ? t("act.renderStopped", { stage: stageWord(stopped[1]) }) : t("act.renderFailed");
+        d.sub = stopped[2];
+        d.subKind = "is-error";
+        d.action = "issues";
+      }
+      break;
+    }
+    case "speak": {
+      if (fail) break;
+      const n = +((/(\d+) line\(s\) newly/.exec(a.text || "") || [])[1] ?? NaN);
+      const dur = /, ([\d.]+) s, /.exec(head);
+      d.text = Number.isFinite(n) ? count("act.speak", n) : t("act.speakOne");
+      const cached = +((/(\d+) from cache/.exec(a.text || "") || [])[1] || 0);
+      d.sub = [dur ? t("act.speech", { d: shortTime(+dur[1]) }) : null, cached ? count("act.cached", cached) : null].filter(Boolean).join(" · ") || null;
+      break;
+    }
+    case "draw": case "animate": case "import_asset": {
+      if (fail) break;
+      const id = (/'([^']+)'/.exec(head) || [])[1];
+      const kind = a.tool === "import_asset" ? (/\((image|video|audio|evidence|font)\b/.exec(head) || [])[1] : null;
+      d.text = t(`act.${a.tool}`, { id: id || "", what: kind ? t(`ak.${kind}`) : "" });
+      if (a.tool === "import_asset") d.sub = (/: (\S+) \(/.exec(head) || [])[1] || null;
+      break;
+    }
+    case "new_project": if (!fail) d.text = t("act.new_project"); break;
+    case "transcribe": if (!fail) d.text = t("act.transcribe"); break;
+    case "capture": if (!fail) d.text = t("act.capture"); break;
+    default: break;
+  }
+  if (!d.text) {
+    d.text = fail ? t("act.failedTool", { tool: toolName(a.tool) }) : t("act.ran", { tool: toolName(a.tool) });
+    if (fail) { d.sub = head; d.subKind = "is-error"; }
+  }
+  if (d.fail && a.tool !== "check") d.next = true;
+  return d;
+}
+function reason2(a) {
+  const l = lines(a).find((x) => /^\[(error|warning)\]/.test(x));
+  return l ? l.replace(/^\[(error|warning)\]\s*/, "") : null;
+}
+function stageWord(s) { return has(`stage.${s}`) ? t(`stage.${s}`) : s; }
+
+function groupSentence(tool, n) {
+  return has(`act.group.${tool}`) ? count(`act.group.${tool}`, n) : t("act.group.other", { tool: toolName(tool), n });
+}
+
+// Problems the agent's last preview listed: [level] where @ t s: message.
+export function previewIssues(acts, clipExists) {
+  const last = [...acts].reverse().find((a) => a.tool === "preview" && a.ok && a.text);
+  if (!last) return null;
+  const rows = [];
+  for (const l of lines(last)) {
+    const m = /^\[(error|warning|advice)\] (\S+?)(?: @ (\d+(?:\.\d+)?)s)?: (.+)$/.exec(l);
+    if (!m) continue;
+    rows.push({ level: m[1], source: "preview", clip: clipExists(m[2]) ? m[2] : null, t: m[3] != null ? +m[3] : null,
+      text: `${m[2]}: ${m[4]}` });
+  }
+  const later = acts.some((a) => a.tool === "edit" && a.ok && a.batch != null && a.ts > last.ts);
+  return { at: last.ts, rows, stale: later };
+}
+
+// ---------------------------------------------------------------- the panel
 export function createPanel(app) {
-  const tabButtons = TABS.map((k) => document.getElementById(`tab-${k}`));
-  const panes = TABS.map((k) => document.getElementById(`pane-${k}`));
-  const feed = document.getElementById("feed");
-  const replay = document.getElementById("replay");
-  const replayRange = document.getElementById("replayRange");
-  const replayLabel = document.getElementById("replayLabel");
-  const replayPlay = document.getElementById("replayPlay");
-  const issuesList = document.getElementById("issuesList");
-  const clipPane = document.getElementById("clipBody");
-  const assetsList = document.getElementById("assetsList");
-  const issueCount = document.getElementById("issueCount");
+  const $ = (id) => document.getElementById(id);
+  const tabButtons = TABS.map((k) => $(`tab-${k}`));
+  const panes = TABS.map((k) => $(`pane-${k}`));
+  const feed = $("feed"), feedNew = $("feedNew");
+  const replay = $("replay"), replayRange = $("replayRange"), replayLabel = $("replayLabel"), replayPlay = $("replayPlay");
+  const issuesList = $("issuesList"), clipPane = $("clipBody"), assetsList = $("assetsList");
+  const issueCount = $("issueCount"), assetCount = $("assetCount"), actDot = $("actDot");
 
-  let current = 0;
-  function show(i) {
+  let current = -1, touched = false;
+  function show(i, byPerson = true) {
+    if (byPerson) touched = true;
+    const was = current;
     current = i;
     tabButtons.forEach((b, k) => {
       b.setAttribute("aria-selected", String(k === i));
       b.tabIndex = k === i ? 0 : -1;
     });
     panes.forEach((p, k) => { p.hidden = k !== i; });
-    if (i === 0) stickBottom(true);
+    if (TABS[i] === "activity") {
+      actDot.hidden = true;
+      requestAnimationFrame(() => stick(true));
+    }
+    if (was !== i) app.emit("panel", TABS[i]);
   }
   tabButtons.forEach((b, i) => {
     b.addEventListener("click", () => show(i));
+    tip(b, t(`tab.${TABS[i]}Tip`), String(i + 1), t(`tab.${TABS[i]}`));
     b.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-        e.preventDefault();
-        e.stopPropagation();
-        const n = (i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length;
-        show(n);
-        tabButtons[n].focus();
-      }
+      const n = e.key === "ArrowRight" ? (i + 1) % TABS.length : e.key === "ArrowLeft" ? (i + TABS.length - 1) % TABS.length
+        : e.key === "Home" ? 0 : e.key === "End" ? TABS.length - 1 : -1;
+      if (n < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      show(n);
+      tabButtons[n].focus();
     });
   });
 
-  // ---------------------------------------------------------------- activity
-  let atBottom = true;
-  feed.addEventListener("scroll", () => { atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24; });
-  function stickBottom(force) {
-    if (force || atBottom) feed.scrollTop = feed.scrollHeight;
+  // ---------------------------------------------------------------- the first-run card
+  const intro = $("intro");
+  function renderIntro() {
+    if (storage("intro-done", false)) { intro.hidden = true; return; }
+    const done = () => {
+      store("intro-done", true);
+      intro.hidden = true;
+      note(tabButtons[current] || tabButtons[0], t("intro.gone"));
+      tabButtons[current]?.focus();
+    };
+    const ok = h("button", { type: "button", class: "text-btn solid sm", text: t("intro.ok") });
+    tip(ok, t("intro.okTip"));
+    pressable(ok, done);
+    const more = h("button", { type: "button", class: "link-btn", text: t("intro.keys") });
+    tip(more, t("help.btn"), "?");
+    pressable(more, () => app.openHelp());
+    intro.replaceChildren(
+      h("div", { class: "intro-head" }, h("strong", { class: "intro-title", id: "introTitle", text: t("intro.title") }), ok),
+      h("p", {}, t("intro.body"), " ", more));
+    intro.hidden = false;
   }
 
-  let feedKey = "";
-  function renderActivity() {
+  // ---------------------------------------------------------------- the working state at the top of the feed
+  const nowStrip = $("nowStrip");
+  function renderNow() {
+    const r = app.runText?.();
+    nowStrip.hidden = !r;
+    if (!r) return;
+    const p = app.running?.progress;
+    nowStrip.classList.toggle("is-stuck", r.stuck);
+    nowStrip.replaceChildren(...[
+      h("span", { class: "now-ic" }, icon(toolIcon(app.running.tool))),
+      h("span", { class: "now-text", text: r.text }),
+      PAID.has(app.running.tool) ? h("span", { class: "cost-chip", text: t("act.paid") }) : null,
+      h("span", { class: `now-bar${typeof p === "number" ? "" : " is-open"}`, style: { "--p": `${clamp((p || 0) * 100, 0, 100)}%` } }),
+    ].filter(Boolean));
+  }
+  app.on("running", renderNow);
+  app.on("tick", renderNow);
+
+  // ---------------------------------------------------------------- activity
+  let atBottom = true, unseen = 0;
+  rove(feed, t("list.keys"));
+  feed.addEventListener("scroll", () => {
+    atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24;
+    if (atBottom && unseen) { unseen = 0; renderPill(); }
+  });
+  function stick(force) {
+    if (force || atBottom) {
+      feed.scrollTop = feed.scrollHeight;
+      atBottom = true;
+      unseen = 0;
+      renderPill();
+    }
+  }
+  new ResizeObserver(() => stick(false)).observe(feed);
+  function renderPill() {
+    feedNew.hidden = !unseen;
+    $("feedNewText").textContent = t("act.newRows", { n: unseen });
+  }
+  pressable(feedNew, () => { feed.scrollTo({ top: feed.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); unseen = 0; renderPill(); feed.focus({ preventScroll: true }); });
+
+  const openResults = new Set(), openGroups = new Set();
+  let seen = null, feedKey = "";
+
+  function keyed(acts) {
+    const n = new Map();
+    return acts.map((a) => {
+      const base = `${a.ts}|${a.tool}|${a.batch ?? ""}`;
+      const k = (n.get(base) || 0) + 1;
+      n.set(base, k);
+      return { a, key: `${base}|${k}` };
+    });
+  }
+  const secsOf = (ts) => new Date(ts).getTime() / 1000;
+
+  const said = (item) => (item.d ||= describe(item.a, app.fps()));
+  const family = (item) => `${item.a.tool}|${said(item).files ? "files" : said(item).quiet ? "quiet" : ""}`;
+  // Runs of one tool (all of them fine, close together) become one row; failures always stand alone.
+  function grouped(items) {
+    const out = [];
+    for (let i = 0; i < items.length;) {
+      let j = i + 1;
+      const a = items[i].a, kin = family(items[i]);
+      if (a.ok !== false && a.tool !== "render") {
+        while (j < items.length && family(items[j]) === kin && items[j].a.ok !== false
+          && secsOf(items[j].a.ts) - secsOf(items[j - 1].a.ts) < GROUP_GAP_S) j += 1;
+      }
+      if (j - i >= GROUP_MIN) { out.push({ group: items.slice(i, j) }); i = j; } else { out.push(items[i]); i += 1; }
+    }
+    return out;
+  }
+
+  function timeLabel(ts) {
+    const d = new Date(ts);
+    const today = new Date().toDateString() === d.toDateString();
+    const hm = clock(ts).slice(0, 5);
+    return today ? hm : `${d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric" })} · ${hm}`;
+  }
+
+  function thumbLabel(path) {
+    const name = path.split("/").pop();
+    const fr = /(?:still|frame)_(\d+)/.exec(name);
+    if (fr) return timecode(+fr[1] / app.fps(), app.fps());
+    if (/^contact/.test(name)) return t("pic.contact");
+    const sh = /sheet_?(\d+)/.exec(name);
+    if (sh) return t("pic.sheet", { n: +sh[1] });
+    return name.replace(/\.\w+$/, "");
+  }
+  function pictures(a) {
+    return (a.files || []).map((p) => {
+      const fr = /(?:still|frame)_(\d+)/.exec(p);
+      return { url: `${BASE}/project/${p.split("/").map(encodeURIComponent).join("/")}`, label: thumbLabel(p), path: p,
+        t: fr ? +fr[1] / app.fps() : null };
+    });
+  }
+  function strip(a) {
+    const pics = pictures(a);
+    if (!pics.length) return null;
+    const MAX = 5;
+    const shown = pics.slice(0, pics.length > MAX ? MAX - 1 : MAX);
+    const kids = shown.map((p, i) => {
+      const b = h("button", { type: "button", class: "thumb" },
+        h("img", { src: p.url, alt: "", loading: "lazy", onerror: (e) => e.target.replaceWith(icon("i-pic", "thumb-gone")) }),
+        h("span", { class: "thumb-cap", text: p.label }));
+      tip(b, t("pic.open", { what: p.label }));
+      pressable(b, () => lightbox.open(pics, i, b));
+      return b;
+    });
+    if (pics.length > shown.length) {
+      const more = h("button", { type: "button", class: "thumb more", text: `+${pics.length - shown.length}` });
+      tip(more, t("pic.more", { n: pics.length - shown.length }));
+      pressable(more, () => lightbox.open(pics, shown.length, more));
+      kids.push(more);
+    }
+    return h("div", { class: "act-strip" }, ...kids);
+  }
+
+  function revealClips(ids, anchor) {
+    if (app.viewing) app.backToNow();
+    const found = ids.map((id) => app.clipById(id)).filter(Boolean);
+    if (!found.length) { note(anchor, t("act.gone"), "is-error"); return; }
+    const now = performance.now();
+    for (const c of found) app.changed.set(c.id, now);
+    const timed = found.filter((c) => c.start != null).sort((x, y) => x.start - y.start);
+    const first = timed[0] || found[0];
+    if (first.start != null) app.seek(first.start + Math.min(0.3, ((first.end ?? first.start) - first.start) / 2));
+    app.select(first.id);
+    note(anchor, count("act.shown", found.length));
+  }
+
+  function fixedLater(items, idx) {
+    const a = items[idx].a;
+    for (let j = idx + 1; j < items.length; j++) if (items[j].a.tool === a.tool && items[j].a.ok) return items[j].a.ts;
+    return null;
+  }
+
+  function rowEl(item, idx, items, inGroup = false) {
+    const { a, key } = item;
+    const d = said(item);
+    const viewing = a.batch != null && app.viewing?.n === a.batch;
+    const later = d.fail ? fixedLater(items, idx) : null;
+    const isNew = seen && !seen.has(key);
+    const li = h("li", { class: `act k-${d.kind}${d.fail ? " is-fail" : ""}${later ? " is-fixed" : ""}${viewing ? " is-viewing" : ""}${isNew ? " is-new" : ""}${inGroup ? " in-group" : ""}` });
+    const live = d.ids.length && d.ids.some((id) => app.clipById(id, app.state?.tracks));
+    let title;
+    if (live) {
+      title = h("button", { type: "button", class: "act-text act-link", text: d.text });
+      tip(title, t("act.linkTip"));
+      pressable(title, () => revealClips(d.ids, title));
+    } else {
+      title = h("span", { class: "act-text", text: d.text });
+    }
+    const actions = [];
+    if (a.seconds != null && a.text && a.text.trim()) {          // rows made from history alone have nothing more to show
+      const pre = h("pre", { class: "act-result", text: a.text });
+      actions.push({ btn: disclosure(t("act.result"), pre, openResults.has(key), (on) => { on ? openResults.add(key) : openResults.delete(key); }), body: pre });
+    }
+    if (a.batch != null && !d.quiet && (app.state?.history || []).some((x) => x.n === a.batch)) {
+      const b = h("button", { type: "button", class: "text-btn mini then", "aria-pressed": String(viewing) },
+        icon("i-history"), h("span", { text: viewing ? t("act.thenOn") : t("act.then") }));
+      tip(b, viewing ? t("act.thenOnTip") : t("act.thenTip", { n: a.batch }));
+      pressable(b, async () => {
+        if (viewing) { app.backToNow(); return; }
+        if (b.classList.contains("is-busy")) return;
+        b.classList.add("is-busy");
+        await app.viewHistory(a.batch);
+        b.classList.remove("is-busy");
+      });
+      actions.push({ btn: b });
+    }
+    if (d.action === "watch" && app.state?.render?.delivered && items.slice(idx + 1).every((x) => x.a.tool !== "render")) {
+      const b = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-play"), h("span", { text: t("act.watch") }));
+      tip(b, t("act.watchTip"));
+      pressable(b, () => {
+        if (app.viewing) app.backToNow();
+        app.setSource("delivered");
+        app.seek(0);
+        app.setPlaying(true, "ui");
+        note(b, t("act.watching"));
+      });
+      actions.push({ btn: b });
+    }
+    if (d.action === "issues" && (app.state?.issues || []).length) {
+      const b = h("button", { type: "button", class: "text-btn mini" }, icon("i-alert"), h("span", { text: t("act.showIssues") }));
+      tip(b, t("act.showIssuesTip"), "3");
+      pressable(b, () => app.showPanel("issues"));
+      actions.push({ btn: b });
+    }
+    const secs = a.seconds != null && a.seconds >= 1 ? elapsed(a.seconds) : null;
+    li.append(
+      h("span", { class: "act-ic" }, icon(d.fail ? "i-alert" : d.icon)),
+      h("div", { class: "act-main" },
+        title,
+        d.sub ? h("div", { class: `act-sub${d.mono ? " mono" : ""} ${d.subKind}`, text: d.sub }) : null,
+        d.next ? h("div", { class: "act-next", text: later ? t("act.fixedLater", { at: clock(later) }) : t("act.agentSees") }) : null,
+        strip(a),
+        actions.length ? h("div", { class: "act-actions" }, ...actions.map((x) => x.btn)) : null,
+        ...actions.filter((x) => x.body).map((x) => x.body)),
+      h("div", { class: "act-side" },
+        h("span", { class: "act-time num", text: clock(a.ts) }),
+        secs ? h("span", { class: "act-secs num", text: secs }) : null,
+        d.cost != null ? h("span", { class: "cost-chip num", text: money(d.cost) }) : null));
+    if (!d.fail) tip(li.querySelector(".act-ic"), toolName(a.tool));
+    else tip(li.querySelector(".act-ic"), t("act.failedTip"));
+    return li;
+  }
+
+  function groupEl(g, items) {
+    const first = g.group[0], last = g.group.at(-1);
+    const open = openGroups.has(first.key) || g.group.some((x) => x.a.batch != null && x.a.batch === app.viewing?.n);
+    const d = said(last);
+    const list = h("ol", { class: "act-list sub" }, ...g.group.map((x) => rowEl(x, items.indexOf(x), items, true)));
+    const isNew = seen && g.group.some((x) => !seen.has(x.key));
+    const cost = g.group.reduce((s, x) => s + (costOf(x.a) || 0), 0);
+    const sentence = g.group.every((x) => said(x).files) ? count("act.edit.files", g.group.length) : groupSentence(first.a.tool, g.group.length);
+    const btn = disclosure(sentence, list, open, (on) => { on ? openGroups.add(first.key) : openGroups.delete(first.key); }, "act-group-btn");
+    tip(btn, open ? t("act.groupClose") : t("act.groupOpen"));
+    btn.addEventListener("click", () => tip(btn, btn.getAttribute("aria-expanded") === "true" ? t("act.groupClose") : t("act.groupOpen")));
+    return h("li", { class: `act act-group k-${toolKind(first.a.tool)}${isNew ? " is-new" : ""}` },
+      h("span", { class: "act-ic" }, icon(toolIcon(first.a.tool))),
+      h("div", { class: "act-main" }, btn, h("div", { class: "act-sub", text: `${t("act.latest")}: ${d.text}` }), list),
+      h("div", { class: "act-side" },
+        h("span", { class: "act-time num", text: `${clock(first.a.ts).slice(0, 5)}–${clock(last.a.ts).slice(0, 5)}` }),
+        cost ? h("span", { class: "cost-chip num", text: money(cost) }) : null));
+  }
+
+  function renderActivity(force = false) {
     const acts = app.state?.activity || [];
-    const viewing = app.viewing?.n ?? null;
-    const key = `${acts.length}:${acts.at(-1)?.ts}:${viewing}:${app.state?.revision}`;
-    if (key === feedKey) return;
+    const key = `${acts.length}:${acts.at(-1)?.ts}:${app.viewing?.n ?? ""}:${app.state?.revision}:${app.state?.render?.delivered?.at}`;
+    if (key === feedKey && !force) return;
     feedKey = key;
     if (!acts.length) {
-      feed.replaceChildren(h("p", { class: "empty-note", text: t("act.empty") }));
+      feed.replaceChildren(emptyState("i-history", t("act.emptyTitle"), t("act.empty")));
+      seen = new Set();
       return;
     }
-    const items = acts.map((a) => {
-      const body = [
-        h("span", { class: "act-time", text: clock(a.ts) }),
-        h("span", { class: `act-tool tool-${a.tool}`, text: a.tool }),
-        h("span", { class: "act-sum", text: a.summary, title: a.summary }),
-        h("span", { class: "act-secs", text: a.seconds != null ? `${a.seconds < 10 ? a.seconds.toFixed(1) : Math.round(a.seconds)} s` : "" }),
-      ];
-      const cls = `act${a.ok ? "" : " is-fail"}${a.batch != null && a.batch === viewing ? " is-viewing" : ""}`;
-      if (a.batch != null) {
-        return h("li", { class: cls },
-          h("button", { class: "act-btn", type: "button", title: `${t("act.open")} (${t("act.batch", { n: a.batch })})`,
-            onclick: () => app.viewHistory(a.batch) }, ...body));
-      }
-      return h("li", { class: cls }, h("div", { class: "act-btn is-static" }, ...body,
-        a.ok ? null : h("span", { class: "sr-only", text: t("act.failed") })));
-    });
-    feed.replaceChildren(h("ol", { class: "act-list" }, ...items));
-    stickBottom(false);
+    const items = keyed(acts);
+    const out = [];
+    let prevTs = null;
+    for (const g of grouped(items)) {
+      const ts = (g.group ? g.group[0] : g).a.ts;
+      if (!prevTs || secsOf(ts) - secsOf(prevTs) >= GROUP_GAP_S) out.push(h("li", { class: "act-divider", "aria-hidden": "true" }, h("span", { text: timeLabel(ts) })));
+      prevTs = (g.group ? g.group.at(-1) : g).a.ts;
+      out.push(g.group ? groupEl(g, items) : rowEl(g, items.indexOf(g), items));
+    }
+    const fresh = seen ? items.filter((x) => !seen.has(x.key)).length : 0;
+    const top = feed.scrollTop;
+    feed.replaceChildren(h("ol", { class: "act-list" }, ...out));
+    seen = new Set(items.map((x) => x.key));
+    if (atBottom) stick(true);
+    else {
+      feed.scrollTop = top;
+      unseen += fresh;
+      renderPill();
+    }
+    if (fresh && TABS[current] !== "activity") actDot.hidden = false;
   }
 
   function renderReplay() {
@@ -82,48 +587,96 @@ export function createPanel(app) {
     replay.hidden = !hist.length;
     if (!hist.length) return;
     replayRange.max = String(hist.length);
-    const idx = app.viewing ? hist.findIndex((x) => x.n === app.viewing.n) : hist.length;
+    const idx = app.historyIndex();
     replayRange.value = String(idx < 0 ? hist.length : idx);
-    const pct = (Number(replayRange.value) / hist.length) * 100;
-    replayRange.style.setProperty("--fill", `${pct}%`);
-    replayLabel.textContent = app.viewing ? `${t("act.batch", { n: app.viewing.n })} / ${hist.at(-1).n}` : t("act.now");
+    replayRange.style.setProperty("--fill", `${(Number(replayRange.value) / hist.length) * 100}%`);
+    replayRange.setAttribute("aria-valuetext", app.viewing ? t("act.batchOf", { n: app.viewing.n, of: hist.at(-1).n }) : t("act.now"));
+    tip(replayRange, app.viewing ? t("act.batchOf", { n: app.viewing.n, of: hist.at(-1).n }) : t("act.replayHint"));
+    replayLabel.textContent = app.viewing ? t("act.batchOf", { n: app.viewing.n, of: hist.at(-1).n }) : t("act.now");
     replayPlay.setAttribute("aria-pressed", String(!!app.replaying));
-    replayPlay.title = app.replaying ? t("act.stopReplay") : t("act.playReplay");
-    replayPlay.setAttribute("aria-label", replayPlay.title);
+    tip(replayPlay, app.replaying ? t("act.stopReplay") : t("act.playReplay"));
+    const i = app.historyIndex();
+    disable($("replayPrev"), i <= 0 ? t("act.atFirst") : null, t("act.prev"));
+    disable($("replayNext"), !app.viewing ? t("act.atNow") : null, t("act.next"));
+    requestAnimationFrame(() => stick(false));
   }
   replayRange.addEventListener("input", () => {
     const hist = app.state?.history || [];
     const i = Number(replayRange.value);
     if (i >= hist.length) app.backToNow(); else app.viewHistory(hist[i].n);
   });
-  document.getElementById("replayPrev").addEventListener("click", () => app.stepHistory(-1));
-  document.getElementById("replayNext").addEventListener("click", () => app.stepHistory(1));
-  replayPlay.addEventListener("click", () => app.toggleReplay());
+  const stepBtn = (id, d) => {
+    const b = $(id);
+    pressable(b, async () => {
+      const slow = setTimeout(() => b.classList.add("is-busy"), 150);
+      const moved = await app.stepHistory(d);
+      clearTimeout(slow);
+      b.classList.remove("is-busy");
+      if (!moved) note(b, d < 0 ? t("act.noEarlier") : t("act.atNow"));
+    });
+  };
+  stepBtn("replayPrev", -1);
+  stepBtn("replayNext", 1);
+  pressable(replayPlay, () => app.toggleReplay());
 
   // ---------------------------------------------------------------- issues
+  const SOURCE = { check: "src.check", layout: "src.layout", film: "src.film", preview: "src.preview" };
+  function issueEl(is) {
+    const b = h("button", { type: "button", class: `iss lv-${is.level}` },
+      h("span", { class: "iss-text", text: is.text }),
+      h("span", { class: "iss-meta" },
+        is.t != null ? h("span", { class: "chip num", text: timecode(is.t, app.fps()) }) : null,
+        is.clip ? h("span", { class: "chip mono", text: is.clip }) : null,
+        h("span", { class: "chip", text: has(SOURCE[is.source] || "") ? t(SOURCE[is.source]) : is.source })));
+    const where = is.clip || is.t != null;
+    tip(b, where ? t("iss.goTip") : t("iss.noWhere"));
+    pressable(b, () => {
+      if (!where) { note(b, t("iss.noWhere")); return; }
+      if (app.viewing) app.backToNow();
+      app.openIssue(is);
+      note(b, is.t != null ? t("iss.went", { t: timecode(is.t, app.fps()) }) : t("iss.selected", { id: is.clip }));
+    });
+    return h("li", {}, b);
+  }
+  function lastChecked() {
+    const acts = app.state?.activity || [];
+    const r = [...acts].reverse().find((a) => ["check", "preview", "render"].includes(a.tool) && a.ok !== null);
+    return r ? r.ts : app.state?.render?.last?.at || null;
+  }
+  let issuesKey = "";
   function renderIssues() {
     const issues = app.state?.issues || [];
-    const errors = issues.filter((i) => i.level === "error").length;
-    issueCount.textContent = issues.length ? String(issues.length) : "";
-    issueCount.className = `tab-count${errors ? " is-error" : ""}`;
-    if (!issues.length) {
-      issuesList.replaceChildren(h("p", { class: "empty-note", text: t("iss.none") }));
+    const pv = previewIssues(app.state?.activity || [], (id) => !!app.clipById(id, app.state?.tracks));
+    const key = JSON.stringify([issues, pv, app.state?.revision]);
+    const errors = issues.filter((i) => i.level === "error").length + (pv && !pv.stale ? pv.rows.filter((r) => r.level === "error").length : 0);
+    const total = issues.length + (pv && !pv.stale ? pv.rows.length : 0);
+    issueCount.textContent = total ? String(total) : "";
+    issueCount.className = `tab-count${errors ? " is-error" : total ? " is-warn" : ""}`;
+    if (key === issuesKey) return;
+    issuesKey = key;
+    const checked = lastChecked();
+    const out = [];
+    if (!issues.length && !(pv && pv.rows.length)) {
+      issuesList.replaceChildren(emptyState("i-check", t("iss.noneTitle"),
+        checked ? t("iss.checkedAt", { at: timeLabel(checked) }) : t("iss.none")));
+      issuesList.firstChild.classList.toggle("is-ok", !!checked);
       return;
     }
-    const groups = ["error", "warning", "advice"].map((lv) => {
+    for (const lv of ["error", "warning", "advice"]) {
       const list = issues.filter((i) => i.level === lv);
-      if (!list.length) return null;
-      return h("section", { class: "iss-group" },
+      if (!list.length) continue;
+      out.push(h("section", { class: "iss-group" },
         h("h3", { class: `iss-head lv-${lv}` }, h("span", { class: "lv-dot" }), t(`iss.${lv}`), h("span", { class: "iss-n", text: String(list.length) })),
-        h("ul", { class: "iss-list" }, ...list.map((is) => h("li", {},
-          h("button", { type: "button", class: `iss lv-${is.level}`, onclick: () => app.openIssue(is) },
-            h("span", { class: "iss-text", text: is.text }),
-            h("span", { class: "iss-meta" },
-              is.t != null ? h("span", { class: "chip mono", text: timecode(is.t, app.fps()) }) : null,
-              is.clip ? h("span", { class: "chip mono", text: is.clip }) : null,
-              h("span", { class: "chip", text: is.source })))))));
-    });
-    issuesList.replaceChildren(...groups.filter(Boolean));
+        h("ul", { class: "iss-list" }, ...list.map(issueEl))));
+    }
+    if (pv && pv.rows.length) {
+      out.push(h("section", { class: `iss-group${pv.stale ? " is-stale" : ""}` },
+        h("h3", { class: "iss-head" }, icon("i-eye", "iss-ic"), t("iss.preview", { at: clock(pv.at) }), h("span", { class: "iss-n", text: String(pv.rows.length) })),
+        pv.stale ? h("p", { class: "iss-note", text: t("iss.previewStale") }) : null,
+        h("ul", { class: "iss-list" }, ...pv.rows.map(issueEl))));
+    }
+    if (checked) out.push(h("p", { class: "iss-foot", text: t("iss.checkedAt", { at: timeLabel(checked) }) }));
+    issuesList.replaceChildren(...out);
   }
 
   // ---------------------------------------------------------------- clip
@@ -134,47 +687,98 @@ export function createPanel(app) {
   function row(label, ...value) {
     return h("div", { class: "kv" }, h("dt", { text: label }), h("dd", {}, ...value));
   }
+  function playback(c) {
+    const out = [];
+    if (c.rate != null && c.rate !== 1) out.push(t("pb.rate", { v: c.rate }));
+    if (c.reverse) out.push(t("pb.reverse"));
+    if (c.hold != null) out.push(t("pb.hold", { v: c.hold }));
+    if (c.volume != null) out.push(t("pb.volume", { v: Math.round(c.volume * 100) }));
+    if (c.loop) out.push(t("pb.loop"));
+    if (c.transition) out.push(t("pb.transition", { type: c.transition.type, d: c.transition.dur }));
+    if (c.enter) out.push(t("pb.enter", { type: c.enter.preset, d: c.enter.dur }));
+    if (c.exit) out.push(t("pb.exit", { type: c.exit.preset, d: c.exit.dur }));
+    for (const [k, v] of Object.entries(c.keyframes || {})) out.push(t("pb.keys", { what: k, n: v.length }));
+    return out;
+  }
+  function lastChange(id) {
+    const acts = app.state?.activity || [];
+    const word = new RegExp(`(^|[^\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`);
+    return [...acts].reverse().find((a) => a.tool === "edit" && a.ok && word.test(a.text || a.summary || ""));
+  }
+  function clipLabel(c) {
+    if (c.label && c.label !== c.id) return c.label;
+    const p = c.raw?.text || c.raw?.props?.title || c.raw?.props?.text;
+    return typeof p === "string" ? p : null;
+  }
+  let clipOpen = storage("clip-json", false);
+  async function copy(text, anchor) {
+    try {
+      await navigator.clipboard.writeText(text);
+      note(anchor, t("clip.copied"));
+    } catch {
+      note(anchor, t("clip.copyFailed"), "is-error");
+    }
+  }
   function renderClip() {
     const id = app.selected;
     if (!id) {
-      clipPane.replaceChildren(h("p", { class: "empty-note", text: t("clip.none") }));
+      clipPane.replaceChildren(emptyState("i-target", t("clip.noneTitle"), t("clip.none")));
       return;
     }
     const f = findClip(id);
     if (!f) {
-      clipPane.replaceChildren(h("p", { class: "empty-note" }, h("span", { class: "mono", text: id }), " · ", t("clip.missing")));
+      clipPane.replaceChildren(emptyState("i-target", t("clip.goneTitle", { id }), app.viewing ? t("clip.notThen") : t("clip.missing")));
       return;
     }
     const { c, tr } = f;
     const fps = app.fps();
-    const flags = [];
-    if (c.rate != null) flags.push(`rate ${c.rate}`);
-    if (c.reverse) flags.push("reverse");
-    if (c.hold != null) flags.push(`hold ${c.hold}`);
-    if (c.volume != null) flags.push(`volume ${c.volume}`);
-    if (c.loop) flags.push("loop");
-    if (c.transition) flags.push(`${c.transition.type} ${c.transition.dur} s`);
-    if (c.enter) flags.push(`enter ${c.enter.preset} ${c.enter.dur} s`);
-    if (c.exit) flags.push(`exit ${c.exit.preset} ${c.exit.dur} s`);
-    for (const [k, v] of Object.entries(c.keyframes || {})) flags.push(`${k} ◆${v.length}`);
     const asset = c.asset ? (app.state.assets || []).find((a) => a.id === c.asset) : null;
-    const cv = app.state.canvas;
+    const cv = app.state.canvas || app.lastGood?.canvas;
+    const label = clipLabel(c);
+    const typeWord = has(`type.${c.type}`) ? t(`type.${c.type}`) : c.type;
+    const timed = c.start != null && c.end != null;
+    const changed = lastChange(c.id);
+    const probs = (app.state.issues || []).filter((i) => i.clip === c.id);
+    const flags = playback(c);
 
+    const go = h("button", { type: "button", class: "text-btn mini" }, icon("i-jump"), h("span", { text: t("clip.go") }));
+    disable(go, timed ? null : t("clip.noTime"), t("clip.goTip"));
+    pressable(go, () => { app.seek(c.start); note(go, t("iss.went", { t: timecode(c.start, fps) })); });
+    const ask = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-chat"), h("span", { text: t("clip.ask") }));
+    tip(ask, t("clip.askTip"));
+    pressable(ask, () => { app.showPanel("chat"); app.emit("ask-about", c.id); });
+
+    const json = h("pre", { class: "json" }, ...highlight(c.raw));
+    const copyId = h("button", { type: "button", class: "icon-btn sm" }, icon("i-copy"));
+    tip(copyId, t("clip.copyId"));
+    pressable(copyId, () => copy(c.id, copyId));
+    const copyJson = h("button", { type: "button", class: "text-btn mini" }, icon("i-copy"), h("span", { text: t("clip.copyJson") }));
+    tip(copyJson, t("clip.copyJsonTip"));
+    pressable(copyJson, () => copy(JSON.stringify(c.raw, null, 2), copyJson));
     const kids = [
       h("header", { class: "clip-head" },
         h("span", { class: "swatch", style: { background: typeColor(c.type) } }),
-        h("span", { class: "clip-id mono", text: c.id }),
-        h("span", { class: "clip-type", text: `${c.type} · ${tr.id}` })),
-      c.label && c.label !== c.id ? h("p", { class: "clip-label", text: c.label }) : null,
+        h("span", { class: "clip-type", text: typeWord }),
+        h("span", { class: "clip-id mono", text: c.id, title: c.id }), copyId),
+      label ? h("p", { class: "clip-label", text: `“${label}”` }) : null,
+      h("p", { class: "clip-lead" }, timed
+        ? t("clip.onScreen", { a: timecode(c.start, fps), b: timecode(c.end, fps), d: `${(c.end - c.start).toFixed(2)} ${t("unit.s")}` })
+        : t("clip.noTime")),
+      h("div", { class: "clip-actions" }, go, ask),
+      probs.length ? h("ul", { class: "iss-list clip-probs" }, ...probs.map(issueEl)) : null,
+      asset?.missing ? h("p", { class: "missing-line" }, icon("i-alert"), t("as.missingAt", { path: asset.path })) : null,
       h("dl", { class: "kvs" },
-        row(t("clip.times"), h("span", { class: "mono", text: `${timecode(c.start, fps)} – ${timecode(c.end, fps)}` }),
-          h("span", { class: "dim", text: `  ${(c.end - c.start).toFixed(2)} s` })),
-        row(t("clip.written"), h("span", { class: "mono", text: writtenText(c.written) })),
-        flags.length ? row(t("clip.flags"), ...flags.map((s) => h("span", { class: "chip mono", text: s }))) : null,
-        row(t("clip.box"), c.box === "full" || !c.box ? t("clip.full") : boxView(c.box, cv)),
-        asset ? row(t("clip.asset"), assetPreview(asset)) : null),
-      h("h3", { class: "sub-head", text: t("clip.json") }),
-      h("pre", { class: "json" }, ...highlight(c.raw)),
+        row(t("clip.track"), h("span", { text: tr.id, class: "mono" }), h("span", { class: "dim", text: has(`kind.${tr.kind}`) ? t(`kind.${tr.kind}`) : tr.kind })),
+        timed ? row(t("clip.duration"), h("span", { class: "num", text: `${(c.end - c.start).toFixed(2)} ${t("unit.s")}` })) : null,
+        flags.length ? row(t("clip.flags"), ...flags.map((s) => h("span", { class: "chip", text: s }))) : null,
+        c.box && c.box !== "full" && cv ? row(t("clip.box"), boxView(c.box, cv)) : row(t("clip.box"), h("span", { text: t("clip.full") })),
+        asset ? row(t("clip.asset"), assetPreview(asset)) : null,
+        changed ? row(t("clip.changed"), h("span", { class: "num", text: clock(changed.ts) }), h("span", { class: "dim", text: describe(changed, fps).text })) : null,
+        c.written ? row(t("clip.written"), h("span", { class: "mono dim", text: writtenText(c.written) })) : null),
+      h("div", { class: "clip-json" },
+        h("div", { class: "clip-json-head" },
+          disclosure(t("clip.json"), json, clipOpen, (on) => { clipOpen = on; store("clip-json", on); }), copyJson),
+        json),
     ];
     clipPane.replaceChildren(...kids.filter(Boolean));
   }
@@ -182,19 +786,30 @@ export function createPanel(app) {
   function boxView(b, cv) {
     const W = 120, H = Math.round((W * cv.height) / cv.width);
     const s = W / cv.width;
+    const out = b.x < 0 || b.y < 0 || b.x + b.w > cv.width || b.y + b.h > cv.height;
     return h("span", { class: "box-view" },
       h("span", { class: "box-frame", style: { width: `${W}px`, height: `${H}px` } },
-        h("span", { class: "box-rect", style: { left: `${b.x * s}px`, top: `${b.y * s}px`, width: `${b.w * s}px`, height: `${b.h * s}px` } })),
-      h("span", { class: "mono", text: `x ${b.x}  y ${b.y}\nw ${b.w}  h ${b.h}` }));
+        h("span", { class: `box-rect${out ? " is-out" : ""}`, style: { left: `${b.x * s}px`, top: `${b.y * s}px`, width: `${b.w * s}px`, height: `${b.h * s}px` } })),
+      h("span", { class: "box-nums" },
+        h("span", { class: "num", text: `${b.w} × ${b.h}` }),
+        h("span", { class: "dim num", text: t("clip.at", { x: b.x, y: b.y }) }),
+        out ? h("span", { class: "is-error", text: t("clip.outside") }) : null));
   }
 
+  function thumbFor(a, hgt, cls) {
+    if (a.missing) return h("span", { class: `${cls} is-missing` }, icon("i-alert"));
+    if (!["image", "video", "evidence"].includes(a.kind)) return h("span", { class: `${cls} k-${a.kind}` }, icon(a.kind === "audio" ? "i-mic" : "i-box"));
+    return h("span", { class: cls },
+      h("img", { src: `${BASE}/api/thumb?asset=${encodeURIComponent(a.id)}&h=${hgt}`, alt: "", loading: "lazy",
+        onerror: (e) => e.target.replaceWith(icon("i-pic", "thumb-gone")) }));
+  }
+  function assetMeta(a) {
+    return [has(`ak.${a.kind}`) ? t(`ak.${a.kind}`) : a.kind, a.width ? `${a.width}×${a.height}` : null,
+      a.duration ? `${a.duration.toFixed(1)} ${t("unit.s")}` : null].filter(Boolean).join(" · ");
+  }
   function assetPreview(a) {
-    const meta = [a.kind, a.width ? `${a.width}×${a.height}` : null, a.duration ? `${a.duration.toFixed(2)} s` : null].filter(Boolean).join(" · ");
-    const pic = ["image", "video", "evidence"].includes(a.kind)
-      ? h("img", { class: "asset-pic", src: `/api/thumb?asset=${encodeURIComponent(a.id)}&h=144`, alt: a.id, loading: "lazy" })
-      : null;
-    return h("span", { class: "asset-inline" }, pic,
-      h("span", {}, h("span", { class: "mono", text: a.id }), h("br"), h("span", { class: "dim", text: meta })));
+    return h("span", { class: "asset-inline" }, thumbFor(a, 144, "asset-pic"),
+      h("span", {}, h("span", { class: "mono", text: a.id }), h("br"), h("span", { class: a.missing ? "is-error" : "dim", text: a.missing ? t("as.missing") : assetMeta(a) })));
   }
 
   function highlight(v) {
@@ -219,36 +834,96 @@ export function createPanel(app) {
   let assetsKey = "";
   function renderAssets() {
     const assets = app.state?.assets || [];
+    const missing = assets.filter((a) => a.missing).length;
+    assetCount.textContent = missing ? String(missing) : "";
+    assetCount.className = `tab-count${missing ? " is-error" : ""}`;
+    tip(assetCount, missing ? count("as.missingN", missing) : "");
     const key = JSON.stringify(assets);
     if (key === assetsKey) return;
     assetsKey = key;
     if (!assets.length) {
-      assetsList.replaceChildren(h("p", { class: "empty-note", text: t("as.none") }));
+      assetsList.replaceChildren(emptyState("i-box", t("as.noneTitle"), t("as.none")));
       return;
     }
-    assetsList.replaceChildren(h("ul", { class: "assets" }, ...assets.map((a) => {
-      const visual = ["image", "video", "evidence"].includes(a.kind);
-      const meta = [a.width ? `${a.width}×${a.height}` : null, a.duration ? `${a.duration.toFixed(2)} s` : null].filter(Boolean).join(" · ");
-      return h("li", { class: "asset" },
-        h("span", { class: `asset-thumb k-${a.kind}` },
-          visual ? h("img", { src: `/api/thumb?asset=${encodeURIComponent(a.id)}&h=72`, alt: "", loading: "lazy" })
-            : h("span", { class: "asset-glyph", text: a.kind === "audio" ? "♪" : "·" })),
+    const sorted = [...assets].sort((x, y) => (y.missing ? 1 : 0) - (x.missing ? 1 : 0));
+    assetsList.replaceChildren(...[
+      missing ? h("p", { class: "missing-line" }, icon("i-alert"), count("as.missingN", missing)) : null,
+      h("ul", { class: "assets" }, ...sorted.map((a) => h("li", { class: `asset${a.missing ? " is-missing" : ""}` },
+        thumbFor(a, 72, "asset-thumb"),
         h("span", { class: "asset-info" },
-          h("span", { class: "asset-name" }, h("span", { class: "mono", text: a.id }), h("span", { class: "chip", text: a.kind })),
-          h("span", { class: "dim small", text: meta || a.path, title: a.path }),
+          h("span", { class: "asset-name" }, h("span", { class: "mono", text: a.id, title: a.id }),
+            a.missing ? h("span", { class: "chip is-error", text: t("as.missing") }) : null),
+          h("span", { class: "dim small", text: assetMeta(a) }),
+          h("span", { class: `small ${a.missing ? "is-error" : "faint"}`, text: a.path, title: a.path }),
           h("span", { class: "asset-users" },
             a.used_by?.length
-              ? a.used_by.map((id) => h("button", { type: "button", class: "chip mono is-link", text: id, onclick: () => { app.select(id); app.seekToClip(id); } }))
-              : h("span", { class: "dim small", text: t("as.unused") }))));
-    })));
+              ? [h("span", { class: "faint small", text: t("as.usedBy") }), ...a.used_by.map((id) => {
+                const b = h("button", { type: "button", class: "chip mono is-link", text: id });
+                tip(b, t("as.showClip", { id }));
+                pressable(b, () => {
+                  if (app.viewing) app.backToNow();
+                  app.select(id);
+                  app.seekToClip(id);
+                  note(b, t("iss.selected", { id }));
+                });
+                return b;
+              })]
+              : h("span", { class: "faint small", text: t("as.unused") }))))))].filter(Boolean));
   }
 
+  // ---------------------------------------------------------------- the picture viewer
+  const lightbox = (() => {
+    const dlg = $("lightbox"), img = $("lbImg");
+    let pics = [], at = 0, opener = null;
+    const prev = $("lbPrev"), next = $("lbNext"), close = $("lbClose");
+    tip(close, t("pic.close"), "Esc");
+    function render() {
+      const p = pics[at];
+      img.src = p.url;
+      img.alt = p.label;
+      $("lbTitle").textContent = p.label;
+      $("lbCount").textContent = pics.length > 1 ? `${at + 1} / ${pics.length}` : "";
+      const cap = $("lbCap");
+      cap.replaceChildren(h("span", { class: "mono dim", text: p.path }));
+      if (p.t != null) {
+        const go = h("button", { type: "button", class: "text-btn mini accent" }, icon("i-jump"), h("span", { text: t("pic.goto", { t: timecode(p.t, app.fps()) }) }));
+        tip(go, t("pic.gotoTip"));
+        pressable(go, () => { dlg.close(); if (app.viewing) app.backToNow(); app.seek(p.t); });
+        cap.append(go);
+      }
+      disable(prev, at === 0 ? t("pic.first") : null, t("pic.prev"), "←");
+      disable(next, at === pics.length - 1 ? t("pic.last") : null, t("pic.next"), "→");
+      prev.hidden = next.hidden = pics.length < 2;
+    }
+    const go = (d) => { const n = clamp(at + d, 0, pics.length - 1); if (n !== at) { at = n; render(); } };
+    pressable(prev, () => go(-1));
+    pressable(next, () => go(1));
+    pressable(close, () => dlg.close());
+    dlg.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); go(e.key === "ArrowLeft" ? -1 : 1); }
+      else if (e.key === "Home") { e.preventDefault(); at = 0; render(); }
+      else if (e.key === "End") { e.preventDefault(); at = pics.length - 1; render(); }
+      e.stopPropagation();          // the window's own shortcuts wait while the picture is open
+    });
+    closeOnBackdrop(dlg);
+    dlg.addEventListener("close", () => { img.removeAttribute("src"); opener?.isConnected && opener.focus(); });
+    return {
+      open(list, i, from) {
+        pics = list; at = i; opener = from;
+        render();
+        dlg.showModal();
+        close.focus();
+      },
+    };
+  })();
+
   // ---------------------------------------------------------------- hooks
-  app.on("state", () => { renderActivity(); renderReplay(); renderIssues(); renderAssets(); renderClip(); });
-  app.on("view", () => { renderActivity(); renderReplay(); renderClip(); });
+  app.on("state", () => { renderReplay(); renderActivity(); renderIssues(); renderAssets(); renderClip(); renderNow(); });
+  app.on("view", () => { renderReplay(); renderActivity(); renderClip(); });
   app.on("select", renderClip);
   app.on("replay", renderReplay);
 
-  show(0);
-  return { show, current: () => current };
+  renderIntro();
+  show(0, false);
+  return { show, current: () => current, touched: () => touched };
 }

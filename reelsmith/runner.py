@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import backends, cli_engines, guard
 from .agent import providers
+from .agent.loop import STOPPED
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +33,9 @@ RENDERER_SRC = ROOT / "renderer" / "src"
 STATE_FILE = Path("build") / "run_state.json"
 REPORT_FILE = Path("out") / "run_report.json"
 MESSAGES_FILE = Path("build") / "agent_messages.json"
+CHAT_STATE_FILE = Path("build") / "chat_state.json"          # a chat's session is not a headless run's
+CHAT_MESSAGES_FILE = Path("build") / "chat_messages.json"
+BUDGET_RESERVE = 0.05
 ENGINES = ("api", "agent-sdk", *cli_engines.ENGINES)
 # the model defaults to the provider's (api) or the backend's (agent-sdk) own
 DEFAULTS = {"engine": "api", "provider": providers.DEFAULT, "backend": "anthropic", "effort": "medium",
@@ -259,13 +263,53 @@ def fixup_prompt(problems: list[str]) -> str:
             + ". Fix exactly these, render again, and finish.")
 
 
+def chat_system(project: Path, ws) -> str:
+    """The conversation's system text (api and agent-sdk engines): no brief, a person at the other end."""
+    notes = ws.notes_path if ws is not None else None
+    return "\n".join([
+        "You edit a film project with the reelsmith tools (describe shows its cut, canvas and locale) for a person "
+        "who is talking to you while they watch it.",
+        f"Read the manual when you need it ({MANUAL}, or the manual tool)"
+        + (f"; the notes ({notes}) say what worked before" if notes else "") + ".",
+        f"Project: {project}. Pass it as `project` to every reelsmith tool.",
+    ])
+
+
+def chat_intro(project: Path) -> str:
+    """Opens the first message of a conversation on every engine."""
+    return ("(reelsmith watch) The person is watching this project in the reelsmith editor window and talking to you "
+            f"there. Project: {project}. It may already hold a film: look before you change it (describe). Do what "
+            "they ask with the reelsmith tools, then look at what you changed (preview) before you answer. Render only "
+            "when they ask for it or when the change is meant to be final. Answer briefly, in the person's language: "
+            "say what you did and what to look at (a time, a clip). A message may start with a line in brackets "
+            "saying what the person has selected in the window (a clip and its times, the playhead): \"here\" and "
+            "\"this\" mean that. Each message is one turn: when you answer, the turn ends and they may write again.")
+
+
+def context_line(context: dict | None) -> str:
+    """The window's selection as one bracketed line, or "" when there is none."""
+    if not isinstance(context, dict):
+        return ""
+    parts = []
+    clip = context.get("clip")
+    if isinstance(clip, str) and clip:
+        span = [context.get(k) for k in ("start", "end")]
+        times = (f" ({span[0]:.2f}-{span[1]:.2f} s)" if all(isinstance(v, (int, float)) for v in span) else "")
+        parts.append(f"selected clip {clip}{times}")
+    if isinstance(context.get("playhead"), (int, float)):
+        parts.append(f"playhead at {context['playhead']:.2f} s")
+    return f"[{'; '.join(parts)}]" if parts else ""
+
+
 # ------------------------------------------------------------------ options
 def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log, resume: str | None = None,
-                  budget_left: float | None = None):
+                  budget_left: float | None = None, append: str | None = None, login_ok: bool = False):
+    """login_ok: without ANTHROPIC_API_KEY, the anthropic backend runs on the claude CLI's own sign-in (the chat,
+    where a person is at the machine)."""
     from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
     backend = backends.get(settings.backend)
     key = key_for(ws, backend.key)
-    if not key:
+    if not key and not (login_ok and not backend.base_url):
         raise WorkspaceError(f"{backend.key} is missing: put it in the workspace .env or the environment")
     stall_ms = int(settings.stall_minutes * 60 * 1000)
     env = {
@@ -298,7 +342,8 @@ def build_options(project: Path, ws, settings: Settings, scope: guard.Scope, log
     return ClaudeAgentOptions(
         model=backends.cli_model(backend, settings.model), effort=settings.effort, thinking={"type": "adaptive"},
         max_budget_usd=round(budget, 2), max_turns=settings.max_turns,
-        system_prompt={"type": "preset", "preset": "claude_code", "append": system_append(project, ws)},
+        system_prompt={"type": "preset", "preset": "claude_code",
+                       "append": system_append(project, ws) if append is None else append},
         tools=BUILTIN_TOOLS, allowed_tools=BUILTIN_TOOLS + mcp_tools, permission_mode="dontAsk",
         setting_sources=[], cwd=str(project), mcp_servers={"reelsmith": server}, strict_mcp_config=True,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[guard.make_hook(scope, log.denied)], timeout=30)]},
@@ -329,15 +374,15 @@ def _slim(messages: list[dict]) -> list[dict]:
     return out
 
 
-def save_messages(project: Path, settings: Settings, session_id: str, messages: list[dict]) -> None:
-    write_json(project / MESSAGES_FILE, {"engine": "api", "provider": settings.provider, "model": settings.model,
-                                         "session_id": session_id, "saved_at": now_iso(),
-                                         "messages": _slim(messages)})
+def save_messages(project: Path, settings: Settings, session_id: str, messages: list[dict],
+                  file: Path = MESSAGES_FILE) -> None:
+    write_json(project / file, {"engine": "api", "provider": settings.provider, "model": settings.model,
+                                "session_id": session_id, "saved_at": now_iso(), "messages": _slim(messages)})
 
 
-def load_messages(project: Path, session_id: str | None = None) -> list[dict] | None:
+def load_messages(project: Path, session_id: str | None = None, file: Path = MESSAGES_FILE) -> list[dict] | None:
     """The saved conversation (of that session), or None when there is none to go on from."""
-    data = read_json(project / MESSAGES_FILE, None)
+    data = read_json(project / file, None)
     if not data or not data["messages"]:
         return None
     if session_id and data.get("session_id") != session_id:
@@ -369,15 +414,17 @@ def _clip(value, limit=4000):
 
 
 class SessionLog:
-    """build/runner.jsonl gets every message; stdout gets one readable line per step."""
+    """build/runner.jsonl gets every message; stdout gets one readable line per step. Every engine reports its
+    steps through say, called and returned, which a listener (the watch window's chat) hears as they happen."""
 
-    def __init__(self, project: Path, out=None):
-        self.path = project / "build" / "runner.jsonl"
+    def __init__(self, project: Path, out=None, name: str = "runner.jsonl", listener=None):
+        self.path = project / "build" / name
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.fh = open(self.path, "a", encoding="utf-8")
         self.out = out or sys.stdout
         self.denials: list[dict] = []
         self.cli_cost = True        # False: the CLI's cost figure is not this backend's
+        self.listener = listener    # (kind, data) for "say", "call" and "result"
 
     def event(self, kind: str, **data) -> None:
         row = {"t": now_iso(), "kind": kind, **data}
@@ -386,6 +433,33 @@ class SessionLog:
 
     def line(self, text: str) -> None:
         print(f"[{datetime.now():%H:%M:%S}] {text}", file=self.out, flush=True)
+
+    def tell(self, kind: str, **data) -> None:
+        if self.listener is None:
+            return
+        try:
+            self.listener(kind, data)
+        except Exception:  # noqa: BLE001 - a listener's failure never stops a session
+            pass
+
+    def say(self, text) -> None:
+        text = str(text or "").strip()
+        if text:
+            self.line("say " + re.sub(r"\s+", " ", text)[:200])
+            self.tell("say", text=text)
+
+    def called(self, name: str, args, call_id=None, line: str | None = None) -> None:
+        self.line(line or f"-> {name} {guard.brief_input(name, args)}")
+        # the project is the same on every call: the window's line names what else the call got
+        rest = {k: v for k, v in args.items() if k != "project"} if isinstance(args, dict) else args
+        self.tell("call", name=name, brief=guard.brief_input(name, rest) if rest else "", id=call_id)
+
+    def returned(self, call_id, ok: bool, text="", name=None, line: str | None = None) -> None:
+        """A tool call's outcome; `line` is what the console shows (failures only, in each engine's own words)."""
+        if line:
+            self.line(line)
+        self.tell("result", id=call_id, ok=bool(ok), text=re.sub(r"\s+", " ", str(text or "")).strip()[:400],
+                  name=name)
 
     def denied(self, tool: str, what: str, why: str) -> None:
         self.denials.append({"tool": tool, "input": what, "reason": why})
@@ -404,16 +478,19 @@ class SessionLog:
         elif isinstance(msg, AssistantMessage):
             for block in msg.content:
                 kind = type(block).__name__
-                if kind == "TextBlock" and block.text.strip():
-                    self.line("say " + re.sub(r"\s+", " ", block.text.strip())[:200])
+                if kind == "TextBlock" and getattr(msg, "error", None):
+                    self.line("say " + re.sub(r"\s+", " ", block.text.strip())[:200])   # the failure ends the turn
+                elif kind == "TextBlock":
+                    self.say(block.text)
                 elif kind == "ToolUseBlock":
-                    self.line(f"-> {block.name} {guard.brief_input(block.name, block.input)}")
+                    self.called(block.name, block.input, block.id)
         elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
             for block in msg.content:
-                if type(block).__name__ == "ToolResultBlock" and block.is_error:
+                if type(block).__name__ == "ToolResultBlock":
                     text = block.content if isinstance(block.content, str) else json.dumps(block.content,
                                                                                            ensure_ascii=False)
-                    self.line("<- error " + re.sub(r"\s+", " ", str(text))[:200])
+                    self.returned(block.tool_use_id, not block.is_error, text if block.is_error else "",
+                                  line="<- error " + re.sub(r"\s+", " ", str(text))[:200] if block.is_error else None)
         elif isinstance(msg, ResultMessage):
             cost = (f"cost=${msg.total_cost_usd or 0:.2f}" if self.cli_cost
                     else f"cli-priced=${msg.total_cost_usd or 0:.2f} (Claude prices, not used)")
@@ -440,9 +517,10 @@ def estimate_cost(seen: dict, model: str, backend: str = "anthropic") -> float:
 
 async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_session=None,
                       stall_s: float = 1800, wall_s: float = 7200, cost_fn=None,
-                      budget_usd: float | None = None) -> dict:
+                      budget_usd: float | None = None, stop: threading.Event | None = None) -> dict:
     """Drive one query. Never raises: the outcome says what happened. With cost_fn (usage rows -> $) and budget_usd,
-    the session stops once the spend estimated from its streamed usage reaches the budget."""
+    the session stops once the spend estimated from its streamed usage reaches the budget; with `stop`, once it is
+    set (the session is cancelled, as the watchdog cancels it)."""
     if query_fn is None:
         from claude_agent_sdk import query as query_fn
     from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage
@@ -480,13 +558,16 @@ async def run_session(options, prompt: str, log: SessionLog, query_fn=None, on_s
                 outcome["result"] = msg
 
     task = asyncio.create_task(consume())
+    tick = min(30.0, max(0.05, stall_s / 4), 0.25 if stop is not None else 30.0)
     while not task.done():
-        await asyncio.wait({task}, timeout=min(30.0, max(0.05, stall_s / 4)))
+        await asyncio.wait({task}, timeout=tick)
         now = time.monotonic()
         if task.done():
             break
         if not outcome["aborted"]:
-            if now - last > stall_s:
+            if stop is not None and stop.is_set():
+                outcome["aborted"] = STOPPED
+            elif now - last > stall_s:
                 outcome["aborted"] = f"no message for {int(now - last)} s"
             elif now - started > wall_s:
                 outcome["aborted"] = f"over the {wall_s / 60:g} minute limit"
@@ -634,19 +715,23 @@ def _without_images(tools: list) -> list:
 
 
 class Run:
+    STATE, MESSAGES, LOG = STATE_FILE, MESSAGES_FILE, "runner.jsonl"
+    LOGIN_OK = False                # agent-sdk: may run on the claude CLI's sign-in without a key
+
     def __init__(self, project, brief: str | None, settings: Settings, ws=None, query_fn=None, fresh=False,
-                 out=None, client_factory=None, tools_factory=None):
+                 out=None, client_factory=None, tools_factory=None, stop: threading.Event | None = None):
         self.project = Path(project)
         self.brief = (brief or "").strip()
         self.settings, self.ws, self.query_fn = settings, ws, query_fn
         # api engine seams: settings -> a ChatClient; (project, ws, scope, web) -> tools
         self.client_factory, self.tools_factory = client_factory, tools_factory
+        self.stop = stop            # set from another thread: every engine ends the session soon after
         self.api = settings.engine == "api"
         self.cli = settings.engine in cli_engines.ENGINES
-        self.state_path = self.project / STATE_FILE
+        self.state_path = self.project / self.STATE
         self.state = {} if fresh else (read_json(self.state_path, {}) or {})
         self.backend = backends.get(settings.backend)
-        self.log = SessionLog(self.project, out)
+        self.log = SessionLog(self.project, out, self.LOG)
         self.log.cli_cost = self.backend.cli_cost
         self.messages: list[dict] | None = None     # the api conversation of session self.messages_sid
         self.messages_sid: str | None = None
@@ -656,6 +741,20 @@ class Run:
     def save(self, **changes) -> None:
         self.state.update(changes, updated_at=now_iso())
         write_json(self.state_path, self.state)
+
+    # what the session is told; a conversation says other things
+    def sdk_append(self) -> str:
+        return system_append(self.project, self.ws)
+
+    def api_system(self) -> str:
+        return api_system(self.project, self.ws)
+
+    def cli_role(self) -> str:
+        return cli_role(self.project, self.ws)
+
+    def restart_prompt(self, prompt: str) -> str:
+        """The prompt of a session that was to resume but has no saved conversation (api engine)."""
+        return first_prompt(self.project, self.state.get("brief") or self.brief) + "\n\n" + prompt
 
     def spent(self) -> float:
         return round(float(self.state.get("cost_usd") or 0), 4)
@@ -696,10 +795,10 @@ class Run:
         history = None
         if resume:
             history = self.messages if self.messages and self.messages_sid == resume \
-                else load_messages(self.project, resume)
+                else load_messages(self.project, resume, self.MESSAGES)
             if not history:
                 self.log.line(f"no saved conversation of session {resume}: starting a new one")
-                prompt = first_prompt(self.project, self.state.get("brief") or self.brief) + "\n\n" + prompt
+                prompt = self.restart_prompt(prompt)
                 resume = None
         self.log.event("run", session=kind, resume=resume, prompt=prompt, engine="api", provider=prov.name,
                        model=s.model)
@@ -715,19 +814,19 @@ class Run:
 
         def on_turn(info: dict) -> None:
             # a killed process loses no conversation and no spend: plan() settles `inflight` on the next start
-            save_messages(self.project, s, info["session_id"], info["messages"])
+            save_messages(self.project, s, info["session_id"], info["messages"], self.MESSAGES)
             self.save(session_id=info["session_id"], inflight={
                 "session_id": info["session_id"], "cost_usd": info["cost_usd"], "turns": info["turn"],
                 "cost_estimated": not prov.reports_cost})
         limits = {"max_turns": s.max_turns, "budget_usd": max(0.0, budget_left), "wall_s": max(60.0, self.wall_left()),
                   "context_tokens": s.context_tokens, "max_image_edge": s.max_image_edge}
-        agent = Agent(client, tools, api_system(self.project, self.ws), limits, log=self.log, price=price,
-                      on_turn=on_turn, session_id=resume)
+        agent = Agent(client, tools, self.api_system(), limits, log=self.log, price=price,
+                      on_turn=on_turn, session_id=resume, stop=self.stop.is_set if self.stop else None)
         result = await in_thread(agent.run, prompt, history)
         row = api_summary(result)
         if row["turns"]:
             self.messages, self.messages_sid = result.get("messages"), result.get("session_id")
-            save_messages(self.project, s, self.messages_sid, self.messages)
+            save_messages(self.project, s, self.messages_sid, self.messages, self.MESSAGES)
         row.update(kind=kind, ended_at=now_iso())
         self.log.line(f"session spend {'~' if row['cost_estimated'] else ''}${row['cost_usd']:.2f} "
                       f"in {row['turns']} turns")
@@ -755,7 +854,7 @@ class Run:
         srv = cli_engines.server(scope)
         stall_s = s.stall_minutes * 60
         if not resume:
-            prompt = cli_role(self.project, self.ws) + "\n\n" + prompt
+            prompt = self.cli_role() + "\n\n" + prompt
         if engine == "codex":
             exe = cli_engines.find_codex()
             if not exe:
@@ -803,7 +902,7 @@ class Run:
         stream = stream_cls(self.log, price, progress, **extra)
         outcome = await in_thread(cli_engines.drive, cmd, self.project, env, prompt, stream, stall_s,
                                   max(60.0, self.wall_left()), max(0.0, budget_left),
-                                  self.project / "build" / "runner-cli.log")
+                                  self.project / "build" / "runner-cli.log", self.stop)
         row = cli_engines.summary(outcome)
         row.update(kind=kind, ended_at=now_iso())
         spend = f"~${row['cost_usd']:.2f}" if row["cost_known"] else "not counted"
@@ -819,7 +918,7 @@ class Run:
             return await self.cli_session(prompt, kind, resume)
         budget_left = self.settings.budget_usd - self.spent()
         options = build_options(self.project, self.ws, self.settings, self.scope(), self.log, resume=resume,
-                                budget_left=budget_left)
+                                budget_left=budget_left, append=self.sdk_append(), login_ok=self.LOGIN_OK)
         model, b = self.settings.model, self.backend
         self.log.event("run", session=kind, resume=resume, prompt=prompt, backend=b.name, model=model)
         self.log.line(f"{kind} session{' ' + resume if resume else ''} on {b.name} {model} "
@@ -834,7 +933,7 @@ class Run:
             "cost_fn": lambda rows: backends.cost(b, rows, model), "budget_usd": budget_left}
         outcome = await run_session(options, prompt, self.log, query_fn=self.query_fn, on_session=remember,
                                     stall_s=self.settings.stall_minutes * 60, wall_s=max(60.0, self.wall_left()),
-                                    **own_budget)
+                                    stop=self.stop, **own_budget)
         row = summary(outcome, model, b.name)
         row.update(kind=kind, ended_at=now_iso())
         if not b.cli_cost:
@@ -953,6 +1052,87 @@ class Run:
                       + ("" if delivered else " -- " + "; ".join(problems)[:300]))
         self.log.close()
         return out
+
+
+class Conversation(Run):
+    """The watch window's chat: one message is one turn, resumed on the same session next time, with no delivery
+    fix-ups. Its own state (build/chat_state.json), saved api conversation and log, so a headless run never shares
+    its session. The budget is the workspace runner's, counted across the conversation."""
+    STATE, MESSAGES, LOG = CHAT_STATE_FILE, CHAT_MESSAGES_FILE, "chat.jsonl"
+    LOGIN_OK = True
+
+    def __init__(self, project, settings: Settings, ws=None, listener=None, **kw):
+        super().__init__(project, None, settings, ws, out=kw.pop("out", None) or _Discard(), **kw)
+        self.log.listener = listener
+
+    def sdk_append(self) -> str:
+        return chat_system(self.project, self.ws)
+
+    def api_system(self) -> str:
+        return "\n".join([chat_system(self.project, self.ws),
+                          "Work only through your tools; there is no shell. Answering without a tool call ends your "
+                          "turn: do that once the person's message is dealt with.",
+                          f"Today is {datetime.now():%Y-%m-%d}."])
+
+    def cli_role(self) -> str:
+        return (chat_system(self.project, self.ws) + "\nMake media with the reelsmith tools (import_asset downloads "
+                "and copies files, capture screenshots pages); build/, out/ and .history/ are theirs.")
+
+    def restart_prompt(self, prompt: str) -> str:
+        return prompt if prompt.startswith("(reelsmith watch)") else chat_intro(self.project) + "\n\n" + prompt
+
+    def same_session(self) -> str | None:
+        """The session to resume: only one made on these settings (another engine or model starts a new one)."""
+        st, s = self.state, self.settings
+        if not st.get("session_id") or st.get("engine") != s.engine or (st.get("model") or "") != (s.model or ""):
+            return None
+        if self.api and st.get("provider") != s.provider:
+            return None
+        if not self.api and not self.cli and st.get("backend") != self.backend.name:
+            return None
+        return st["session_id"]
+
+    async def turn(self, message: str, context: dict | None = None) -> dict:
+        """One turn. The row says how it ended: refused (the budget), aborted (STOPPED when stopped), error."""
+        self.started = time.monotonic()          # max_minutes holds per turn: a conversation lasts as long as it likes
+        if self.state.get("inflight"):
+            self.settle_inflight()
+        s = self.settings
+        if self.spent() >= s.budget_usd - BUDGET_RESERVE:
+            self.log.close()
+            return {"refused": "budget", "cost_usd": 0.0, "spent_usd": self.spent(), "budget_usd": s.budget_usd,
+                    "turns": 0}
+        resume = self.same_session()
+        line = context_line(context)
+        prompt = (line + "\n" if line else "") + message.strip()
+        if not resume:
+            prompt = chat_intro(self.project) + "\n\n" + prompt
+            self.save(session_id=None, engine=s.engine, provider=s.provider, model=s.model,
+                      backend=None if self.api or self.cli else self.backend.name, started_at=now_iso())
+        try:
+            row = await self.session(prompt, "chat", resume)
+        except WorkspaceError as exc:
+            row = {"session_id": None, "error": str(exc), "aborted": None, "turns": 0, "cost_usd": 0.0}
+        finally:
+            self.log.close()
+        moved = guard.check_workspace(self.scope())
+        if moved:
+            row["error"] = moved
+        self.save(status="stopped" if row.get("aborted") == STOPPED else "idle")
+        row.update(spent_usd=self.spent(), budget_usd=s.budget_usd)
+        if self.spent() >= s.budget_usd - BUDGET_RESERVE:
+            row["budget_used_up"] = True
+        return row
+
+
+class _Discard:
+    """The console of a conversation: the window shows its steps."""
+
+    def write(self, text):
+        return len(text)
+
+    def flush(self):
+        pass
 
 
 def run(project, brief: str | None = None, model: str | None = None, budget_usd: float | None = None,

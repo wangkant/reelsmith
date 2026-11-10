@@ -9,7 +9,16 @@ const NAME = "reelsmith-import-guard";
 // css-loader and style-loader write inline-loader requests for every CSS import; the bundler's own loaders run TS.
 const LOADER_PACKAGES = ["css-loader", "style-loader", "@remotion/bundler"];
 const PACKAGE = /^(react|react\/.+|remotion|remotion\/.+|@remotion\/[a-z0-9][a-z0-9._-]*(\/.+)?)$/;
-const KIT = "@reelsmith/kit";
+export const KIT = "@reelsmith/kit";
+
+// the installed package an allowed request names ("react/jsx-runtime" -> "react"); null for any other request,
+// one with a "." or ".." segment included ("react/../react-dom" would reach every installed package)
+export const packageOf = (request) => {
+  const parts = String(request).split("/");
+  if (!PACKAGE.test(request) || parts.some((s) => s === "." || s === ".." || s === "")) return null;
+  return parts.slice(0, request.startsWith("@") ? 2 : 1).join("/");
+};
+export const dotted = (request) => PACKAGE.test(request) && packageOf(request) === null;
 
 const norm = (p) => {
   const abs = path.resolve(String(p));
@@ -72,9 +81,12 @@ export function importGuard({ root, library, warn = (m) => console.error(m) }) {
       return file === null || within(file, home) ? null : said(issuer, request, "it leaves the component folder");
     }
     if (request === KIT) return file === null || within(file, kit) ? null : said(issuer, request, "it did not resolve to the renderer kit");
-    if (PACKAGE.test(request)) {
-      return file === null || within(file, modules) ? null : said(issuer, request, "it did not resolve to the renderer's installed packages");
+    const pkg = packageOf(request);
+    if (pkg) {
+      return file === null || within(file, modules.map((m) => norm(path.join(m, pkg)))) ? null
+        : said(issuer, request, "it did not resolve to the renderer's installed packages");
     }
+    if (dotted(request)) return said(issuer, request, "a package path may not hold . or .. segments");
     return said(issuer, request, "");
   };
 

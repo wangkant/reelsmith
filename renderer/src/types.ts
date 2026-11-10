@@ -245,4 +245,6 @@ export type InspectItem = {
   text?: string;
   size?: number;
   color?: string;
+  /** text only: the share of it clipping ancestors inside its clip hide (0 when whole) */
+  cut?: number;
 };

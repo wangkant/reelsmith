@@ -11,14 +11,12 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import * as esbuild from "esbuild";
-import { importGuard, narrowContexts } from "./import-guard.mjs";
+import { KIT, dotted, importGuard, narrowContexts, packageOf } from "./import-guard.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = path.join(ROOT, "src");
 const require = createRequire(import.meta.url);
-// the same contract-section-6 rule the import guard holds the webpack build to
-const PACKAGE = /^(react|react\/.+|remotion|remotion\/.+|@remotion\/[a-z0-9][a-z0-9._-]*(\/.+)?)$/;
-const KIT = "@reelsmith/kit";
+const PROBING = Symbol("probing");
 const CODE = /\.[cm]?[jt]sx?$/i;
 
 const finish = (result, code) => process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(code));
@@ -52,7 +50,16 @@ const within = (file, dir) => {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 };
 
-/** Compiles one library component on its own (esbuild, packages left external): null, or why it cannot be bundled. */
+const real = (p) => {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+};
+
+/** Compiles one library component on its own (esbuild; packages are resolved in the renderer's node_modules, as
+ * webpack will, then left external): null, or why it cannot be bundled. */
 const probe = async (file, library) => {
   const name = path.basename(file, ".tsx");
   const refuse = (request, why) =>
@@ -60,18 +67,28 @@ const probe = async (file, library) => {
   const guard = {
     name: "guard",
     setup(b) {
-      b.onResolve({ filter: /.*/ }, (args) => {
-        if (args.kind === "entry-point") return undefined;
+      b.onResolve({ filter: /.*/ }, async (args) => {
+        if (args.kind === "entry-point" || args.pluginData === PROBING) return undefined;
         const req = args.path;
         if (/[!?#]/.test(req) || /^data:/i.test(req)) return { errors: [{ text: refuse(req, "loaders, queries and data: URIs") }] };
         if (req.startsWith("./") || req.startsWith("../")) {
           const target = path.resolve(args.resolveDir, req);
           if (!within(target, library)) return { errors: [{ text: refuse(req, "it leaves the component folder") }] };
           // css, images and fonts go through webpack's loaders; only code is compiled here
-          return CODE.test(req) || !path.extname(req) ? undefined : { path: target, external: true };
+          if (CODE.test(req) || !path.extname(req)) return undefined;
+          return fs.existsSync(target) ? { path: target, external: true } : { errors: [{ text: `Component ${name} imports '${req}', which is not there` }] };
         }
-        if (req === KIT || PACKAGE.test(req)) return { path: req, external: true };
-        return { errors: [{ text: refuse(req, "") }] };
+        if (req === KIT) return { path: req, external: true };
+        const pkg = packageOf(req);
+        if (pkg) {
+          const r = await b.resolve(req, { resolveDir: ROOT, kind: args.kind, pluginData: PROBING });
+          const home = path.join(ROOT, "node_modules", pkg);
+          if (r.errors.length || !(within(r.path, home) || within(real(r.path), real(home)))) {
+            return { errors: [{ text: refuse(req, "it is not installed in the renderer") }] };
+          }
+          return { path: req, external: true };
+        }
+        return { errors: [{ text: refuse(req, dotted(req) ? "a package path may not hold . or .. segments" : "") }] };
       });
     },
   };

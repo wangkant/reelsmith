@@ -183,6 +183,17 @@ def test_codex_installed_but_not_signed_in(machine, capsys):
     assert rows(json.loads(out))["codex"]["ok"] and SECRET not in out          # the file is looked for, never read
 
 
+@pytest.mark.parametrize("store", ["keyring", "auto"])
+def test_codex_signed_in_through_the_keyring_is_not_a_failure(machine, store):
+    (machine.codex_home / "auth.json").unlink()
+    (machine.codex_home / "config.toml").write_text(f'model = "x"\ncli_auth_credentials_store = "{store}"\n',
+                                                     encoding="utf-8")
+    got = rows(doctor.run_checks())["codex"]
+    assert got["ok"] and not got["fix"] and "OS keyring" in got["detail"] and "codex login status" in got["detail"]
+    (machine.codex_home / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
+    assert not rows(doctor.run_checks())["codex"]["ok"]
+
+
 @pytest.mark.parametrize("os_name, shell, fix", [
     ("windows", "", "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', "
                     "'User') + ';{scripts}', 'User')"),
