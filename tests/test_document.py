@@ -303,6 +303,13 @@ def test_captions_checks(demo):
     assert not find(issues, "error", "track cap")
     assert find(issues, "error", "track cap.items[1]", "not after its start")
     assert find(issues, "warning", "track cap.items[1]", "empty caption")
+    cap["items"] = [{"start": 0, "end": 3, "text": "a"}, {"start": 2.5, "end": 4, "text": "b"},
+                    {"start": 21, "end": 23, "text": "c"}, {"start": 22, "end": 24, "text": "d"}]
+    issues = issues_of(demo, data)
+    assert find(issues, "warning", "track cap.items[1]", "starts at 2.50 s, before items[0] ends (3.00 s)")
+    assert find(issues, "warning", "track cap.items[2]", "after the film's end (22.00 s)")
+    assert find(issues, "warning", "track cap.items[3]", "at or after the film's end")
+    assert not find(issues, "warning", "track cap.items[0]")
 
 
 def test_misc_warnings(demo):

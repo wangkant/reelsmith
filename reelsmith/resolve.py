@@ -1362,7 +1362,16 @@ def _written(value) -> str:
     return "" if value is None or T.is_number(value) else str(value)
 
 
-def _clip_summary(c, doc: D.Document) -> str:
+def _muted(c, a, root: Path | None) -> bool:
+    """A video clip at volume 0 whose source has sound: the default, easy to miss."""
+    path = project_file(root, a.path) if a is not None and root is not None else None
+    if c.volume or c.keyframes.get("volume") or path is None:
+        return False
+    from . import media
+    return media.stream_facts(path)[1]
+
+
+def _clip_summary(c, doc: D.Document, root: Path | None = None) -> str:
     bits: list[str] = []
     if c.type in ("image", "video", "evidence", "audio"):
         a = doc.assets.get(c.asset)
@@ -1372,6 +1381,7 @@ def _clip_summary(c, doc: D.Document) -> str:
     elif c.type == "video":
         bits += [c.fit] + ([f"trim {c.trim_in:g}s"] if c.trim_in else []) + (["loop"] if c.loop else []) \
             + ([f"rate {c.rate:g}"] if c.rate != 1 else []) + ([f"vol {c.volume:g}"] if c.volume else []) \
+            + (["muted"] if _muted(c, a, root) else []) \
             + ([f"motion {c.motion}"] if c.motion else []) + (["reversed"] if c.reverse else []) \
             + ([f"hold {c.hold:g}s"] if c.hold is not None else [])
     elif c.type == "text":
@@ -1472,7 +1482,7 @@ class _Window:
                 if any(written) else ""
             when = f"{span[0]:.2f}-{span[1]:.2f}{note}"
         box = "" if c.type == "audio" else f"  [{_fmt_box(c.box, self.profile)}]"
-        return f"{c.id} {c.type} {when}{box}  {_clip_summary(c, self.doc)}".rstrip()
+        return f"{c.id} {c.type} {when}{box}  {_clip_summary(c, self.doc, self.root)}".rstrip()
 
     def header(self) -> list[str]:
         p, s = self.profile, self.profile.safe
@@ -1603,7 +1613,13 @@ class _Window:
     def at_rows(self, at: float) -> list[str]:
         f = T.to_frame(at, self.fps)
         end = f"{self.end:.2f} s" if self.end is not None else "?"
-        rows = [f"at {at:.2f} s (frame {f}) of {end}"]
+        past = []
+        if self.end is not None and f >= T.to_frame(self.end, self.fps):       # "end" is the last frame
+            if f > T.to_frame(self.end, self.fps):
+                past = [f"{at:g} s is past the film's end at {end}: showing the last frame"]
+            f = max(0, T.to_frame(self.end, self.fps) - 1)
+            at = f / self.fps
+        rows = past + [f"at {at:.2f} s (frame {f}) of {end}"]
         if self.voice:
             ln = next((x for x in self.voice.lines if x.t0 <= at < x.t1), None)
             rows.append(f"voice: [{ln.i}] {ln.t0:.2f}-{ln.t1:.2f} {ln.text}" if ln else "voice: (between lines)")

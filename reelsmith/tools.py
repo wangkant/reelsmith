@@ -377,7 +377,9 @@ def _timing_text(rep: dict) -> str:
         if isinstance(t.get(stage), (int, float)):
             bundle = t.get(f"{stage}_bundle")
             parts.append(f"{stage.replace('_', ' ')} {t[stage]:g} s"
-                         + (f" (bundle {bundle:g} s)" if isinstance(bundle, (int, float)) else ""))
+                         + (f" (bundle {bundle:g} s)" if isinstance(bundle, (int, float)) else "")
+                         + (" (reused: the same film was measured last time)"
+                            if stage == "layout" and rep.get("layout_reused") else ""))
     return f"stages: {', '.join(parts)}" if parts else ""
 
 
@@ -505,6 +507,7 @@ def export_captions(project: str, track: str = "") -> str:
     rows = [f"wrote {len(res['files'])} captions track(s):"]
     rows += [f"- {f['track']} ({f['language'] or 'no language'}{', hidden' if f['hidden'] else ''}, {f['cues']} "
              f"cue(s)): {f['srt']}, {f['vtt']}" for f in res["files"]]
+    rows += [f"note: {res['note']}"] if res.get("note") else []
     return _lines(rows)
 
 

@@ -511,7 +511,10 @@ def test_describe_at_a_moment(demo):
     assert "close image" in text and "now: zoom 1.08" in text and "progress 0" in text
     assert 'cap: caption "所以算下来"' in text
     assert "todo" not in text                                           # hidden track
-    assert "nothing visible" in R.describe(demo, 30)
+    late = R.describe(demo, 30)
+    assert late.startswith("30 s is past the film's end at 21.80 s: showing the last frame\nat 21.77 s (frame 653)")
+    assert "nothing visible" not in late and "close image" in late
+    assert R.describe(demo, 21.8).startswith("at 21.77 s (frame 653)")          # "end": its last frame, no note
 
 
 def test_describe_lists_issues_and_survives_broken_projects(demo):

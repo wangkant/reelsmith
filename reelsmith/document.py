@@ -1209,13 +1209,28 @@ class _Check:
             self.transcript_source(track, where)
             return
         if track.items is not None:
+            spans = []
             for n, it in enumerate(track.items):
                 w = f"{where}.items[{n}]"
                 a, b = self.time(it.start, f"{w}.start"), self.time(it.end, f"{w}.end")
                 if a is not None and b is not None and b <= a:
                     self.add("error", w, f"ends at {b:.2f} s, not after its start ({a:.2f} s)")
+                elif a is not None and b is not None:
+                    spans.append((a, b, n))
+                    if self.film_end is not None and a >= self.film_end - 1e-9:
+                        self.add("warning", w, f"starts at {a:.2f} s, at or after the film's end "
+                                               f"({self.film_end:.2f} s): it never shows")
+                    elif self.film_end is not None and b > self.film_end + 0.5 / self.fps:
+                        self.add("warning", w, f"ends at {b:.2f} s, after the film's end ({self.film_end:.2f} s): "
+                                               "the rest is cut")
                 if not it.text.strip():
                     self.add("warning", w, "empty caption text")
+            spans.sort()
+            for (a0, b0, n0), (a1, _, n1) in zip(spans, spans[1:]):
+                if a1 < b0 - 1e-9:
+                    self.add("warning", f"{where}.items[{n1}]",
+                             f"starts at {a1:.2f} s, before items[{n0}] ends ({b0:.2f} s): the two draw on top of "
+                             f"each other; end items[{n0}] by {a1:.2f} s or start this one later")
             return
         if self.voice is None:
             if not self.doc.voice:

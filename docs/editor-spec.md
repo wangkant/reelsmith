@@ -1037,7 +1037,11 @@ value.
 - Errors: the project does not load or validate (schema, unknown ids, missing files, overlaps on a track, bad or
   cyclic Times, props that fail a component's schema, an unknown font, a malformed locale or profile); the hard
   rules (section 2.2); a length outside the profile's limits (when it has any); an evidence clip whose drawn panel leaves the safe area
-  (a screenshot's words are words). Footage: an unknown clip or marker
+  (a screenshot's words are words); more of the film with no visual clip on screen than `max_black_ratio`; where
+  the profile sets `max_still_s`, a stretch longer than it in which nothing can move (only images without motion
+  or keyframes, text and shapes outside their enter, exit, reveal or draw, no video, animated image, component,
+  evidence or caption change). Footage: a video or audio clip whose `trim_in` is at or past its source's end (not
+  looping, held, speed-curved or reversed); an unknown clip or marker
   in a `src:` or `mark:` Time, a `src:` on a looping or non-media clip or before its in point, a transition longer
   than its clip or the clip it comes from, an overlap longer than the transition (or with any clip but the previous
   one), an audio transition other than `crossfade`, volume keyframes on a clip without sound or below 0, a `duck`
@@ -1046,9 +1050,12 @@ value.
 - Warnings: an empty title where rules.json has a title rule; on a profile with platform UI (`ui`, section 15.1)
   or when rules.json sets `hook_seconds`, frame 0 (the cover) without whole words on it (mid-reveal, mid-enter,
   fading in, or no words at all); evidence whose proving sentence will read under 40 px; a component Time that
-  falls outside its clip (by more than half a frame); motion and keyframes on the same property. Footage: a `src:`
-  second past its clip's end, an asset whose transcript is missing, both `enter` and `transition` on a clip,
-  `overrides` on captions from a transcript.
+  falls outside its clip (by more than half a frame); motion and keyframes on the same property; 0.5 s or more with
+  no visual clip on screen (black); caption items that overlap in time, or start or end past the film's end.
+  Footage: a `src:` second past its clip's end, an asset whose transcript is missing, both `enter` and `transition`
+  on a clip, `overrides` on captions from a transcript, a clip that runs more than a frame past the end of its
+  source (it freezes or falls silent), nothing audible on the timeline while a video it shows has sound (video
+  volume defaults to 0).
 - Advice (only what rules.json `advice` sets): nothing on screen at 0 s or no words within `hook_seconds`; a still
   image or evidence held longer than `max_same_visual_s` without anything moving it; more than `max_slide_share` of
   the film as words over a still picture or a flat ground; the length outside `target_s`.
@@ -1064,18 +1071,26 @@ value.
    Warnings: text under 28 px, text overflowing its clip box, text of one clip over text of another (captions
    included), and contrast under 3:1 against the background sampled from the still (between 2:1 and 3:1 a clearly
    different hue passes). The stills go to render.mjs 200 a call; after each call the stills that show no problem
-   are deleted, so a long film needs no more disk or memory than a short one.
+   are deleted, so a long film needs no more disk or memory than a short one. A clean pass is kept in
+   `build/layout.json` and reused while everything it read is unchanged (the resolved film, the profile, the
+   renderer's sources, the workspace's components, each shown file's size and time): after `preview` with
+   `sweep=true`, or a render that failed later, the layout is not measured again.
 3. **film**: the renderer encodes the film.
-4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP). A profile with `require_audio`
-   refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
+4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP) and the sound cut to the
+   picture's length; the gain applied is in the report (`master_gain_db`), with a note above +12 dB. A profile
+   with `require_audio` refuses a film without sound; any other delivers a silent film as it is (no audio, or audio that is all silence,
    is not mastered). The project's `chapters` are put into the mp4 as chapter marks (streams copied).
 5. **film check**: the profile's frame size and fps, h264/aac, length within the profile's limits, size under the
    profile's cap, sound present and not near silent (`require_audio`), at most `max_black_ratio` black (10 %), and
    no stretch longer than `max_still_s` (5 s on the social profiles) without any motion; a limit that is null is
-   not checked. A rejected film is kept as `build/film.rejected.mp4` to look at.
+   not checked; the length is the picture's. A failure names the longest stretches and the clips on screen in
+   them, and the report keeps every black and frozen span (`black_spans`, `still_spans`; `review` lists the frozen
+   ones as its still screens). A rejected film is kept as `build/film.rejected.mp4` to look at.
 
 Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
 failure that is not the project's (its local server or browser) is retried once and reported as transient.
+`render`, `preview` and a draft of one project run one at a time: a second one in this process waits, one in
+another process is refused (the lock is `build/render.lock`, released when its process ends).
 
 A delivered film comes with its side files, the stale ones removed: `out/captions/<track>.srt` (SubRip) and `.vtt`
 (WebVTT, with a `Language:` header line) for every captions track, hidden ones included, each item one cue (its
@@ -1084,7 +1099,9 @@ phrase on one line, accents dropped, times on the film's frames); and, when the 
 description. A note says when YouTube would not show them as chapters (the first must start at 0:00, at least 3,
 each 10 s or more). `out/meta.json` lists the captions files (`captions`: track, language, srt, vtt) and the
 chapters (`chapters`: t, title; `chapters_file`). `export_captions` writes the captions files from the project as
-it stands, without rendering. `render` also warns for each HDR video the film shows (section 9.7).
+it stands, without rendering; when the cut differs from the one `out/report.json` records, to `build/captions`
+instead, so `out/` keeps the files that match its film. `render` also warns for each HDR video the film shows
+(section 9.7).
 
 Films of any length render. The encode may run 0.25 s a frame (at least 40 minutes) before it counts as hung, a
 call of stills 3 s a still (at least 15 minutes); mastering and the film checks scale their ffmpeg timeouts with the

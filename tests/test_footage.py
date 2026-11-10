@@ -212,6 +212,29 @@ def test_footage_tools_through_the_cli_and_mcp(ws, capsys):
     assert {"probe", "frames", "scenes", "silences", "transcribe"} <= names
 
 
+def test_muted_footage_and_footage_that_runs_out_are_said(ws):
+    data = raw(ws.project)
+    data.update(profile="landscape", tracks=[{"id": "v1", "kind": "visual", "clips": [
+        {"id": "a", "type": "video", "asset": "two", "start": 0, "end": 5},
+        {"id": "b", "type": "video", "asset": "mute", "start": 5, "end": 6}]}])
+    (ws.project / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    window = tools.describe(str(ws.project))
+    row = lambda cid: next(r for r in window.splitlines() if r.strip().startswith(f"{cid} video"))  # noqa: E731
+    assert "muted" in row("a") and "muted" not in row("b")      # b's file has no sound to mute
+    r = tools.check(str(ws.project))
+    assert "[warning] sound: nothing on the timeline makes sound, and the footage of a has sound" in r
+    assert "[warning] a: its source ends at 3.0 s, film 3.0 s; from there to 5.0 s it is its last frame" in r
+    late = tools.describe(str(ws.project), at=99)
+    assert late.startswith("99 s is past the film's end at 6.00 s: showing the last frame")
+    assert "  v1: b video" in late
+    data["tracks"][0]["clips"][0].update(volume=1, end=3)
+    (ws.project / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    window = tools.describe(str(ws.project))
+    assert "vol 1" in row("a") and "muted" not in row("a")
+    r = tools.check(str(ws.project))
+    assert "sound:" not in r and "source ends" not in r
+
+
 # ------------------------------------------------------------------ transcribe
 class FakeWhisper(http.server.BaseHTTPRequestHandler):
     """An OpenAI-compatible /audio/transcriptions: two words per piece, 0.1-0.5 and 0.6-0.9 s into it."""
