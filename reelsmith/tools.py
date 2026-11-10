@@ -16,12 +16,13 @@ from . import locales
 from . import render as R
 from .checks import check_project
 from .media import run_tree
-from .profiles import ProfileError, choose, fps_label, parse_canvas
+from .profiles import DEFAULT_PROFILE, PLAYBOOKS, PROFILES, ProfileError, choose, fps_label, parse_canvas
 from .watch import presence
 from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_file, project_root
 
 ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "manual.md"
+PLATFORMS = ROOT / "docs" / "platforms"
 KIT_DOC = ROOT / "docs" / "kit.md"
 MAX_NOTE_CHARS = 4000
 MAX_NOTES_SHOWN = 30000
@@ -242,10 +243,54 @@ def _seconds(root: Path, value) -> float:
 
 # ------------------------------------------------------------------ reading
 @tool
-def manual() -> str:
-    """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components and
-    what blocks delivery. Read it once before your first edit."""
-    return MANUAL.read_text(encoding="utf-8")
+def manual(project: str = "") -> str:
+    """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components,
+    making a film people watch and what blocks delivery. With `project`, the playbook of its profile's platform
+    follows (Douyin, Bilibili, YouTube, TikTok, Reels, Xiaohongshu, WeChat Channels): how a film is made there.
+    Read it once before your first edit."""
+    text = MANUAL.read_text(encoding="utf-8")
+    if not project:
+        books = {}
+        for name, book in PLAYBOOKS.items():
+            books.setdefault(book, []).append(name)
+        listed = "; ".join(f"{', '.join(names)} → {_book_title(book)}" for book, names in books.items())
+        return (f"{text}\n---\nPlatform playbooks, one per platform profile: {listed}. Call manual(project) once the "
+                f"project exists to get its profile's playbook after this text (files in {PLATFORMS}).\n")
+    name = _platform(_project(project))
+    book = PLAYBOOKS.get(name)
+    if not book:
+        return f"{text}\n---\nThis project's canvas ({name}) is not a platform profile: no playbook.\n"
+    lines = (PLATFORMS / f"{book}.md").read_text(encoding="utf-8").splitlines()
+    body = lines[1:lines.index("## Sources")] if "## Sources" in lines else lines[1:]
+    return (f"{text}\n# This film is for {_book_title(book)}\n\nThe playbook of profile `{name}`; its rules win "
+            f"over the general chapters above. Sources for every [^note]: {PLATFORMS / f'{book}.md'}.\n"
+            + "\n".join(body).rstrip() + "\n")
+
+
+def _book_title(book: str) -> str:
+    with (PLATFORMS / f"{book}.md").open(encoding="utf-8") as f:
+        return f.readline().lstrip("#").strip()
+
+
+def _platform(root: Path) -> str:
+    """The built-in profile a project's canvas comes from, followed through inline and workspace profiles' `base`:
+    an inline {"base": "douyin", "fps": 25} is still a Douyin film."""
+    ws = find_workspace(root)
+    specs = (ws.config.get("profiles") if ws else None) or {}
+    try:
+        value = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig")).get("profile")
+    except (OSError, ValueError, AttributeError):
+        value = None
+    if value in (None, "", {}):
+        value = ws.config.get("profile") if ws else None
+    for _ in range(len(specs) + 2):
+        if isinstance(value, dict):
+            value = value.get("base")
+        elif isinstance(value, str) and value not in PROFILES and isinstance(specs.get(value), dict):
+            value = specs[value]
+        else:
+            break
+    return value if isinstance(value, str) and value in PROFILES else DEFAULT_PROFILE
 
 
 @tool
@@ -368,14 +413,14 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
                 from_project: str = "") -> str:
     """Create a project folder with an empty project.json (no tracks yet), assets/, voice/ and script.md.
     Put it in <workspace>/projects/<name> to get the workspace's library, rules and keys. profile: a profile name
-    (landscape, vertical, square, portrait, youtube, douyin, douyin-long, tiktok, shorts, reels or one of the
-    workspace's); empty takes the workspace's (else landscape). canvas: "WIDTHxHEIGHT" or "WIDTHxHEIGHT@FPS" (e.g.
-    "1920x1080@25", "1920x1080@29.97") for a canvas of your own, starting from `profile` (or the workspace's): its
-    safe area scales to the new size. locale: the film's language as a BCP-47 tag
-    ("en", "zh-CN", "ja"); empty takes the workspace's (else en). from_project: the folder of a project to put on
-    this canvas: its assets and voice (hard-linked like import_asset), tracks, markers, chapters, meta and theme
-    come along (its locale too unless `locale` is given), and every box is mapped from its safe area to this one;
-    look at the result with preview."""
+    (landscape, vertical, square, portrait, youtube, shorts, douyin, douyin-long, tiktok, reels, bilibili,
+    bilibili-story, xiaohongshu, channels or one of the workspace's); empty takes the workspace's (else landscape).
+    A platform profile has a playbook: the result names it and manual(project) returns it. canvas: "WIDTHxHEIGHT"
+    or "WIDTHxHEIGHT@FPS" ("1920x1080@25", "1920x1080@29.97") for a canvas of your own based on `profile`.
+    locale: the film's language as a BCP-47 tag ("en", "zh-CN", "ja"); empty takes the workspace's (else en).
+    from_project: the folder of a project to put on this canvas: its assets and voice (hard-linked), edit, meta
+    and theme come along (its locale too unless `locale` is given), every box mapped from its safe area to this
+    one; look at the result with preview."""
     root = _project(project, must_exist=False)
     if (root / PROJECT_FILE).is_file():
         return _fail(f"{root / PROJECT_FILE} already exists: edit it instead")
@@ -427,8 +472,12 @@ def new_project(project: str, profile: str = "", title: str = "", canvas: str = 
         script.write_text("# Research, sources and script\n", encoding="utf-8", newline="\n")
     where = f"in workspace {ws.root}" if ws else "outside any workspace (no library, default rules, keys from env)"
     s = made.safe
+    platform = _platform(root)
+    book = PLAYBOOKS.get(platform)
+    playbook = (f"\nplaybook for {_book_title(book)}: {PLATFORMS / f'{book}.md'}; read manual(project) before you "
+                "edit: it adds this playbook to the manual" if book else "")
     return (f"created {root / PROJECT_FILE} {where}: {made.name} {made.width}x{made.height} {fps_label(made.fps)} "
-            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}{mapped}")
+            f"fps, safe area x {s.x}-{s.x + s.w}, y {s.y}-{s.y + s.h}{mapped}{playbook}")
 
 
 def _map_boxes(tracks: list, was, now) -> int:

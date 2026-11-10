@@ -123,9 +123,14 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
   screenshots of web pages with the proving sentence boxed, short clips from a picture (image-to-video), and
   imports of local or downloaded media, animated GIFs included.
 - **Any canvas, any language.** `landscape` (the default, 1920×1080), `vertical`, `square`, `portrait`, platform
-  profiles (`youtube`, `tiktok`, `shorts`, `reels`, `douyin`) and custom sizes and frame rates (NTSC included); a
+  profiles (`youtube`, `shorts`, `tiktok`, `reels`, `douyin`, `douyin-long`, `bilibili`, `bilibili-story`,
+  `xiaohongshu`, `channels`) and custom sizes and frame rates (NTSC included); a
   `locale` sets caption phrasing, the words components add, capture language and web requests; workspaces can add
   fonts.
+- **Platform playbooks.** Each platform profile comes with a playbook the agent reads with the manual: how a film is
+  made for YouTube and Shorts, Douyin, TikTok, Instagram Reels, Bilibili, Xiaohongshu and WeChat Channels (the
+  frame, the first seconds, pace, words, sound, what to hand over, what gets a film limited), every number graded
+  with its source.
 - **Delivery checks.** Words outside the safe area, cut, tiny, overlapping or low in contrast (measured on rendered
   frames), loudness, black or frozen stretches, length, size and the workspace's own rules. A failed render keeps
   the previous film and says what to fix, with clip ids and times. Films of any length render.
@@ -209,6 +214,8 @@ film at the top of this page cost $0.53: five animated clips and five lines of n
 ## Documentation
 
 - [docs/manual.md](docs/manual.md): the agent's manual (what the `manual` tool returns).
+- [docs/platforms/](docs/platforms/): the platform playbooks; `reelsmith manual <project>` prints the manual followed
+  by the playbook of the project's profile.
 - [docs/editor-spec.md](docs/editor-spec.md): the full reference: layout, settings and defaults, the project format,
   edit ops, providers, checks, profiles, the renderer's input and the runner.
 - [docs/agents.md](docs/agents.md): attaching coding agents and running them headless.

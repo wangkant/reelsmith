@@ -41,8 +41,9 @@ check, preview, render, review; probe, frames, scenes, silences, transcribe; imp
 animate). reelsmith is an editor you drive, not a text-to-video model: build the film clip by clip on its timeline
 and look at what you make. Any canvas, any language.
 
-- Call `manual` once before the first edit: it is the full contract (project format, Times, edit ops, components,
-  what blocks delivery). Every tool takes `project` = the folder holding project.json.
+- Call `manual(project)` once the project exists, before the first edit: it is the full contract (project format,
+  Times, edit ops, components, what blocks delivery) followed by the playbook of the project's platform. Every tool takes `project` = the folder holding
+  project.json.
 - The user's footage: import_asset, look (probe, frames, scenes, silences, transcribe), cut at "src:<clip>@<seconds>"
   Times with ripple_delete and trim_clip. A film from a script: script.md, speak, capture, draw, animate.
 - Loop: notes -> new_project (profile, locale) -> material -> edit -> check -> preview (read the PNG stills) -> fix ->

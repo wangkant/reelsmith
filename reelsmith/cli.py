@@ -48,7 +48,8 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("project", help="the project folder (holding project.json)")
         return p
 
-    cmd("manual", tools.manual)
+    cmd("manual", tools.manual).add_argument("project", nargs="?", default="",
+                                             help="a project folder: its platform's playbook follows the manual")
     proj(cmd("describe", tools.describe)).add_argument("--at", help="seconds or a Time, e.g. line:3")
     p = proj(cmd("new", tools.new_project, "new_project"))
     p.add_argument("--profile", default="", help="a profile name (default: the workspace's, else landscape)")
@@ -153,7 +154,7 @@ def command_parser(name: str) -> argparse.ArgumentParser:
 def _call(args) -> tools.ToolResult:
     c = args.cmd
     if c == "manual":
-        return tools.manual()
+        return tools.manual(args.project)
     if c == "describe":
         return tools.describe(args.project, args.at)
     if c in ("new", "new_project"):

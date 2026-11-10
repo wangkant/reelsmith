@@ -145,7 +145,58 @@ def test_new_project(tmp_path, monkeypatch):
 
 def test_manual_is_served():
     r = T.manual()
-    assert r.ok and "reelsmith" in r.lower()
+    assert r.ok and r.startswith("# reelsmith manual")
+    # without a project: every profile with a playbook is listed, with how to get it
+    assert all(name in r for name in profiles.PLAYBOOKS) and "manual(project)" in r and "This film is for" not in r
+
+
+def test_manual_with_a_project_adds_its_platforms_playbook(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    book = (T.PLATFORMS / "douyin.md").read_text(encoding="utf-8")
+    made = T.new_project(str(tmp_path / "d"), profile="douyin-long")
+    assert made.ok and "playbook for Douyin (抖音)" in made and "douyin.md" in made and "manual(project)" in made
+    r = T.manual(str(tmp_path / "d"))
+    core, _, rest = r.partition("\n# This film is for Douyin (抖音)\n")
+    assert r.ok and core.startswith("# reelsmith manual") and "`douyin-long`" in rest
+    body = book[book.index("\n## The frame"):book.index("## Sources")].strip()
+    assert body in rest and "## Sources" not in rest and "[^own]:" not in rest      # sources stay in the file
+    # an inline canvas on a platform base is still that platform's film; a generic canvas has no playbook
+    assert T.new_project(str(tmp_path / "d25"), profile="douyin", canvas="1080x1920@25").ok
+    assert "This film is for Douyin" in T.manual(str(tmp_path / "d25"))
+    plain = T.new_project(str(tmp_path / "l"), profile="landscape")
+    assert plain.ok and "playbook" not in plain
+    r = T.manual(str(tmp_path / "l"))
+    assert r.ok and "This film is for" not in r and "no playbook" in r
+    assert not T.manual(str(tmp_path / "missing")).ok
+
+
+def test_manual_follows_a_workspace_profile_to_its_platform(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "workspace.json").write_text(json.dumps({"profile": "brand", "profiles": {
+        "brand": {"base": "bilibili", "fps": 25}}}), encoding="utf-8")
+    assert T.new_project(str(ws / "projects" / "b")).ok
+    assert "# This film is for Bilibili" in T.manual(str(ws / "projects" / "b"))
+
+
+def test_manual_names_every_profile_and_stays_short():
+    # read at the start of every session: it must not grow, and its craft chapter stays a page
+    text = T.MANUAL.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert len(lines) <= 560
+    assert all(f"| `{name}`" in text or f"`{name}` /" in text or f"/ `{name}`" in text for name in profiles.PROFILES)
+    start = lines.index("## Making a film people watch")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## "))
+    assert end - start - 1 <= 30
+    assert "always pass every line" in text and "re-speak only" not in text and "handover.md" in text
+
+
+def test_cli_manual_takes_a_project(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    assert T.new_project(str(tmp_path / "x"), profile="xiaohongshu").ok
+    assert cli.main(["manual", str(tmp_path / "x")]) == 0
+    assert "# This film is for Xiaohongshu" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ check / describe / edit / undo

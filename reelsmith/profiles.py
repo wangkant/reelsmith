@@ -1,9 +1,10 @@
 """Output profiles (canvas, safe area, delivery limits) and visual themes.
 
 Generic canvases (landscape, vertical, square, portrait) keep words inside a title-safe margin and set no delivery
-limits; platform profiles (douyin, douyin-long, tiktok, shorts, reels, youtube) carry the platform's UI-safe area,
-length and size limits and loudness. workspace.json `profiles` adds named custom profiles and a project's `profile`
-may be one inline: {"base": name, field: value, ...}.
+limits; platform profiles (youtube, shorts, douyin, douyin-long, tiktok, reels, bilibili, bilibili-story, xiaohongshu,
+channels) carry the platform's UI-safe area, length and size limits and loudness, and name their playbook
+(docs/platforms/<name>.md) in PLAYBOOKS. workspace.json `profiles` adds named custom profiles and a project's
+`profile` may be one inline: {"base": name, field: value, ...}.
 """
 from __future__ import annotations
 
@@ -100,18 +101,42 @@ DOUYIN = Profile("douyin", 1080, 1920, 30, Box(120, 240, 760, 1220), Box(120, 12
                  20, 90, (45, 75), 80, -10.0)
 # Douyin's longer explainers (a how-to, a checklist worth saving): the same screen, more time.
 DOUYIN_LONG = replace(DOUYIN, name="douyin-long", min_s=60, max_s=300, target_s=(90, 180), max_mb=250)
-# TikTok and Shorts lay their chrome out much the same; the right rail sits a little lower on Shorts.
-TIKTOK = Profile("tiktok", 1080, 1920, 30, Box(60, 200, 820, 1260), Box(60, 1260, 820, 200),
+# TikTok's own In-Feed safe-zone template keeps 120 px at the sides (tall phones crop there) and 240 px at the top;
+# the bottom follows the organic UI (caption and @name from about y 1460), not the ads' taller call-to-action block.
+TIKTOK = Profile("tiktok", 1080, 1920, 30, Box(120, 240, 760, 1220), Box(120, 1260, 760, 200),
                  15, 180, (30, 75), 250, -14.0)
-SHORTS = Profile("shorts", 1080, 1920, 30, Box(60, 180, 820, 1300), Box(60, 1280, 820, 200),
+# Google's vertical safe zone for Shorts: search and menu over the top 288 px, channel, title and sound strip over
+# the bottom 672 px, the button column over the right 192 px.
+SHORTS = Profile("shorts", 1080, 1920, 30, Box(60, 288, 820, 960), Box(60, 1048, 820, 200),
                  15, 180, (30, 60), 250, -14.0)
 # Instagram Reels: Meta's safe zone keeps the top 14 % and bottom 35 % free (profile, caption, audio, buttons) and
-# 6 % at the sides; the action rail on the right takes more. Reels run 3-180 s; uploads stop at 4 GB.
-REELS = Profile("reels", 1080, 1920, 30, Box(66, 250, 884, 1000), Box(66, 1050, 884, 200),
-                3, 180, (15, 60), 4000, -14.0)
+# 6 % at the sides; the action rail on the right takes more. Reels run 3-180 s; the Graph API takes 300 MB.
+REELS = Profile("reels", 1080, 1920, 30, Box(66, 270, 884, 978), Box(66, 1048, 884, 200),
+                3, 180, (15, 60), 300, -14.0)
+# Bilibili publishes no overlay template (conservative): a 5 % margin, and the bottom 80 px left to the progress bar
+# and controls. No length or size cap is established; long explainers are its main form.
+BILIBILI = Profile("bilibili", 1920, 1080, 30, Box(96, 54, 1728, 946), Box(96, 800, 1728, 200),
+                   None, None, (180, 900), None, -14.0)
+# Story Mode (竖屏): no template and no measurement (conservative): Douyin's side margins, a deeper top and bottom.
+# Story Mode videos run up to 10 min.
+BILIBILI_STORY = Profile("bilibili-story", 1080, 1920, 30, Box(120, 300, 760, 1100), Box(120, 1200, 760, 200),
+                         None, 600, (30, 90), None, -14.0)
+# Xiaohongshu plays video notes full screen at 9:16 and shows a separately uploaded 3:4 cover in its two-column grid,
+# so the film is 9:16. No template (conservative): no right rail, tall-phone side crop, author row and bar below
+# y 1480. The app's 5 min and the smallest reported size cap (1 GB) stand until measured.
+XIAOHONGSHU = Profile("xiaohongshu", 1080, 1920, 30, Box(120, 240, 840, 1240), Box(120, 1280, 840, 200),
+                      None, 300, (30, 90), 1000, -14.0)
+# WeChat Channels (视频号): no template (conservative): back and search on top, avatar, description and the like,
+# 推荐 and share row below y 1500. Uploads run to 60 min and 2 GB.
+CHANNELS = Profile("channels", 1080, 1920, 30, Box(120, 200, 840, 1300), Box(120, 1300, 840, 200),
+                   None, 3600, (60, 180), 2000, -14.0)
 
 PROFILES = {p.name: p for p in (LANDSCAPE, VERTICAL, SQUARE, PORTRAIT, YOUTUBE, DOUYIN, DOUYIN_LONG, TIKTOK, SHORTS,
-                                REELS)}
+                                REELS, BILIBILI, BILIBILI_STORY, XIAOHONGSHU, CHANNELS)}
+# Each platform profile's playbook, docs/platforms/<value>.md; generic canvases have none.
+PLAYBOOKS = {"youtube": "youtube", "shorts": "youtube", "douyin": "douyin", "douyin-long": "douyin",
+             "tiktok": "tiktok", "reels": "reels", "bilibili": "bilibili", "bilibili-story": "bilibili",
+             "xiaohongshu": "xiaohongshu", "channels": "channels"}
 DEFAULT_PROFILE = "landscape"
 FIELDS = ("width", "height", "fps", "safe", "captions", "min_s", "max_s", "target_s", "max_mb", "lufs", "peak_db",
           "max_still_s", "max_black_ratio", "require_audio", "ui")

@@ -1,6 +1,7 @@
 """Any canvas, any locale: profiles (built-in and custom), the locale, workspace fonts and canvas-scaled checks."""
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import replace
@@ -62,7 +63,7 @@ def english(p: Path, lines: list[str], **project) -> None:
 # ------------------------------------------------------------------ 1. profiles
 def test_generic_and_platform_profiles():
     assert set(P.PROFILES) == {"landscape", "vertical", "square", "portrait", "youtube", "douyin", "douyin-long",
-                               "tiktok", "shorts", "reels"}
+                               "tiktok", "shorts", "reels", "bilibili", "bilibili-story", "xiaohongshu", "channels"}
     assert P.get_profile(None) is P.LANDSCAPE and P.DEFAULT_PROFILE == "landscape"
     sizes = {n: (P.PROFILES[n].width, P.PROFILES[n].height) for n in ("landscape", "vertical", "square", "portrait")}
     assert sizes == {"landscape": (1920, 1080), "vertical": (1080, 1920), "square": (1080, 1080),
@@ -77,16 +78,44 @@ def test_generic_and_platform_profiles():
             p.safe.x, p.safe.w, 200, p.safe.y + p.safe.h)
     assert P.YOUTUBE.require_audio and (P.YOUTUBE.width, P.YOUTUBE.height, P.YOUTUBE.lufs) == (1920, 1080, -14.0)
     assert P.YOUTUBE.max_s is None and P.YOUTUBE.max_mb is None and P.YOUTUBE.max_still_s is None
-    assert P.REELS.safe == P.Box(66, 250, 884, 1000) and (P.REELS.min_s, P.REELS.max_s, P.REELS.lufs) == (3, 180, -14)
-    for name in ("douyin", "douyin-long", "tiktok", "shorts", "reels"):        # the social ones keep every check
+    assert P.REELS.safe == P.Box(66, 270, 884, 978) and (P.REELS.min_s, P.REELS.max_s, P.REELS.lufs) == (3, 180, -14)
+    assert P.REELS.max_mb == 300 and P.TIKTOK.safe == P.Box(120, 240, 760, 1220)
+    assert P.SHORTS.safe == P.Box(60, 288, 820, 960)                         # Google's 288 top, 672 bottom
+    social = ("douyin", "douyin-long", "tiktok", "shorts", "reels", "bilibili", "bilibili-story", "xiaohongshu",
+              "channels")
+    for name in social:                                                     # the social ones keep every check
         p = P.PROFILES[name]
         assert p.require_audio and p.max_still_s == 5.0 and p.ui and p.max_black_ratio == 0.10, name
     d = P.DOUYIN
     assert (d.width, d.height, d.safe, d.captions, d.min_s, d.max_s, d.target_s, d.max_mb, d.lufs) == (
         1080, 1920, P.Box(120, 240, 760, 1220), P.Box(120, 1260, 760, 200), 20, 90, (45, 75), 80, -10.0)
+    shape = {n: (P.PROFILES[n].width, P.PROFILES[n].height, P.PROFILES[n].safe, P.PROFILES[n].min_s,
+                 P.PROFILES[n].max_s, P.PROFILES[n].target_s, P.PROFILES[n].max_mb)
+             for n in ("bilibili", "bilibili-story", "xiaohongshu", "channels")}
+    assert shape == {"bilibili": (1920, 1080, P.Box(96, 54, 1728, 946), None, None, (180, 900), None),
+                     "bilibili-story": (1080, 1920, P.Box(120, 300, 760, 1100), None, 600, (30, 90), None),
+                     "xiaohongshu": (1080, 1920, P.Box(120, 240, 840, 1240), None, 300, (30, 90), 1000),
+                     "channels": (1080, 1920, P.Box(120, 200, 840, 1300), None, 3600, (60, 180), 2000)}
     assert [P.PROFILES[n].orientation for n in ("landscape", "vertical", "square")] == ["landscape", "portrait",
                                                                                        "square"]
     assert P.LANDSCAPE.scale == 1 and P.make_profile({"width": 1280, "height": 720}).scale == pytest.approx(2 / 3)
+
+
+def test_every_platform_profile_has_a_playbook():
+    # the manual hands the agent docs/platforms/<playbook>.md; generic canvases have none
+    assert set(P.PLAYBOOKS) == {n for n, p in P.PROFILES.items() if p.ui or p.require_audio}
+    assert not set(P.PLAYBOOKS) & {"landscape", "vertical", "square", "portrait"}
+    heads = ["## The frame", "## The first seconds", "## Pace and length", "## Words on screen and captions",
+             "## Sound", "## The ending, title, cover and tags", "## What gets a film limited",
+             "## What is not known", "## Sources"]
+    for book in set(P.PLAYBOOKS.values()):
+        lines = (ROOT / "docs" / "platforms" / f"{book}.md").read_text(encoding="utf-8").splitlines()
+        assert [ln for ln in lines if ln.startswith("## ")] == heads, book
+        body, sources = lines[:lines.index("## Sources")], lines[lines.index("## Sources"):]
+        assert len(body) <= 90, book
+        cited = set(re.findall(r"\[\^([\w-]+)\]", "\n".join(body)))
+        defined = {m.group(1) for ln in sources if (m := re.match(r"\[\^([\w-]+)\]:", ln))}
+        assert cited == defined, (book, cited ^ defined)
 
 
 def test_custom_profiles_from_workspace_json(tmp_path):
