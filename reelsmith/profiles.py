@@ -8,6 +8,7 @@ channels) carry the platform's UI-safe area, length and size limits and loudness
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
@@ -25,6 +26,26 @@ class Box:
     y: int
     w: int
     h: int
+
+
+@dataclass(frozen=True)
+class Cover:
+    """A cover render writes beside the film: frame 0 cropped to `crop` (w, h, x, y), as out/<name>.png."""
+    name: str
+    crop: tuple[int, int, int, int]
+
+    @property
+    def rect(self) -> tuple[float, float, float, float]:
+        w, h, x, y = self.crop
+        return float(x), float(y), float(w), float(h)
+
+    def label(self, width: int, height: int) -> str:
+        """ "3:4 cover (y 240-1680)": its shape and the span it keeps of the frame."""
+        w, h, x, y = self.crop
+        g = math.gcd(w, h)
+        span = [f"x {x}-{x + w}"] if (x, w) != (0, width) else []
+        span += [f"y {y}-{y + h}"] if (y, h) != (0, height) else []
+        return f"{w // g}:{h // g} cover" + (f" ({', '.join(span)})" if span else "")
 
 
 @dataclass(frozen=True)
@@ -47,6 +68,7 @@ class Profile:
     acodec: str = "aac"
     require_audio: bool = True          # False: a silent film is delivered as it is
     ui: bool = True                     # outside the safe area is the platform's UI (False: a title-safe margin)
+    cover: tuple[Cover, ...] = ()       # the covers the playbook asks for; generic canvases have none
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -92,13 +114,16 @@ LANDSCAPE = _generic("landscape", 1920, 1080)
 VERTICAL = _generic("vertical", 1080, 1920)
 SQUARE = _generic("square", 1080, 1080)
 PORTRAIT = _generic("portrait", 1080, 1350)
-# YouTube normalises playback to about -14 LUFS; its own caps (12 h, 256 GB) are past anything rendered here.
-YOUTUBE = replace(LANDSCAPE, name="youtube", require_audio=True)
+# The vertical feeds' profile grids show frame 0 cut 3:4 from the middle.
+GRID_3X4 = (1080, 1440, 0, 240)
+# YouTube normalises playback to about -14 LUFS; its own caps (12 h, 256 GB) are past anything rendered here. The
+# thumbnail (>= 1920x1080) is frame 0.
+YOUTUBE = replace(LANDSCAPE, name="youtube", require_audio=True, cover=(Cover("cover", (1920, 1080, 0, 0)),))
 # Douyin fills a tall phone by cropping the sides (about 50-110 px each at 1080 wide; ByteDance's own full-screen
 # spec keeps 120 px clear) and covers the top ~230 px, the right rail (x >= 880, y 720-1640) and the bottom bar
 # (y >= 1480).
 DOUYIN = Profile("douyin", 1080, 1920, 30, Box(120, 240, 760, 1220), Box(120, 1260, 760, 200),
-                 20, 90, (45, 75), 80, -10.0)
+                 20, 90, (45, 75), 80, -10.0, cover=(Cover("cover", GRID_3X4),))
 # Douyin's longer explainers (a how-to, a checklist worth saving): the same screen, more time.
 DOUYIN_LONG = replace(DOUYIN, name="douyin-long", min_s=60, max_s=300, target_s=(90, 180), max_mb=250)
 # TikTok's own In-Feed safe-zone template keeps 120 px at the sides (tall phones crop there) and 240 px at the top;
@@ -112,11 +137,13 @@ SHORTS = Profile("shorts", 1080, 1920, 30, Box(60, 288, 820, 960), Box(60, 1048,
 # Instagram Reels: Meta's safe zone keeps the top 14 % and bottom 35 % free (profile, caption, audio, buttons) and
 # 6 % at the sides; the action rail on the right takes more. Reels run 3-180 s; the Graph API takes 300 MB.
 REELS = Profile("reels", 1080, 1920, 30, Box(66, 270, 884, 978), Box(66, 1048, 884, 200),
-                3, 180, (15, 60), 300, -14.0)
+                3, 180, (15, 60), 300, -14.0,
+                cover=(Cover("cover", (1080, 1920, 0, 0)), Cover("cover-3x4", GRID_3X4)))
 # Bilibili publishes no overlay template (conservative): a 5 % margin, and the bottom 80 px left to the progress bar
 # and controls. No length or size cap is established; long explainers are its main form.
 BILIBILI = Profile("bilibili", 1920, 1080, 30, Box(96, 54, 1728, 946), Box(96, 800, 1728, 200),
-                   None, None, (180, 900), None, -14.0)
+                   None, None, (180, 900), None, -14.0,
+                   cover=(Cover("cover", (1920, 1080, 0, 0)), Cover("cover-4x3", (1440, 1080, 240, 0))))
 # Story Mode (竖屏): no template and no measurement (conservative): Douyin's side margins, a deeper top and bottom.
 # Story Mode videos run up to 10 min.
 BILIBILI_STORY = Profile("bilibili-story", 1080, 1920, 30, Box(120, 300, 760, 1100), Box(120, 1200, 760, 200),
@@ -125,11 +152,12 @@ BILIBILI_STORY = Profile("bilibili-story", 1080, 1920, 30, Box(120, 300, 760, 11
 # so the film is 9:16. No template (conservative): no right rail, tall-phone side crop, author row and bar below
 # y 1480. The app's 5 min and the smallest reported size cap (1 GB) stand until measured.
 XIAOHONGSHU = Profile("xiaohongshu", 1080, 1920, 30, Box(120, 240, 840, 1240), Box(120, 1280, 840, 200),
-                      None, 300, (30, 90), 1000, -14.0)
+                      None, 300, (30, 90), 1000, -14.0, cover=(Cover("cover", GRID_3X4),))
 # WeChat Channels (视频号): no template (conservative): back and search on top, avatar, description and the like,
 # 推荐 and share row below y 1500. Uploads run to 60 min and 2 GB.
 CHANNELS = Profile("channels", 1080, 1920, 30, Box(120, 200, 840, 1300), Box(120, 1300, 840, 200),
-                   None, 3600, (60, 180), 2000, -14.0)
+                   None, 3600, (60, 180), 2000, -14.0,
+                   cover=(Cover("cover", (1080, 1920, 0, 0)), Cover("cover-3x4", GRID_3X4)))
 
 PROFILES = {p.name: p for p in (LANDSCAPE, VERTICAL, SQUARE, PORTRAIT, YOUTUBE, DOUYIN, DOUYIN_LONG, TIKTOK, SHORTS,
                                 REELS, BILIBILI, BILIBILI_STORY, XIAOHONGSHU, CHANNELS)}
@@ -139,7 +167,7 @@ PLAYBOOKS = {"youtube": "youtube", "shorts": "youtube", "douyin": "douyin", "dou
              "xiaohongshu": "xiaohongshu", "channels": "channels"}
 DEFAULT_PROFILE = "landscape"
 FIELDS = ("width", "height", "fps", "safe", "captions", "min_s", "max_s", "target_s", "max_mb", "lufs", "peak_db",
-          "max_still_s", "max_black_ratio", "require_audio", "ui")
+          "max_still_s", "max_black_ratio", "require_audio", "ui", "cover")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _CANVAS = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*(?:@\s*(\d+(?:\.\d+)?(?:/\d+)?)\s*)?$")
 NTSC = Fraction(1000, 1001)
@@ -274,6 +302,10 @@ def make_profile(spec, custom: dict | None = None, name: str = "custom", where: 
         captions = _box(spec["captions"], w, h, f"{where}.captions")
     else:
         captions = caption_band(safe, w, h) if sized or "safe" in spec else base.captions
+    if "cover" in spec:
+        cover = _covers(spec["cover"], w, h, f"{where}.cover")
+    else:
+        cover = () if sized else base.cover     # the base's crops are cut for its own canvas
     values = {k: _limit(spec, k, getattr(base, k), where) for k in ("min_s", "max_s", "max_mb", "max_still_s")}
     if values["min_s"] is not None and values["max_s"] is not None and values["min_s"] > values["max_s"]:
         raise ProfileError(f"{where}: min_s {values['min_s']:g} is over max_s {values['max_s']:g}")
@@ -282,7 +314,7 @@ def make_profile(spec, custom: dict | None = None, name: str = "custom", where: 
                    peak_db=_number(spec, "peak_db", base.peak_db, -12, 0, where),
                    max_black_ratio=_number(spec, "max_black_ratio", base.max_black_ratio, 0, 1, where),
                    require_audio=_flag(spec, "require_audio", base.require_audio, where),
-                   ui=_flag(spec, "ui", base.ui, where), **values)
+                   ui=_flag(spec, "ui", base.ui, where), cover=cover, **values)
 
 
 def _is_num(v) -> bool:
@@ -342,6 +374,25 @@ def _box(value, width: int, height: int, where: str) -> Box:
         raise ProfileError(f"{where} [{x}, {y}, {w}, {h}] must lie inside the {width}x{height} canvas with w and h "
                            "> 0")
     return Box(x, y, w, h)
+
+
+def _covers(value, width: int, height: int, where: str) -> tuple[Cover, ...]:
+    shape = f"a list of {{\"name\": \"cover\", \"crop\": [w, h, x, y]}} in canvas pixels, or [] for none"
+    if not isinstance(value, list) or not all(isinstance(c, dict) and set(c) == {"name", "crop"} for c in value):
+        raise ProfileError(f"{where} must be {shape} (got {value!r})")
+    out = []
+    for i, c in enumerate(value):
+        crop = c["crop"]
+        if not isinstance(c["name"], str) or not NAME.match(c["name"]) or c["name"] in [o.name for o in out]:
+            raise ProfileError(f"{where}[{i}].name must be a distinct file name of letters, digits, _ or - "
+                               f"(got {c['name']!r})")
+        if not (isinstance(crop, list) and len(crop) == 4 and all(_is_num(v) and float(v).is_integer() for v in crop)):
+            raise ProfileError(f"{where}[{i}].crop must be [w, h, x, y] in whole pixels (got {crop!r})")
+        w, h, x, y = (int(v) for v in crop)
+        if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > width or y + h > height:
+            raise ProfileError(f"{where}[{i}].crop [{w}, {h}, {x}, {y}] must lie inside the {width}x{height} canvas")
+        out.append(Cover(c["name"], (w, h, x, y)))
+    return tuple(out)
 
 
 def _scaled(box: Box, base: Profile, width: int, height: int) -> Box:

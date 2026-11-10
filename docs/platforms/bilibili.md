@@ -15,11 +15,11 @@ reported, practice, unsure. The help centre and upload page need a login, so man
   sits right of x 880. Story Mode videos run up to 10 min (reported, 2021[^story]).
 - Cover (封面): 4:3 at 1200×900 since late 2023, shown 4:3 in the mobile feed and 16:9 on PC and in search: 4–8
   large characters and the subject in the central 1280×720 band of a 1280×960 design (practice[^cover]), on frame 0
-  x 240–1680, y 135–945 (no check measures it); start captions after frame 0 to keep them off it.
+  x 240–1680, y 135–945 (render checks x only); start captions after frame 0 to keep them off it.
 - Hand over: `meta.title` (< 80 characters), `meta.desc` (简介 < 250 characters), `meta.sources`; tags (≥ 1, < 200
   characters in all) and the 分区; 自制 or 转载 with its source (reported[^api]); the 创作者声明 to tick; the srt;
-  `out/chapters.txt` (optional under about 5 min; no rule is published, so keep YouTube's); covers at 1920×1080
-  (frame 0) and 1280×960 (`crop=1440:1080:240:0,scale=1280:960`); a pinned comment (置顶评论) with sources.
+  `out/chapters.txt` (optional under about 5 min; no rule is published, so keep YouTube's); render's covers
+  `out/cover.png` (frame 0) and `out/cover-4x3.png` (`crop=1440:1080:240:0`); a pinned comment (置顶评论) with sources.
 
 ## The first seconds
 

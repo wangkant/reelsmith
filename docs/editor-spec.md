@@ -595,8 +595,8 @@ project needs.
 holding `match`, in the PNG's pixels), `site`, `url`, `line` and `around`. The browser is the installed Microsoft Edge, else the
 installed Google Chrome, else the Chromium that `python -m playwright install chromium` downloads. `viewport`
 `phone` loads the page at 430 CSS px wide and 3× device scale with a phone's user agent (the PNG is 1290 px wide);
-`desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone for vertical
-and portrait canvases, desktop for landscape and square ones. The browser speaks the project's locale
+`desktop` at 1440 CSS px and 2× with a desktop one (2880 px); the default follows the canvas: phone on a canvas
+taller than wide, desktop on a wide or square one. The browser speaks the project's locale
 (`navigator.language`, `Accept-Language`; a Chinese locale also takes the Asia/Shanghai time zone). Fixed and
 sticky overlays are hidden, a text column wider than the viewport is reflowed, and the match grows to its sentence
 (at most 4 lines). The reply says how wide the box must be shown for its text to stand 40 px tall on a canvas with
@@ -1209,9 +1209,11 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | `max_black_ratio` | 0-1 |
 | `require_audio` | false: a silent film is delivered |
 | `ui` | true: outside the safe area is the platform's UI (the layout message says so), and frame 0 is checked as the feed's cover (section 14) |
+| `cover` | `[{"name": "cover", "crop": [w, h, x, y]}, ...]`: render writes frame 0 of the delivered film cut to each crop as `out/<name>.png`, and the layout pass warns about words on frame 0 outside a crop; `[]` for none |
 
 A new canvas size without `safe` scales the base's safe area to it, axis by axis; without `captions` they take the
-new safe area's bottom band. A custom name may not be a built-in one; an inline profile is named `custom`.
+new safe area's bottom band, and without `cover` it has none.
+A custom name may not be a built-in one; an inline profile is named `custom`.
 `new_project(canvas="1920x1080@25")` writes such an inline profile (`"@29.97"` writes `"fps": "30000/1001"`; `describe`
 prints the rate as 29.97). Unknown fields, sizes, boxes outside the canvas
 and loops of `base` are refused with the field named (workspace.json profiles when the workspace loads, an inline

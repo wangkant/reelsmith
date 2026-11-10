@@ -1,5 +1,6 @@
-"""A delivery's side files: every captions track as SubRip (.srt) and WebVTT (.vtt) in out/captions/, and the
-project's chapters as YouTube description lines (out/chapters.txt) and as mp4 chapter marks (ffmpeg metadata)."""
+"""A delivery's side files: every captions track as SubRip (.srt) and WebVTT (.vtt) in out/captions/, the
+project's chapters as YouTube description lines (out/chapters.txt) and as mp4 chapter marks (ffmpeg metadata), the
+profile's covers (out/<name>.png, frame 0 cut to each crop) and a platform project's handover.md skeleton."""
 from __future__ import annotations
 
 import json
@@ -7,11 +8,98 @@ import shutil
 from pathlib import Path
 
 from . import document as D
+from . import media
 from . import timeexpr as T
 from .workspace import PROJECT_FILE, locale_for, project_root
 
 YOUTUBE_MIN_CHAPTERS = 3
 YOUTUBE_MIN_CHAPTER_S = 10
+HANDOVER_FILE = "handover.md"
+TODO = "TODO:"
+_AI = "AI-generated content: yes or no, and what was generated (voice, pictures, clips, music)"
+# Each playbook's "Hand over" bullet as headings, one line saying what goes there; the playbook stays the authority.
+HANDOVER = {
+    "douyin": [("Title", "as meta.title, or the post's title if it differs"),
+               ("Description and #话题", "as meta.desc: 1-3 sentences, 3-5 #话题, no links"),
+               ("Declarations", f"{_AI}; fiction; time and place or source"),
+               ("Cover", "out/cover.png is frame 0 cut 3:4; say what it shows"),
+               ("合集", "the collection and episode, or none for a one-off"),
+               ("Pinned comment", "the comment to pin"),
+               ("Domain", "finance, medical, legal, or none")],
+    "bilibili": [("Title", "as meta.title (< 80 characters)"),
+                 ("简介, tags and 分区", "简介 as meta.desc (< 250 characters); tags (>= 1, < 200 characters in all); "
+                                      "the 分区"),
+                 ("Declarations", f"自制 or 转载 with its source; the 创作者声明 to tick; {_AI}"),
+                 ("Cover", "out/cover.png (16:9) and out/cover-4x3.png are frame 0; say what they show"),
+                 ("Pinned comment", "the 置顶评论, with the sources"),
+                 ("Chapters", "out/chapters.txt, or none under about 5 min")],
+    "youtube": [("Title", "as meta.title (<= 100 characters)"),
+                ("Description and tags", "as meta.desc (<= 5 000 bytes); the tags"),
+                ("Declarations", "\"AI use\" yes or no and why; madeForKids; music and footage licences"),
+                ("Cover", "long-form: out/cover.png (frame 0) or a designed thumbnail; Shorts: the cover frame's time"),
+                ("Chapters", "out/chapters.txt, or none"),
+                ("End screen and mid-rolls", "the end-screen start and the mid-roll points, or none")],
+    "tiktok": [("Title", "as meta.title: the caption's first line"),
+               ("Description and hashtags", "as meta.desc (<= 2 200 characters), 3-5 specific hashtags"),
+               ("Declarations", "AI label yes or no and why; branded or self-promotional content; C2PA metadata "
+                                "present or not; music source and licence, or none"),
+               ("Cover", "the cover frame's time (default 0 s)")],
+    "reels": [("Title", "as meta.title: the opening line"),
+              ("Description and hashtags", "as meta.desc (<= 2 200 characters, <= 5 hashtags)"),
+              ("Declarations", "AI disclosure yes or no and why; C2PA metadata present or not; music source and "
+                               "licence, or none"),
+              ("Cover", "out/cover.png (9:16) and out/cover-3x4.png (the grid's crop) are frame 0; say what they "
+                        "show")],
+    "xiaohongshu": [("Title", "as meta.title (<= 20 characters)"),
+                    ("Description and #话题", "as meta.desc: 100-500 characters with the steps, 3-8 #话题"),
+                    ("Declarations", f"{_AI}; 声明原创 only if every asset is owned; a finance risk line, or none; "
+                                     "the music source"),
+                    ("Cover", "out/cover.png is frame 0 cut 3:4 (1080x1440); say what it shows"),
+                    ("合集", "the collection and episode, or none")],
+    "channels": [("Title", "as meta.title: the 短标题, 6-50 characters"),
+                 ("Description and #话题", "as meta.desc (<= 1 000 characters, inline #话题)"),
+                 ("Declarations", f"{_AI}; 声明原创 only if every asset is owned; 风险提示 for money topics, or none; "
+                                  "the music source or \"use the in-app library\""),
+                 ("Cover", "out/cover.png (9:16) and out/cover-3x4.png (the grid's crop) are frame 0; say what they "
+                           "show"),
+                 ("合集", "the collection and episode, or none")],
+}
+
+
+# ------------------------------------------------------------------ handover.md
+def handover_skeleton(book: str, title: str = "") -> str:
+    """handover.md for a film on the playbook `book`: its "Hand over" items as headings, each with a TODO line."""
+    head = f"# Handover{': ' + title if title else ''}\n\nWhat docs/platforms/{book}.md asks to hand over besides " \
+           f"the film and meta.title, meta.desc and meta.sources. Replace every {TODO} line.\n"
+    return head + "".join(f"\n## {h}\n\n{TODO} {line}\n" for h, line in HANDOVER[book])
+
+
+def handover_todo(project) -> int:
+    """TODO lines left in the project's handover.md (0 when it has none or there is no file)."""
+    path = project_root(project) / HANDOVER_FILE
+    if not path.is_file():
+        return 0
+    return sum(ln.lstrip().startswith(TODO) for ln in path.read_text(encoding="utf-8-sig").splitlines())
+
+
+# ------------------------------------------------------------------ covers
+def write_covers(film: Path, profile, folder: Path) -> list[dict]:
+    """out/<name>.png for each of the profile's covers: frame 0 of `film` cut to its crop (old covers removed)."""
+    for old in folder.glob("cover*.png"):
+        old.unlink()
+    out = []
+    for c in profile.cover:
+        w, h, x, y = c.crop
+        png = folder / f"{c.name}.png"
+        crop = [] if c.crop == (profile.width, profile.height, 0, 0) else ["-vf", f"crop={w}:{h}:{x}:{y}"]
+        r = media.run([media._exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(film),
+                       "-frames:v", "1", *crop, str(png)], 120)
+        if r.returncode != 0 or not png.is_file():
+            raise RuntimeError(f"ffmpeg could not cut {png.name} from {Path(film).name}: "
+                               f"{media.tail(r.stderr or '', 5, 300)}")
+        out.append({"name": c.name, "png": str(png), "crop": list(c.crop),
+                    "label": c.label(profile.width, profile.height)})
+    return out
 
 
 # ------------------------------------------------------------------ captions

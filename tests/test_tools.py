@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import reelsmith
-from reelsmith import cli, media, profiles
+from reelsmith import cli, media, profiles, sidecar
 from reelsmith import render as R
 from reelsmith import timeexpr as TE
 from reelsmith import tools as T
@@ -141,6 +141,44 @@ def test_new_project(tmp_path, monkeypatch):
     assert not T.new_project(str(p)).ok
     bad = T.new_project(str(tmp_path / "n2"), profile="vine")
     assert not bad.ok and "unknown profile" in bad
+
+
+def test_new_project_on_a_platform_writes_the_playbooks_handover_skeleton(tmp_path, monkeypatch):
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    p = tmp_path / "bili"
+    r = T.new_project(str(p), profile="bilibili", title="标题")
+    assert r.ok and f"{p / 'handover.md'}: what to hand over beside the film; fill its TODO: lines" in r
+    raw = (p / "handover.md").read_bytes()
+    assert b"\r\n" not in raw
+    text = raw.decode("utf-8")
+    assert text.startswith("# Handover: 标题\n") and "docs/platforms/bilibili.md" in text
+    heads = [ln[3:] for ln in text.splitlines() if ln.startswith("## ")]
+    assert heads == [h for h, _ in sidecar.HANDOVER["bilibili"]]
+    assert {"Declarations", "Cover", "Pinned comment", "Chapters"} <= set(heads) and "AI-generated content" in text
+    assert sidecar.handover_todo(p) == len(heads)
+    # every playbook has one; douyin-long and shorts share theirs; generic canvases get none
+    assert set(profiles.PLAYBOOKS.values()) == set(sidecar.HANDOVER)
+    assert T.new_project(str(tmp_path / "s"), profile="shorts").ok and (tmp_path / "s" / "handover.md").is_file()
+    plain = T.new_project(str(tmp_path / "l"), profile="vertical")
+    assert plain.ok and "handover" not in plain and not (tmp_path / "l" / "handover.md").exists()
+    (tmp_path / "kept").mkdir()
+    (tmp_path / "kept" / "handover.md").write_text("mine", encoding="utf-8")
+    assert T.new_project(str(tmp_path / "kept"), profile="douyin").ok
+    assert (tmp_path / "kept" / "handover.md").read_text(encoding="utf-8") == "mine"
+
+
+def test_capture_viewport_follows_the_canvas_shape_as_its_help_says():
+    cap = importlib.import_module("reelsmith.providers.capture")
+    tall = [profiles.make_profile({"base": b}) for b in ("vertical", "portrait", "douyin")] + [
+        profiles.make_profile({"width": 1000, "height": 1002})]
+    wide = [profiles.make_profile({"base": b}) for b in ("landscape", "square", "bilibili")]
+    assert {cap.default_viewport(p) for p in tall} == {"phone"}
+    assert {cap.default_viewport(p) for p in wide} == {"desktop"}
+    says = "phone on a canvas taller than wide, desktop on a wide or square one"
+    assert says in cap.default_viewport.__doc__ and says in " ".join(T.capture.__doc__.split())
+    sub = next(a for a in cli.command_parser("capture")._actions if a.dest == "cmd").choices["capture"]
+    viewport = next(a for a in sub._actions if a.dest == "viewport")
+    assert says in viewport.help
 
 
 def test_manual_is_served():

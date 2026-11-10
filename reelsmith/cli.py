@@ -84,7 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("--match", default="")
     p.add_argument("--viewport", default="", choices=["", "phone", "desktop"],
-                   help="default: phone for vertical and portrait canvases, desktop for landscape and square")
+                   help="default: phone on a canvas taller than wide, desktop on a wide or square one")
     p = proj(cmd("draw", tools.draw))
     p.add_argument("id")
     p.add_argument("prompt")

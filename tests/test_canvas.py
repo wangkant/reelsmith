@@ -143,7 +143,35 @@ def test_custom_profiles_from_workspace_json(tmp_path):
     assert P.choose(None, {"width": 640, "height": 360}).width == 640   # workspace.json profile may be inline too
 
 
+def test_covers_come_with_the_platform_profile_and_match_the_playbooks():
+    crops = {n: [(c.name, c.crop) for c in p.cover] for n, p in P.PROFILES.items() if p.cover}
+    assert crops == {"youtube": [("cover", (1920, 1080, 0, 0))],
+                     "douyin": [("cover", (1080, 1440, 0, 240))], "douyin-long": [("cover", (1080, 1440, 0, 240))],
+                     "reels": [("cover", (1080, 1920, 0, 0)), ("cover-3x4", (1080, 1440, 0, 240))],
+                     "bilibili": [("cover", (1920, 1080, 0, 0)), ("cover-4x3", (1440, 1080, 240, 0))],
+                     "xiaohongshu": [("cover", (1080, 1440, 0, 240))],
+                     "channels": [("cover", (1080, 1920, 0, 0)), ("cover-3x4", (1080, 1440, 0, 240))]}
+    douyin = (ROOT / "docs" / "platforms" / "douyin.md").read_text(encoding="utf-8")
+    bilibili = (ROOT / "docs" / "platforms" / "bilibili.md").read_text(encoding="utf-8")
+    assert "cropped 3:4 from the middle (y 240–1680)" in douyin and "crop=1440:1080:240:0" in bilibili
+    assert P.DOUYIN.cover[0].label(1080, 1920) == "3:4 cover (y 240-1680)"
+    assert P.BILIBILI.cover[1].label(1920, 1080) == "4:3 cover (x 240-1680)" and \
+        P.BILIBILI.cover[0].label(1920, 1080) == "16:9 cover"
+    assert P.make_profile({"base": "douyin", "fps": 25}).cover == P.DOUYIN.cover
+    assert P.make_profile({"base": "douyin", "width": 720, "height": 1280}).cover == ()   # cut for another canvas
+    own = P.make_profile({"base": "vertical", "cover": [{"name": "grid", "crop": [1080, 1080, 0, 420]}]})
+    assert own.cover == (P.Cover("grid", (1080, 1080, 0, 420)),)
+    assert P.make_profile({"base": "douyin", "cover": []}).cover == ()
+    assert json.loads(json.dumps(P.DOUYIN.to_json()))["cover"] == [{"name": "cover", "crop": [1080, 1440, 0, 240]}]
+
+
 @pytest.mark.parametrize("profiles, fragment", [
+    ({"x": {"cover": {"name": "cover"}}}, "profiles.x.cover must be a list of"),
+    ({"x": {"cover": [{"name": "c", "crop": [1920, 1080, 10, 0]}]}}, "profiles.x.cover[0].crop [1920, 1080, 10, 0] "
+                                                                       "must lie inside the 1920x1080 canvas"),
+    ({"x": {"cover": [{"name": "c", "crop": [100, 100.5, 0, 0]}]}}, "profiles.x.cover[0].crop must be [w, h, x, y]"),
+    ({"x": {"cover": [{"name": "c", "crop": [9, 9, 0, 0]}, {"name": "c", "crop": [8, 8, 0, 0]}]}},
+     "profiles.x.cover[1].name must be a distinct file name"),
     ({"x": {"width": 1001}}, "profiles.x.width must be an even whole number 64-4096"),
     ({"x": {"height": 32}}, "profiles.x.height"),
     ({"x": {"fps": 0}}, "profiles.x.fps must be a frame rate 1-120"),

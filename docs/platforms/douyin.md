@@ -10,9 +10,9 @@ channel made with reelsmith, reviewed from its own platform numbers (practice[^o
 - Safe x 120–880, y 240–1460, captions y 1260–1460 (practice[^safe]). UI: top ~230 px; a right rail x ≥ 880 at
   y 720–1640; @name, title, music and progress bar from y 1480; a 20:9 phone crops 50–110 px a side (practice[^safe]).
   The cover is frame 0, cropped 3:4 from the middle (y 240–1680) on the profile grid (practice[^cover]).
-- Hand over: `meta.title`, `meta.desc` (1–3 sentences, 3–5 #话题, no links), `meta.sources`; the cover (crop
-  `crop=1080:1440:0:240`); a note: declarations (AI, fiction, time/place or source), 合集 (none for a one-off), a
-  pinned comment, a domain flag (finance, medical, legal, else none). No subtitle upload exists (unsure).
+- Hand over: `meta.title`, `meta.desc` (1–3 sentences, 3–5 #话题, no links), `meta.sources`; the cover (render's
+  `out/cover.png`); a note: declarations (AI, fiction, time/place or source), 合集 (none for a one-off), a pinned
+  comment, a domain flag (finance, medical, legal, else none). No subtitle upload exists (unsure).
 
 ## The first seconds
 

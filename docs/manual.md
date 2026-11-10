@@ -331,7 +331,7 @@ the platform's playbook may tighten them.
   face. No flags, emblems, uniforms, slogans or lit signs and screens with writing in generated pictures: they come
   out wrong (the models scramble writing) or read as a claim nobody made.
 - Without a voice the captions are the narration: the frame-0 headline is line 1, the caption items start after it
-  and each is a line that would have been spoken. `review` then lists no lines: read the captions off its sheets.
+  and each is a line that would have been spoken. `review` then lists the caption on screen at each frame.
 
 ## Editing footage
 
@@ -455,7 +455,7 @@ shows. A component that crashes shows a red box in previews and is reported firs
 | `manual(project?)` | this manual; with a project, followed by its platform's playbook | `manual(p)` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md`) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"`; `from_project` puts another project's film on this canvas; the result names the profile's playbook | `new_project("/home/me/studio/projects/tshirt", profile="douyin", locale="zh-CN")` |
+| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"`; `from_project` puts another project's film on this canvas; the result names the profile's playbook, and a platform project gets a `handover.md` skeleton | `new_project("/home/me/studio/projects/tshirt", profile="douyin", locale="zh-CN")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
 | `undo(project, steps=1)` / `redo(project)` | undo applied batches (an asset registration is one too) / put the last undo back | `undo(p)` |
@@ -474,8 +474,8 @@ shows. A component that crashes shows a red box in previews and is reported firs
 | `silences(project, asset, min_s=0.5, noise_db=-35)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
 | `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Ada Lovelace, reelsmith")` |
 | `preview(project, times?, sweep?)` | stills at up to 24 moments + contact sheet + layout problems; `sweep` measures the whole film | `preview(p, [0, "line:3", "clip:n1+1", "end-1"])`, `preview(p, sweep=true)` |
-| `render(project, draft?, start?, end?, scale?)` | the film to `out/film.mp4`, mastered and checked; `draft=true` a quick small look to `build/draft.mp4` | `render(p)`, `render(p, draft=true, start="clip:b-2", end="clip:b+3")` |
-| `review(project, n?, every?)` | the delivered film a frame a second (spread out past 150 frames) on phone-size sheets, with the voice line heard at each frame and the still stretches | `review(p)`, `review(p, n=12)` |
+| `render(project, draft?, start?, end?, scale?)` | the film to `out/film.mp4`, mastered and checked, with its captions, chapters and covers; `draft=true` a quick small look to `build/draft.mp4` | `render(p)`, `render(p, draft=true, start="clip:b-2", end="clip:b+3")` |
+| `review(project, n?, every?)` | the delivered film a frame a second (spread out past 150 frames) on phone-size sheets, with the voice line heard at each frame (without a voice, the caption on screen) and the still stretches | `review(p)`, `review(p, n=12)` |
 | `export_captions(project, track?)` | captions as `.srt` and `.vtt` without rendering | `export_captions(p)` |
 
 - `speak` writes the whole narration from the lines you give it: **always pass every line**, changed or not;
@@ -527,15 +527,20 @@ with the finished file in `build/`. `build/report.json` is the latest attempt, `
 **Warnings** (information; take them seriously): text under 28 px; text over other text (captions included); text
 on a background of about its own brightness; text overflowing its clip box or cut by a component's own card;
 evidence that will read under 40 px; on platform profiles (or with `rules.json` `hook_seconds`) words not whole on
-frame 0, the cover, or no words there; a hole of 0.5 s or more with nothing on screen; a video or audio clip that
-runs past its source's end (a frozen last frame or silence); footage with sound in a film where nothing is heard
-(video `volume` defaults to 0); a `src:` Time past what its clip plays; an HDR source. **Advice** is only what
-the owner's `rules.json` asks for (no words in the first 2 s, a still held over 8 s, a length outside the target).
+frame 0, the cover, or no words there, and words on frame 0 that a cover crop cuts or leaves out; a hole of 0.5 s
+or more with nothing on screen; a video or audio clip that runs past its source's end (a frozen last frame or
+silence); footage with sound in a film where nothing is heard (video `volume` defaults to 0); a `src:` Time past
+what its clip plays; an HDR source. **Advice** is what the owner's `rules.json` asks for (no words in the first 2 s,
+a still held over 8 s, a length outside the target), and on a platform profile an empty `meta.sources`, which the
+playbook asks to hand over.
 
 **Handing over.** A delivered render writes `out/film.mp4`, `out/meta.json` (title, desc, sources, duration,
-profile, captions, chapters) for publishing, every captions track (hidden ones too) as `out/captions/<track>.srt`
+profile, captions, chapters, covers) for publishing, every captions track (hidden ones too) as `out/captions/<track>.srt`
 and `.vtt`, and project `chapters` as `out/chapters.txt` and mp4 chapter marks (YouTube shows them when the first
 is at 0:00, there are at least 3 and each lasts 10 s or more). Put `meta.title`, `meta.desc` and `meta.sources` in
 project.json; everything else the playbook asks to hand over (declarations such as AI-generated content, the
-collection, a pinned comment) goes in `handover.md` beside project.json, since `meta` takes nothing else. A cover is
-frame 0 of the film, cut beside it: `ffmpeg -i out/film.mp4 -frames:v 1 [-vf <playbook's crop>] cover.png`.
+collection, a pinned comment) goes in `handover.md` beside project.json, since `meta` takes nothing else:
+`new_project` on a platform profile writes it with the playbook's headings and a `TODO:` line under each, and render
+reminds you while any is left. On a profile whose playbook asks for a cover, render also cuts frame 0 of the
+delivered film as the playbook says: `out/cover.png` (and `out/cover-4x3.png` or `out/cover-3x4.png` where a second
+shape is asked), listed in its result and in `out/meta.json`.
