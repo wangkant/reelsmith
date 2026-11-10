@@ -13,6 +13,7 @@ import pytest
 from reelsmith import cli, media
 from reelsmith import resolve as R
 from reelsmith import tools
+from reelsmith.watch import chat as C
 from reelsmith.watch import presence as P
 from reelsmith.watch import server as W
 from reelsmith.watch import state as S
@@ -451,10 +452,22 @@ def test_the_player_waits_for_its_bundle(served, monkeypatch):
 
 
 def test_still_refuses_while_a_render_runs(served, demo):
-    (demo / "build").mkdir(exist_ok=True)
-    (demo / "build" / "film.raw.mp4").write_bytes(b"")
-    code, _, body = get(served, "/api/still?t=1")
+    with W.R.project_lock(demo / "build"):
+        assert W.render_busy(demo)
+        code, _, body = get(served, "/api/still?t=1")
     assert code == 503 and json.loads(body)["busy"] is True
+    assert not W.render_busy(demo)
+
+
+def test_a_copied_project_is_not_rendering(demo):
+    # copy order leaves the resolved film newer than the report, and a raw film behind: no lock is held
+    build = demo / "build"
+    build.mkdir(exist_ok=True)
+    (build / "report.json").write_text("{}", encoding="utf-8")
+    (build / "film.raw.mp4").write_bytes(b"")
+    (build / "resolved.film.json").write_text("{}", encoding="utf-8")
+    (build / "render.lock").write_bytes(b"")
+    assert not W.render_busy(demo)
 
 
 @needs_ffmpeg
@@ -561,3 +574,352 @@ def test_the_feed_has_a_row_for_every_batch_the_log_missed():
     feed = S.with_batches(logged, history)
     assert [(r["tool"], r["batch"]) for r in feed] == [("edit", 1), ("edit", 2), ("check", None)]
     assert feed[0]["summary"] == "added clip a" and S.with_batches(logged, history[1:]) is logged
+
+
+def test_the_feed_is_capped_however_many_batches_there_are():
+    history = [{"n": n, "at": f"2026-01-01T10:{n:02d}:00", "summary": f"batch {n}"} for n in range(1, 50)]
+    logged = [{"ts": f"2026-01-01T10:{m:02d}:30", "tool": "check", "ok": True, "batch": None} for m in range(40, 45)]
+    feed = S.with_batches(logged, history, limit=5)
+    # the log was cut to the limit: only batches since its oldest row join, and the feed stays at the limit
+    assert len(feed) == 5 and feed[-1]["ts"] == "2026-01-01T10:49:00"
+    assert all(r["ts"] >= "2026-01-01T10:40:30" for r in feed)
+    short = S.with_batches(logged[:2], history, limit=300)
+    assert len(short) == 51                       # a log that was not cut still gets every batch it missed
+
+
+def test_the_feed_reads_paths_relative_and_masks_keys(demo):
+    ws = demo.parent.parent
+    key = "sk-" + "Zz9Yy8Xx7W" * 4
+    row = {"ts": "2026-01-01T10:00:00", "tool": "new_project", "ok": False, "seconds": 0.1, "batch": None,
+           "summary": f"created {demo / 'project.json'} in workspace {ws}",
+           "text": f"failed: {demo.as_posix()}/assets/a.png and {(demo.parent / 'demo2').as_posix()} with {key}",
+           "files": []}
+    log = demo / ".history" / "activity.jsonl"
+    log.parent.mkdir(exist_ok=True)
+    log.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    got = S.activity_of(demo)[-1]
+    assert got["summary"] == "created project.json in workspace <workspace>"
+    assert got["text"] == "failed: assets/a.png and <workspace>/projects/demo2 with [redacted]"
+    assert S.build_state(demo)["activity"][-1]["text"] == got["text"]
+    # and what a tool call writes has no folder of the machine in it to begin with
+    tools._log_activity(str(demo), "new_project", tools.ToolResult(row["summary"], True), 0.1, None)
+    raw = log.read_text(encoding="utf-8").splitlines()[-1]
+    assert json.loads(raw)["text"] == "created project.json in workspace <workspace>" and str(ws) not in raw
+
+
+# ------------------------------------------------------------------ requests from elsewhere, bad requests
+def test_requests_from_another_site_are_refused(served):
+    assert get(served, "/api/state", {"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert get(served, "/api/state", {"Sec-Fetch-Site": "same-site"})[0] == 403      # another port on this host
+    assert get(served, "/api/state", {"Origin": "http://evil.example"})[0] == 403
+    assert get(served, "/project/assets/clip.mp4", {"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert get(served, "/api/still?t=1", {"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert get(served, "/api/session", {"Sec-Fetch-Site": "cross-site"})[0] == 403
+    # the page itself, an address-bar visit and the page's own requests
+    assert get(served, "/", {"Sec-Fetch-Site": "cross-site"})[0] == 200
+    assert get(served, "/api/state", {"Sec-Fetch-Site": "none"})[0] == 200
+    own = f"http://127.0.0.1:{served.port}"
+    code, head, _ = get(served, "/api/state", {"Sec-Fetch-Site": "same-origin", "Origin": own})
+    assert code == 200 and head["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert not any(k.lower().startswith("access-control-") for k in head)
+
+
+def test_bad_requests_get_an_answer(served):
+    assert get(served, "/project/assets/photo.png%00.txt")[0] == 404
+    assert get(served, "/api/still?t=nan")[0] == 400
+    code, _, body = get(served, "/api/still?t=1e308&w=1e308")
+    assert code in (200, 503) and (code == 200 or json.loads(body)["error"])
+    assert get(served, "/api/thumb?asset=clip&t=1e308&h=1e308")[0] in (200, 404, 503)
+    assert get(served, "/api/history/99999999999999999999999")[0] == 404
+
+
+def test_a_still_is_cached_by_what_draws_it(served, demo):
+    site = served.site(None)
+    st = site.cache.get()
+    first = site.still_key(st, "film")
+    assert site.still_key(st, "film") == first
+    photo = demo / "assets" / "photo.png"
+    os.utime(photo, (time.time() + 5, time.time() + 5))         # replaced in place
+    assert site.still_key(st, "film") != first
+    second = site.still_key(st, "film")
+    (demo.parent.parent / "library" / "components" / "Card.tsx").write_text("export default () => null;\n",
+                                                                           encoding="utf-8")
+    served.player._checked = 0.0
+    assert site.still_key(st, "film") != second
+    assert S.build_state(demo)["library"] != st["library"]    # and the window hears of a component edit
+
+
+def test_a_player_build_leaves_other_windows_their_builds(tmp_path):
+    player = W.Player(tmp_path / "player", None)
+    (tmp_path / "player").mkdir()
+    now = time.time()
+    folders = {}
+    for name, age in (("new", 0), ("recent", 60), ("old", W.PLAYER_KEEP_S + 60),
+                      ("busy.build-1", W.PLAYER_BUILD_S + 60), ("dead.build-2", 2 * W.PLAYER_BUILD_S + 60)):
+        folders[name] = tmp_path / "player" / name
+        folders[name].mkdir()
+        os.utime(folders[name], (now - age, now - age))
+    player._tidy(folders["new"])
+    # another window's build in progress and a build it may still serve stay
+    assert sorted(p.name for p in (tmp_path / "player").iterdir()) == ["busy.build-1", "new", "recent"]
+
+
+# ------------------------------------------------------------------ the chat
+OBJ = {"type": "object", "properties": {}}
+
+
+class FakeClient:
+    """One scripted step per model call: a reply dict, or a callable(messages) -> reply."""
+
+    def __init__(self, *script):
+        self.script, self.calls, self.on_retry = list(script), [], None
+
+    def complete(self, messages, tools):
+        self.calls.append(json.loads(json.dumps(messages)))
+        step = self.script.pop(0)
+        return step(messages) if callable(step) else step
+
+
+def reply(text=None, calls=(), cost=0.01):
+    msg = {"role": "assistant", "content": text}
+    if calls:
+        msg["tool_calls"] = [{"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": json.dumps(a)}}
+                             for i, (n, a) in enumerate(calls)]
+    return {"message": msg, "finish_reason": "tool_calls" if calls else "stop",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "cost_usd": cost}}
+
+
+class Tools:
+    """noop answers; hold waits until the turn is stopped; broken fails."""
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.stop = None
+
+    def __call__(self, project, ws, scope, web):
+        from dataclasses import dataclass
+
+        @dataclass
+        class Result:
+            text: str
+            error: bool = False
+            images: tuple = ()
+
+        @dataclass
+        class Tool:
+            name: str
+            description: str
+            parameters: dict
+            run: object
+
+        def hold(args):
+            self.entered.set()
+            for _ in range(200):
+                if self.stop is not None and self.stop.is_set():
+                    break
+                time.sleep(0.05)
+            return Result("held")
+        return [Tool("noop", "nothing", OBJ, lambda a: Result("nothing changed")), Tool("hold", "waits", OBJ, hold),
+                Tool("broken", "fails", OBJ, lambda a: Result("error: it broke", True))]
+
+
+@pytest.fixture
+def chat_demo(demo, monkeypatch):
+    for name in ("OPENROUTER_API_KEY", "REELSMITH_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    ws = demo.parent.parent
+    (ws / "workspace.json").write_text(json.dumps({"runner": {"engine": "api", "budget_usd": 1}}), encoding="utf-8")
+    (ws / ".env").write_text("OPENROUTER_API_KEY=sk-or-test-1234567\n", encoding="utf-8")
+    return demo
+
+
+def only_api(engine, ws):
+    return (True, "fake") if engine == "api" else (False, f"{engine} is not here")
+
+
+def make_chat(root, client, tools=None):
+    heard = []
+    chat = C.Chat(root, heard.append, client_factory=lambda s: client, tools_factory=tools or Tools(),
+                  engines_fn=only_api)
+    return chat, heard
+
+
+def roles(rows):
+    return [(r["role"], r.get("tool") or r.get("kind") or r["text"]) for r in rows]
+
+
+def test_a_turn_streams_its_rows_in_order(chat_demo):
+    client = FakeClient(reply("Looking at it.", [("noop", {"project": str(chat_demo), "id": "sb"}), ("broken", {})]),
+                        reply("Nothing needed changing."))
+    chat, heard = make_chat(chat_demo, client)
+    assert chat.send("What is at 10 s?", context={"clip": "sb", "start": 7.6, "end": 16.81, "playhead": 13.4,
+                                                  "junk": "x"}) == 1
+    assert chat.wait(20)
+    rows = chat.status()["messages"]
+    assert roles(rows) == [("user", "What is at 10 s?"), ("assistant", "Looking at it."), ("tool", "noop"),
+                           ("tool", "broken"), ("assistant", "Nothing needed changing."), ("note", "end")]
+    assert rows[0]["context"] == {"clip": "sb", "start": 7.6, "end": 16.81, "playhead": 13.4}
+    assert rows[2]["text"] == "sb" and rows[2]["ok"] is True                     # the project is left out
+    assert rows[3]["ok"] is False and "it broke" in rows[3]["detail"]
+    assert rows[-1]["cost_usd"] == 0.02 and "$0.02" in rows[-1]["text"] and all(r["turn"] == 1 for r in rows)
+    # the window heard each row as it came (a tool row once when called and again when answered)
+    seen = [(r["id"], r["ok"]) for p in heard for r in p["rows"]]
+    assert seen.index((3, None)) < seen.index((3, True)) < seen.index((5, None))
+    assert heard[-1]["busy"] is False and heard[0]["busy"] is True
+    first = client.calls[0]
+    assert "talking to you" in first[0]["content"] and "Nobody is online" not in first[0]["content"]
+    assert first[1]["content"].startswith("(reelsmith watch)")
+    assert "[selected clip sb (7.60-16.81 s); playhead at 13.40 s]\nWhat is at 10 s?" in first[1]["content"]
+    on_disk = [json.loads(ln) for ln in (chat_demo / ".history" / "chat.jsonl").read_text("utf-8").splitlines()]
+    assert {r["id"]: r for r in on_disk}[3]["ok"] is True                         # the last copy of a row wins
+    assert roles(C.Chat(chat_demo).status()["messages"]) == roles(rows)          # and it reloads the same
+    assert not (chat_demo / "build" / "run_state.json").exists()                 # a headless run's state is untouched
+
+
+def test_the_next_message_resumes_the_same_session(chat_demo):
+    client = FakeClient(reply("One."), reply("Two."))
+    chat, _ = make_chat(chat_demo, client)
+    chat.send("first")
+    chat.wait(20)
+    sid = json.loads((chat_demo / "build" / "chat_state.json").read_text("utf-8"))["session_id"]
+    chat.send("second")
+    chat.wait(20)
+    state = json.loads((chat_demo / "build" / "chat_state.json").read_text("utf-8"))
+    assert sid and state["session_id"] == sid and state["cost_usd"] == 0.02
+    again = client.calls[1]
+    assert [m["role"] for m in again] == ["system", "user", "assistant", "user"] and again[-1]["content"] == "second"
+    assert chat.status()["spent_usd"] == 0.02 and chat.status()["budget_usd"] == 1
+
+
+def test_stop_ends_a_turn_and_the_next_message_works(chat_demo):
+    tools = Tools()
+    client = FakeClient(reply("Working.", [("hold", {})]), reply("Back again."))
+    chat, heard = make_chat(chat_demo, client, tools)
+    tools.stop = chat._stop
+    assert chat.stop() is False                                     # nothing runs
+    chat.send("do it")
+    assert tools.entered.wait(10)
+    with pytest.raises(C.ChatError) as busy:
+        chat.send("and this")
+    assert busy.value.code == 409
+    assert chat.status()["busy"] and chat.stop() is True and heard[-1]["stopping"] is True
+    assert chat.wait(10) and not chat.status()["busy"]
+    rows = chat.status()["messages"]
+    assert rows[-1]["role"] == "note" and rows[-1]["kind"] == "stopped" and len(client.calls) == 1
+    assert json.loads((chat_demo / "build" / "chat_state.json").read_text("utf-8"))["status"] == "stopped"
+    chat.send("again")
+    chat.wait(20)
+    assert chat.status()["messages"][-1]["kind"] == "end"
+    assert client.calls[1][-1]["content"] == "again" and client.calls[1][1]["content"].startswith("(reelsmith watch)")
+
+
+def test_a_used_up_budget_is_said_and_runs_nothing(chat_demo):
+    (chat_demo / "build").mkdir(exist_ok=True)
+    (chat_demo / "build" / "chat_state.json").write_text(json.dumps({"cost_usd": 0.99}), encoding="utf-8")
+    client = FakeClient()
+    chat, _ = make_chat(chat_demo, client)
+    chat.send("anything")
+    chat.wait(20)
+    note = chat.status()["messages"][-1]
+    assert note["kind"] == "budget" and "$1.00 budget is used up" in note["text"] and client.calls == []
+
+
+def test_what_a_message_may_be(chat_demo):
+    chat, _ = make_chat(chat_demo, FakeClient())
+    for bad, code in (("", 400), ("   ", 400), ("x" * 8001, 400), (None, 400)):
+        with pytest.raises(C.ChatError) as err:
+            chat.send(bad)
+        assert err.value.code == code
+    with pytest.raises(C.ChatError, match="codex is not here"):
+        chat.send("hi", engine="codex")
+    with pytest.raises(C.ChatError, match="unknown engine"):
+        chat.send("hi", engine="gpt")
+    status = chat.status()
+    assert status["engine"] == "api" and [e["id"] for e in status["engines"]] == ["agent-sdk", "codex", "dsh", "api"]
+    assert status["messages"] == [] and status["busy"] is False
+
+
+def test_which_engine_is_the_default(chat_demo):
+    from reelsmith.workspace import Workspace
+    ws = Workspace.load(chat_demo.parent.parent)
+    rows = [{"id": e, "available": e in ("codex", "api")} for e in C.ENGINE_ORDER]
+    assert C.default_engine(rows, ws) == "api"                          # the workspace's, since it can run
+    (chat_demo.parent.parent / "workspace.json").write_text('{"runner": {"engine": "dsh"}}', encoding="utf-8")
+    assert C.default_engine(rows, Workspace.load(chat_demo.parent.parent)) == "codex"     # else the first that can
+    assert C.default_engine([{"id": "api", "available": False}], ws) is None
+    ok, why = C.can_run("api", ws)
+    assert ok and "openrouter" in why
+    (chat_demo.parent.parent / ".env").write_text("", encoding="utf-8")
+    ok, why = C.can_run("api", Workspace.load(chat_demo.parent.parent))
+    assert not ok and "OPENROUTER_API_KEY is missing" in why
+
+
+def post(srv, path, body, headers=None, token=True, origin=True):
+    conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=30)
+    hdrs = {"Content-Type": "application/json"}
+    if origin:
+        hdrs["Origin"] = f"http://127.0.0.1:{srv.port}"
+    if token:
+        hdrs[W.TOKEN_HEADER] = srv.token
+    hdrs.update(headers or {})
+    try:
+        conn.request("POST", path, body=body if isinstance(body, bytes) else json.dumps(body).encode(), headers=hdrs)
+        r = conn.getresponse()
+        return r.status, json.loads(r.read() or b"null")
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def chat_served(chat_demo):
+    tools = Tools()
+    client = FakeClient(reply("Working.", [("hold", {})]), reply("All done."))
+    srv = W.serve(chat_demo, chat_options={"client_factory": lambda s: client, "tools_factory": tools,
+                                           "engines_fn": only_api})
+    tools.stop = srv.site(None).chat._stop
+    yield srv, tools
+    srv.stop()
+
+
+def test_the_chat_over_http(chat_served):
+    srv, tools = chat_served
+    token = json.loads(get(srv, "/api/session")[2])["token"]
+    assert token == srv.token and len(token) >= 24
+    status = json.loads(get(srv, "/api/chat")[2])
+    assert status["busy"] is False and status["engine"] == "api" and status["budget_usd"] == 1
+    conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=20)
+    conn.request("GET", "/api/events")
+    events = conn.getresponse()
+    _event(events)
+    assert post(srv, "/api/chat", {"message": "hello", "engine": "api"}) == (202, {"turn": 1})
+    assert tools.entered.wait(10)
+    code, body = post(srv, "/api/chat", {"message": "more"})
+    assert code == 409 and "still running" in body["error"]
+    assert json.loads(get(srv, "/api/chat")[2])["busy"] is True
+    assert post(srv, "/api/chat/stop", {}) == (200, {"stopped": True})
+    rows = []
+    while not rows or rows[-1]["role"] != "note":
+        rows += json.loads(_event(events, ("chat",)))["rows"]
+    assert rows[0]["role"] == "user" and rows[-1]["kind"] == "stopped"
+    conn.close()
+    assert srv.site(None).chat.wait(10)
+    assert post(srv, "/api/chat/stop", {}) == (200, {"stopped": False})
+    assert post(srv, "/api/chat", {"message": ""})[0] == 400
+    assert post(srv, "/api/chat", {"message": "x" * 8001})[0] == 400
+    assert post(srv, "/api/chat", {"message": "hi", "engine": "codex"})[0] == 400
+    assert post(srv, "/api/chat", b"{not json")[0] == 400
+    assert post(srv, "/api/chat", b"x" * (W.MAX_BODY + 1))[0] == 413
+    assert post(srv, "/api/nothing", {})[0] == 404
+
+
+def test_a_change_needs_the_token_and_this_origin(chat_served):
+    srv, _ = chat_served
+    msg = {"message": "hello"}
+    assert post(srv, "/api/chat", msg, token=False)[0] == 403
+    assert post(srv, "/api/chat", msg, {W.TOKEN_HEADER: "guess"})[0] == 403
+    assert post(srv, "/api/chat", msg, origin=False)[0] == 403
+    assert post(srv, "/api/chat", msg, {"Origin": "http://evil.example"})[0] == 403
+    assert post(srv, "/api/chat", msg, {"Origin": f"http://127.0.0.1:{srv.port + 1}"})[0] == 403
+    assert post(srv, "/api/chat/stop", {}, {"Origin": "null"})[0] == 403
+    assert json.loads(get(srv, "/api/chat")[2])["messages"] == []          # none of them reached the chat
+    assert post(srv, "/api/chat", msg, {"Origin": f"http://localhost:{srv.port}"})[0] == 202

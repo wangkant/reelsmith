@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>reelsmith watch</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23202329'/%3E%3Crect x='3' y='4' width='6' height='3' rx='1' fill='%236ea8ff'/%3E%3Crect x='6' y='9' width='7' height='3' rx='1' fill='%238a93a3'/%3E%3C/svg%3E">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script type="module" src="/static/app.js"></script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 2.8v10.4c0 .5.5.8.9.5l8-5.2a.6.6 0 0 0 0-1L5.4 2.3c-.4-.3-.9 0-.9.5z" fill="currentColor"/></symbol>
-  <symbol id="i-pause" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3" height="11" rx=".8" fill="currentColor"/><rect x="9.5" y="2.5" width="3" height="11" rx=".8" fill="currentColor"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 2.9v10.2c0 .5.5.8.9.5l7.8-5.1a.6.6 0 0 0 0-1L5.9 2.4c-.4-.3-.9 0-.9.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 16 16"><rect x="3.8" y="2.8" width="3" height="10.4" rx=".8" fill="currentColor"/><rect x="9.2" y="2.8" width="3" height="10.4" rx=".8" fill="currentColor"/></symbol>
   <symbol id="i-start" viewBox="0 0 16 16"><rect x="2.5" y="3" width="1.8" height="10" rx=".6" fill="currentColor"/><path d="M13 3.6v8.8c0 .5-.5.7-.9.5L5.6 8.5a.6.6 0 0 1 0-1l6.5-4.4c.4-.3.9 0 .9.5z" fill="currentColor"/></symbol>
   <symbol id="i-end" viewBox="0 0 16 16"><rect x="11.7" y="3" width="1.8" height="10" rx=".6" fill="currentColor"/><path d="M3 3.6v8.8c0 .5.5.7.9.5l6.5-4.4a.6.6 0 0 0 0-1L3.9 3.1c-.4-.3-.9 0-.9.5z" fill="currentColor"/></symbol>
   <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -24,78 +24,131 @@
   <symbol id="i-fit" viewBox="0 0 16 16"><path d="M2.5 5.5V3h2.5M13.5 5.5V3H11M2.5 10.5V13h2.5M13.5 10.5V13H11M5.5 8h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-follow" viewBox="0 0 16 16"><path d="M8 1.8v12.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M5.2 1.8h5.6L8 4.6z" fill="currentColor"/><path d="M11 9.5 13.5 12 11 14.5M5 9.5 2.5 12 5 14.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-replay" viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.6-3.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2.6 2.4v3h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.8 5.8v4.4L10.4 8z" fill="currentColor"/></symbol>
+  <symbol id="i-jump" viewBox="0 0 16 16"><path d="M3 8h8.5M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8.2L5 14v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 16 16"><path d="m10.6 2.9 2.5 2.5-7.7 7.7-3.1.6.6-3.1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="m9.2 4.3 2.5 2.5" stroke="currentColor" stroke-width="1.4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.8 8s2.3-4.2 6.2-4.2S14.2 8 14.2 8 11.9 12.2 8 12.2 1.8 8 1.8 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="2" fill="currentColor"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m5.4 8.2 1.8 1.8 3.5-3.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-film" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 3v10M11 3v10M2 6h3M2 10h3M11 6h3M11 10h3" stroke="currentColor" stroke-width="1.2"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 16 16"><rect x="5.8" y="1.8" width="4.4" height="7.6" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3.6 7.6a4.4 4.4 0 0 0 8.8 0M8 12v2.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-brush" viewBox="0 0 16 16"><path d="M13.6 2.4 7.4 8.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M6.6 8.4c1.2.2 1.9 1 1.6 2.3-.4 1.7-2.4 3-5.2 2.6.9-.8.6-2 1.1-3.2.5-1.1 1.4-1.9 2.5-1.7z" fill="currentColor"/></symbol>
+  <symbol id="i-import" viewBox="0 0 16 16"><path d="M8 2v7.5M5 6.7 8 9.6l3-2.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 10v2.4a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5.5 6.5h5a3 3 0 0 1 0 6H7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M7.5 3.8 4.8 6.5l2.7 2.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 16 16"><path d="M8 1.8 9.4 6.6 14.2 8 9.4 9.4 8 14.2 6.6 9.4 1.8 8l4.8-1.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.6" fill="currentColor"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 16 16"><path d="m4.5 6.2 3.5 3.6 3.5-3.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-history" viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2.4 2.6v2.8h2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 5.2V8l2 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.8v3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11" r=".95" fill="currentColor"/></symbol>
+  <symbol id="i-target" viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 2.5v2M11 2.5v2M5 11.5v2M11 11.5v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-box" viewBox="0 0 16 16"><path d="M2.5 5 8 2.3 13.5 5v6L8 13.7 2.5 11z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.5 5 8 7.7 13.5 5M8 7.7v6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pic" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.5" r="1.2" fill="currentColor"/><path d="m2.5 11.5 3.5-3 2.5 2 2-1.6 3 2.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 3.5V3a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 16 16"><path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/><path d="M3 13 13 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
 </svg>
 
 <div class="app">
   <header class="top">
-    <div class="brand" aria-hidden="true"><span class="brand-mark"></span></div>
+    <img class="brand" src="/static/favicon.svg" alt="" width="20" height="20">
     <div class="top-title">
       <h1 id="filmTitle">&nbsp;</h1>
-      <span id="projName" class="proj mono"></span>
+      <span id="projName" class="proj"></span>
+    </div>
+    <div class="agent" id="agent" role="status" aria-live="polite" data-state="idle">
+      <span class="agent-dot"></span><span class="agent-text" id="agentText"></span>
     </div>
     <div class="top-facts">
-      <span class="fact mono" id="canvasInfo"></span>
-      <span class="fact"><span class="fact-k" data-i18n="top.length">Length</span> <span class="mono" id="lengthInfo">–</span></span>
-      <span class="fact spend" id="spendBox" hidden>
-        <span class="fact-k" data-i18n="top.spend">Spent</span>
-        <span class="mono" id="spendText"></span>
-        <span class="meter" id="spendBar"></span>
-      </span>
+      <span class="fact" id="canvasInfo"></span>
+      <span class="fact spend" id="spendBox" hidden><span class="fact-k" data-i18n="top.spend">Spent</span><span class="num" id="spendText"></span><span class="meter" id="spendBar"></span></span>
+      <span class="divider" aria-hidden="true"></span>
       <span class="pill" id="delivery"></span>
-      <span class="status" id="status" data-state="connecting" role="status" aria-live="polite">
-        <span class="status-dot"></span><span id="statusText"></span>
-      </span>
-      <button class="icon-btn help-btn" id="helpBtn" type="button" data-i18n-title="help.title">?</button>
+      <span class="conn" id="conn" data-state="connecting"><span class="conn-dot"></span><span id="connText"></span></span>
+      <button class="icon-btn round help-btn" id="helpBtn" type="button">?</button>
     </div>
+    <div class="run-bar" id="runBar" hidden><span></span></div>
   </header>
 
   <main class="work">
     <section class="monitor" aria-label="Monitor">
       <div class="screen" id="screen">
         <div class="film" id="film">
-          <iframe id="player" title="Live player" hidden allow="autoplay"></iframe>
+          <iframe id="player" title="Live player" hidden allow="autoplay" tabindex="-1"></iframe>
           <img id="still" alt="" hidden>
           <video id="delivered" hidden playsinline preload="metadata"></video>
           <div class="safe" id="safe" hidden></div>
+          <div class="sel-box" id="selBox" hidden><span class="sel-tag" id="selTag"></span><i></i><i></i><i></i><i></i></div>
+          <div class="pop-glyph" id="popGlyph" aria-hidden="true"><svg><use href="#i-play"/></svg></div>
+          <div class="just-changed" id="justChanged" hidden></div>
+          <div class="scrim" id="histScrim" hidden><div class="scrim-chip"><strong id="histTitle"></strong><span id="histSub"></span></div></div>
           <div class="screen-msg" id="screenMsg" hidden></div>
+          <div class="mon-bar" id="monBar" hidden></div>
         </div>
-        <span class="source-tag" id="sourceTag"></span>
-        <span class="stale-tag" id="staleTag" data-i18n="mon.staleDelivered" hidden></span>
+        <span class="mon-chip" id="monChip" hidden></span>
+        <span class="source-tag" id="sourceTag" hidden></span>
+        <button class="chip-btn jump" id="jumpChange" type="button" hidden><svg><use href="#i-jump"/></svg><span id="jumpText"></span></button>
       </div>
       <div class="transport">
         <div class="tr-group tr-left">
           <div class="seg" role="group">
-            <button type="button" class="seg-btn" id="srcLive" aria-pressed="true" data-i18n="mon.live">live cut</button>
-            <button type="button" class="seg-btn" id="srcDelivered" aria-pressed="false" data-i18n="tr.deliveredSwitch">Delivered film</button>
+            <button type="button" class="seg-btn" id="srcLive" aria-pressed="true" data-i18n="tr.live">Live cut</button>
+            <button type="button" class="seg-btn" id="srcDelivered" aria-pressed="false"><span data-i18n="tr.deliveredSwitch">Delivered film</span><span class="spin" aria-hidden="true"></span></button>
           </div>
         </div>
         <div class="tr-group tr-mid">
-          <button class="icon-btn" id="startBtn" type="button" data-i18n-title="tr.start"><svg><use href="#i-start"/></svg></button>
-          <button class="icon-btn" id="backBtn" type="button" data-i18n-title="tr.back"><svg><use href="#i-back"/></svg></button>
-          <button class="icon-btn play" id="playBtn" type="button" aria-pressed="false"><svg class="i-play"><use href="#i-play"/></svg><svg class="i-pause"><use href="#i-pause"/></svg></button>
-          <button class="icon-btn" id="fwdBtn" type="button" data-i18n-title="tr.fwd"><svg><use href="#i-fwd"/></svg></button>
-          <button class="icon-btn" id="endBtn" type="button" data-i18n-title="tr.end"><svg><use href="#i-end"/></svg></button>
+          <button class="icon-btn" id="startBtn" type="button"><svg><use href="#i-start"/></svg></button>
+          <button class="icon-btn" id="backBtn" type="button"><svg><use href="#i-back"/></svg></button>
+          <button class="play" id="playBtn" type="button" aria-pressed="false"><svg class="i-play"><use href="#i-play"/></svg><svg class="i-pause"><use href="#i-pause"/></svg><span class="spin" aria-hidden="true"></span></button>
+          <button class="icon-btn" id="fwdBtn" type="button"><svg><use href="#i-fwd"/></svg></button>
+          <button class="icon-btn" id="endBtn" type="button"><svg><use href="#i-end"/></svg></button>
           <div class="tc">
-            <span class="tc-main mono" id="tc">0:00.00</span>
-            <span class="tc-sub mono"><span id="tcTotal">0:00.00</span> · <span id="tcFrame">frame 0</span></span>
+            <span class="tc-main num"><span id="tc">0:00.00</span><span class="tc-total"> / <span id="tcTotal">0:00.00</span></span></span>
+            <span class="tc-sub"><span class="num" id="tcFrame"></span><span class="tc-note" id="tcNote" role="status" aria-live="polite"></span></span>
           </div>
         </div>
         <div class="tr-group tr-right">
-          <button class="icon-btn" id="safeBtn" type="button" aria-pressed="false" data-i18n-title="tr.safe"><svg><use href="#i-safe"/></svg></button>
+          <button class="icon-btn" id="safeBtn" type="button" aria-pressed="false"><svg><use href="#i-safe"/></svg></button>
           <button class="icon-btn mute" id="muteBtn" type="button" aria-pressed="false"><svg><use href="#i-vol"/></svg></button>
-          <input class="range" id="volume" type="range" min="0" max="1" step="0.05" value="1" data-i18n-title="tr.volume">
+          <span class="vol-wrap"><input class="range vol" id="volume" type="range" min="0" max="1" step="0.05" value="1"><span class="vol-val num" id="volVal" hidden></span></span>
         </div>
       </div>
     </section>
 
     <aside class="side" aria-label="Side panel">
       <div class="tabs" role="tablist">
-        <button role="tab" id="tab-activity" aria-controls="pane-activity" type="button"><span data-i18n="tab.activity">Activity</span><kbd>1</kbd></button>
-        <button role="tab" id="tab-issues" aria-controls="pane-issues" type="button"><span data-i18n="tab.issues">Issues</span><span class="tab-count" id="issueCount"></span><kbd>2</kbd></button>
-        <button role="tab" id="tab-clip" aria-controls="pane-clip" type="button"><span data-i18n="tab.clip">Clip</span><kbd>3</kbd></button>
-        <button role="tab" id="tab-assets" aria-controls="pane-assets" type="button"><span data-i18n="tab.assets">Assets</span><kbd>4</kbd></button>
+        <button role="tab" id="tab-chat" aria-controls="pane-chat" type="button"><span data-i18n="tab.chat">Chat</span><span class="tab-dot" id="chatDot" hidden></span><kbd>1</kbd></button>
+        <button role="tab" id="tab-activity" aria-controls="pane-activity" type="button"><span data-i18n="tab.activity">Activity</span><span class="tab-dot" id="actDot" hidden></span><kbd>2</kbd></button>
+        <button role="tab" id="tab-issues" aria-controls="pane-issues" type="button"><span data-i18n="tab.issues">Issues</span><span class="tab-count" id="issueCount"></span><kbd>3</kbd></button>
+        <button role="tab" id="tab-clip" aria-controls="pane-clip" type="button"><span data-i18n="tab.clip">Clip</span><kbd>4</kbd></button>
+        <button role="tab" id="tab-assets" aria-controls="pane-assets" type="button"><span data-i18n="tab.assets">Assets</span><span class="tab-count" id="assetCount"></span><kbd>5</kbd></button>
       </div>
-      <div class="pane pane-activity" id="pane-activity" role="tabpanel" aria-labelledby="tab-activity">
+      <section class="intro" id="intro" aria-labelledby="introTitle" hidden></section>
+      <div class="pane pane-chat" id="pane-chat" role="tabpanel" aria-labelledby="tab-chat">
+        <div class="chat-scroll">
+          <div class="chat-log" id="chatLog" tabindex="0" role="log" aria-live="polite"></div>
+          <button class="new-pill" id="chatNew" type="button" hidden><span id="chatNewText"></span><svg><use href="#i-chev"/></svg></button>
+        </div>
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="c-card is-warn chat-block" id="chatBlock" role="status" hidden></div>
+          <div class="ctx-row" id="ctxRow" hidden></div>
+          <div class="compose-box" id="composeBox">
+            <textarea id="chatInput" rows="1" spellcheck="true"></textarea>
+            <button class="send-btn" id="sendBtn" type="submit"><svg class="i-send"><use href="#i-send"/></svg><svg class="i-stop"><use href="#i-stop"/></svg><span class="spin" aria-hidden="true"></span><span class="send-text" id="sendText"></span></button>
+          </div>
+          <div class="compose-foot">
+            <span class="engine-wrap">
+              <button class="engine-btn" id="engineBtn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="engineMenu"><span class="engine-dot"></span><span class="engine-text" id="engineText"></span><svg><use href="#i-chev"/></svg></button>
+              <ul class="engine-menu" id="engineMenu" role="listbox" tabindex="-1" hidden></ul>
+            </span>
+            <span class="compose-hint" id="composeHint"></span>
+            <span class="chat-spend" id="chatSpend" hidden><span class="num" id="chatSpendText"></span><span class="meter" id="chatSpendBar"></span></span>
+          </div>
+          <p class="compose-err" id="composeErr" role="alert" hidden></p>
+        </form>
+      </div>
+      <div class="pane pane-activity" id="pane-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+        <div class="now-strip" id="nowStrip" hidden role="status" aria-live="polite"></div>
         <div class="replay" id="replay" hidden>
           <span class="replay-title" data-i18n="act.replay" data-i18n-title="act.replayHint">Replay</span>
           <button class="icon-btn sm" id="replayPrev" type="button" data-i18n-title="act.prev"><svg><use href="#i-back"/></svg></button>
@@ -104,7 +157,8 @@
           <button class="icon-btn sm" id="replayPlay" type="button" aria-pressed="false"><svg><use href="#i-replay"/></svg></button>
           <span class="replay-label mono" id="replayLabel"></span>
         </div>
-        <div class="feed" id="feed" tabindex="0" aria-live="polite"></div>
+        <div class="feed" id="feed" tabindex="0" role="log" aria-live="polite"></div>
+        <button class="new-pill" id="feedNew" type="button" hidden><span id="feedNewText"></span><svg><use href="#i-chev"/></svg></button>
       </div>
       <div class="pane" id="pane-issues" role="tabpanel" aria-labelledby="tab-issues" hidden><div class="scroll" id="issuesList"></div></div>
       <div class="pane" id="pane-clip" role="tabpanel" aria-labelledby="tab-clip" hidden><div class="scroll" id="clipBody"></div></div>
@@ -114,38 +168,41 @@
 
   <div class="split" id="split" role="separator" aria-orientation="horizontal" tabindex="0"></div>
 
-  <section class="timeline" aria-label="Timeline">
+  <section class="timeline" id="timeline" aria-label="Timeline">
     <div class="tl-bar">
       <div class="tl-tools">
-        <button class="icon-btn sm" id="zoomOut" type="button" data-i18n-title="tl.zoomOut"><svg><use href="#i-minus"/></svg></button>
-        <span class="zoom-label mono" id="zoomLabel"></span>
-        <button class="icon-btn sm" id="zoomIn" type="button" data-i18n-title="tl.zoomIn"><svg><use href="#i-plus"/></svg></button>
-        <button class="text-btn" id="zoomFit" type="button"><svg><use href="#i-fit"/></svg><span data-i18n="tl.fit">Fit</span></button>
-        <button class="text-btn toggle" id="followBtn" type="button" aria-pressed="true" data-i18n-title="tl.followHint"><svg><use href="#i-follow"/></svg><span data-i18n="tl.follow">Follow</span></button>
+        <button class="icon-btn sm" id="zoomOut" type="button"><svg><use href="#i-minus"/></svg></button>
+        <span class="zoom-label num" id="zoomLabel"></span>
+        <button class="icon-btn sm" id="zoomIn" type="button"><svg><use href="#i-plus"/></svg></button>
+        <button class="text-btn" id="zoomFit" type="button" aria-pressed="false"><svg><use href="#i-fit"/></svg><span data-i18n="tl.fit">Fit</span></button>
+        <button class="text-btn toggle" id="followBtn" type="button" aria-pressed="true"><svg><use href="#i-follow"/></svg><span data-i18n="tl.follow">Follow</span></button>
       </div>
+      <div class="summary" id="summary"></div>
       <div class="history-banner" id="historyBanner" hidden>
         <span class="hb-dot"></span>
         <span id="historyText"></span>
         <button class="text-btn accent" id="backToNow" type="button" data-i18n="tl.backToNow">Back to now</button>
       </div>
     </div>
+    <div class="error-banner" id="errorBanner" hidden role="alert">
+      <strong data-i18n="err.title">project.json does not load</strong>
+      <span class="error-text mono" id="errorText"></span>
+      <span class="error-note" id="errorNote"></span>
+    </div>
     <div class="tl-body">
       <div class="tl-heads" id="tlHeads"></div>
       <div class="tl-main" id="tlMain">
-        <canvas id="tlCanvas" tabindex="-1"></canvas>
+        <canvas id="tlCanvas" tabindex="0"></canvas>
         <div class="tl-empty" id="tlEmpty" hidden>
           <svg class="tl-empty-art" viewBox="0 0 120 56" aria-hidden="true">
             <rect x="4" y="6" width="44" height="12" rx="3"/><rect x="52" y="6" width="28" height="12" rx="3"/>
             <rect x="18" y="24" width="70" height="12" rx="3"/><rect x="4" y="42" width="112" height="10" rx="3"/>
           </svg>
-          <strong data-i18n="tl.emptyTitle">No tracks yet</strong>
-          <p data-i18n="tl.emptyBody"></p>
+          <strong id="tlEmptyTitle" data-i18n="tl.emptyTitle">No tracks yet</strong>
+          <p id="tlEmptyBody" data-i18n="tl.emptyBody"></p>
         </div>
-        <div class="error-card" id="errorCard" hidden role="alert">
-          <strong data-i18n="err.title">The project does not load</strong>
-          <p class="error-text mono" id="errorText"></p>
-          <p class="error-note" id="errorNote"></p>
-        </div>
+        <div class="tl-fade" id="tlFade" hidden></div>
+        <div class="tl-vbar" id="tlVbar" hidden><div class="tl-vthumb" id="tlVthumb"></div></div>
         <div class="tl-tip" id="tlTip" hidden></div>
       </div>
     </div>
@@ -154,19 +211,44 @@
 </div>
 
 <dialog class="help" id="help" aria-labelledby="helpTitle">
-  <h2 id="helpTitle" data-i18n="help.title">Keyboard</h2>
+  <h2 id="helpTitle" data-i18n="help.title">About this window</h2>
+  <p class="help-about" data-i18n="help.about"></p>
+  <h3 data-i18n="help.keys">Keys</h3>
   <dl class="keys">
     <dt><kbd>Space</kbd></dt><dd data-i18n="help.play"></dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="help.frame"></dd>
-    <dt><kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="help.second"></dd>
+    <dt><kbd>Shift</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="help.second"></dd>
     <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd data-i18n="help.ends"></dd>
-    <dt><kbd>+</kbd> <kbd>−</kbd> · <kbd>Ctrl</kbd> + wheel</dt><dd data-i18n="help.zoom"></dd>
+    <dt><kbd>+</kbd> <kbd>−</kbd> <kbd>Ctrl</kbd>+<kbd data-i18n="help.wheel">wheel</kbd></dt><dd data-i18n="help.zoom"></dd>
     <dt><kbd>F</kbd></dt><dd data-i18n="help.fit"></dd>
     <dt><kbd>S</kbd></dt><dd data-i18n="help.safe"></dd>
-    <dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd data-i18n="help.tabs"></dd>
+    <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd data-i18n="help.tabs"></dd>
+    <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>[</kbd> <kbd>]</kbd></dt><dd data-i18n="help.clips"></dd>
+    <dt><kbd>Esc</kbd></dt><dd data-i18n="help.esc"></dd>
     <dt><kbd>?</kbd></dt><dd data-i18n="help.help"></dd>
   </dl>
-  <button class="text-btn accent" id="helpClose" type="button" data-i18n="help.close">Close</button>
+  <h3 data-i18n="help.legend">Colours on the timeline</h3>
+  <ul class="legend" id="legend"></ul>
+  <h3 data-i18n="help.marks">Marks</h3>
+  <ul class="legend marks">
+    <li><span class="sw mark-error"></span><span data-i18n="help.markError"></span></li>
+    <li><span class="sw mark-missing"></span><span data-i18n="help.markMissing"></span></li>
+    <li><span class="sw mark-changed"></span><span data-i18n="help.markChanged"></span></li>
+  </ul>
+  <div class="help-foot"><button class="text-btn solid" id="helpClose" type="button" data-i18n="help.close">Close</button></div>
+</dialog>
+
+<dialog class="lightbox" id="lightbox" aria-labelledby="lbTitle">
+  <div class="lb-head">
+    <span class="lb-title" id="lbTitle"></span>
+    <span class="lb-count num" id="lbCount"></span>
+    <button class="icon-btn" id="lbClose" type="button"><svg><use href="#i-close"/></svg></button>
+  </div>
+  <div class="lb-stage">
+    <button class="icon-btn lb-nav" id="lbPrev" type="button"><svg><use href="#i-back"/></svg></button>
+    <figure class="lb-fig"><img id="lbImg" alt=""><figcaption class="lb-cap" id="lbCap"></figcaption></figure>
+    <button class="icon-btn lb-nav" id="lbNext" type="button"><svg><use href="#i-fwd"/></svg></button>
+  </div>
 </dialog>
 </body>
 </html>
