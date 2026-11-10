@@ -86,37 +86,48 @@ export default function StoryBeats({ props }: { props: any }) {
   const dimInk = withAlpha(ink, dark ? 0.62 : 0.58);
   const railCol = withAlpha(ink, dark ? 0.22 : 0.16);
 
-  const WHEN_SIZE = 30 * u;
-  const CHIP_SIZE = 34 * u;
+  const WHEN_SIZE = 34 * u;
+  const CHIP_SIZE = 40 * u;
   const FLOOR = 40 * u;
   const BIG_MIN = 56 * u;
   const chipGap = 16 * u;
-  const pad = Math.round(Math.max(34 * u, Math.min(56 * u, w * 0.07)));
   const dotR = 11 * u;
-  const railX = pad + 16 * u;
-  const textX = railX + 42 * u;
-  const textW = Math.max(80 * u, w - textX - pad);
-
-  // One shared column for the compact `when` labels, so every compact text starts at the same x; long labels wrap in it
-  // at their own line height, and the column stays under 30 % of the card so the texts keep their room.
   const whenW = (s: string) => textWidth(s, WHEN_SIZE, FONTS.sans, 700);
   const colGap = 20 * u;
-  const whenCol = Math.min(textW * 0.3, Math.max(0, ...beats.map((b) => (b.when ? whenW(b.when) + colGap : 0))));
-  const whenLines = beats.map((b) => (b.when ? wrap(b.when, Math.max(1, whenCol - colGap), whenW) : []));
-  // The chip of the large beat: shrinks to fit the text column (never under 30 px at a 1080 short side), then wraps.
   const chipPadX = 0.55;
-  const chips = beats.map((b) => {
-    if (!b.when) return { size: 0, lines: [] as string[] };
-    const size = Math.max(WHEN_SIZE, Math.min(CHIP_SIZE, Math.floor((textW * 100) / (textWidth(b.when, 100, FONTS.sans, 800) + 2 * chipPadX * 100))));
-    const lines = wrap(b.when, Math.max(1, textW - 2 * chipPadX * size), (s) => textWidth(s, size, FONTS.sans, 800));
-    return { size, lines };
-  });
+  // Columns for a layout width W: the box's, or a wider one that is then scaled down to the box.
+  const columns = (W: number) => {
+    const pad = Math.round(Math.max(34 * u, Math.min(56 * u, W * 0.07)));
+    const railX = pad + 16 * u;
+    const textX = railX + 42 * u;
+    const textW = Math.max(80 * u, W - textX - pad);
+    // One shared column for the compact `when` labels, so every compact text starts at the same x; long labels wrap
+    // in it at their own line height, and the column stays under 30 % of the card so the texts keep their room
+    // (up to 40 % when one word needs it, so "November" is never cut into "Novembe" / "r").
+    const wordCol = Math.max(0, ...beats.map((b) => (b.when ? Math.max(0, ...words(b.when).filter((s) => s.trim()).map(whenW)) + colGap + u : 0)));
+    const whenCol = Math.max(
+      Math.min(textW * 0.3, Math.max(0, ...beats.map((b) => (b.when ? whenW(b.when) + colGap : 0)))),
+      Math.min(textW * 0.4, wordCol),
+    );
+    const whenLines = beats.map((b) => (b.when ? wrap(b.when, Math.max(1, whenCol - colGap), whenW) : []));
+    // The chip of the large beat: shrinks to fit the text column (never under 34 px at a 1080 short side), then wraps.
+    const chips = beats.map((b) => {
+      if (!b.when) return { size: 0, lines: [] as string[] };
+      const size = Math.max(WHEN_SIZE, Math.min(CHIP_SIZE, Math.floor((textW * 100) / (textWidth(b.when, 100, FONTS.sans, 800) + 2 * chipPadX * 100))));
+      const lines = wrap(b.when, Math.max(1, textW - 2 * chipPadX * size), (s) => textWidth(s, size, FONTS.sans, 800));
+      return { size, lines };
+    });
+    return { W, pad, railX, textX, textW, whenCol, whenLines, chips };
+  };
+  let C = columns(w);
 
-  // Geometry for one size step; bounded search below picks the largest step where every moment fits.
+  // Geometry for one size step; bounded search below picks the largest step where every moment fits (steps under 0
+  // only grow the earlier beats and the spacing, so a short story still fills its box).
   const geom = (k: number) => {
+    const { textW, whenCol, whenLines, chips, pad } = C;
     // past step 14 the large beat itself gives way, from 56 down to the 40 floor
     const bigMin = k <= 14 ? BIG_MIN : Math.max(FLOOR, BIG_MIN - (k - 14) * 2 * u);
-    const bigMax = Math.max(bigMin, (104 - k * 4) * u);
+    const bigMax = Math.max(bigMin, Math.min(112, 104 - k * 4) * u);
     const csMax = Math.max(FLOOR, (50 - k) * u);
     const gap = Math.max(18, 48 - k * 3) * u;
     const cRoom = Math.max(60 * u, textW - whenCol);
@@ -151,13 +162,24 @@ export default function StoryBeats({ props }: { props: any }) {
   };
   const LAST = 22;
   let G = geom(LAST);
-  for (let k = 0; k <= LAST; k++) {
+  let fitScale = 1;
+  for (let k = -6; k <= LAST; k++) {
     const lay = geom(k);
     if (lay.need <= h) { G = lay; break; }
   }
+  // When even the floor does not fit, the card is laid out in a box as much larger as it needs (wider too, so the
+  // texts take fewer lines) and scaled down to this one.
+  if (G.need > h) {
+    for (let s = 0.96; s >= 0.6; s -= 0.04) {
+      C = columns(w / s);
+      G = geom(LAST);
+      fitScale = s;
+      if (G.need <= h / s) break;
+    }
+    fitScale = Math.min(fitScale, h / G.need);
+  }
   const { cs, gap, items } = G;
-  // When even the floor does not fit, the card is laid out in a taller box and scaled down to this one.
-  const fitScale = G.need > h ? h / G.need : 1;
+  const { W, pad, railX, textX, textW, whenCol, whenLines, chips } = C;
   const H = h / fitScale;
   // The card grows down from a top that centres its final (all beats landed) height in the box.
   const top = Math.max(0, Math.min((H - G.finalH) / 2, H - G.need));
@@ -226,14 +248,14 @@ export default function StoryBeats({ props }: { props: any }) {
   const pulse = 0.5 + 0.5 * Math.sin(t * 4);
 
   return (
-    <div style={{ position: "absolute", width: w, height: H, transform: fitScale < 1 ? `scale(${fitScale})` : undefined, transformOrigin: "50% 0" }}>
-      <div style={{ position: "absolute", left: 0, top, width: w, height: Math.max(pad * 2 + cs, cardH),
+    <div style={{ position: "absolute", width: W, height: H, transform: fitScale < 1 ? `scale(${fitScale})` : undefined, transformOrigin: "0 0" }}>
+      <div style={{ position: "absolute", left: 0, top, width: W, height: Math.max(pad * 2 + cs, cardH),
         transform: `translateY(${((1 - cardIn) * 30 + Math.sin(t * 1.3) * 3) * u}px)`, opacity: Math.min(1, cardIn * 1.5) }}>
         <div style={{ position: "absolute", inset: 0, borderRadius: radius, background: cardBg,
           border: `${2 * u}px solid ${withAlpha(ink, dark ? 0.12 : 0.08)}`, boxSizing: "border-box",
           boxShadow: `0 ${18 * u}px ${44 * u}px rgba(20,14,8,${dark ? 0.45 : 0.2})` }} />
         <div style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: radius }}>
-        <svg width={w} height={H}style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
+        <svg width={W} height={H} style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
           <defs>
             <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor={ink} stopOpacity="0" />

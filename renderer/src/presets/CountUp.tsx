@@ -39,10 +39,11 @@ export default function CountUp({ props }: { props: any }) {
   const digits = Math.max(unit(fmt(value, decimals, grouping), 1), unit(fmt(start, decimals, grouping), 1)) * 1.02;
   // a word after the number ("12 minutes") takes a word space; a symbol or a CJK unit sits close
   const sufGap = /^[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}]/u.test(suffix) ? 0.12 : 0.04;
-  const perPx = unit(prefix, PRE) + digits + unit(suffix, SUF) + (suffix ? sufGap : 0);
+  const inlinePx = unit(prefix, PRE) + digits + unit(suffix, SUF) + (suffix ? sufGap : 0);
+  const floor = (34 * Math.min(width, height)) / 1080;
   // a long label wraps (up to three lines) rather than shrink under the readable floor
   const fitted = label
-    ? fitBlock(label, w * 0.94, h * 0.36, { max: Math.min(72, h * 0.13), min: (28 * Math.min(width, height)) / 1080, maxLines: 3, family: FONTS.sans, weight: 800, lineHeight: 1.25 })
+    ? fitBlock(label, w * 0.94, h * 0.36, { max: Math.min(72, h * 0.13), min: floor, maxLines: 3, family: FONTS.sans, weight: 800, lineHeight: 1.25 })
     : { size: 0, lines: [] as string[] };
   const labelSize = fitted.size;
   const labelH = fitted.lines.length * labelSize * 1.25;
@@ -50,10 +51,16 @@ export default function CountUp({ props }: { props: any }) {
   const barGap = 0.16; // clear of a comma's descender
   const barH = 0.04;
   // 0.9 of the width leaves room for the landing pop
-  const byWidth = perPx > 0 ? (w * 0.9) / perPx : h;
-  const byHeight = ((h - labelBlock) * 0.95) / (1.15 + (underline ? barGap + barH : 0));
-  const size = Math.max(8, Math.min(byWidth, byHeight, 420));
-  const block = size * 1.15 + (underline ? size * (barGap + barH) : 0) + labelBlock;
+  const solve = (perPx: number, under: number) => Math.max(8, Math.min(
+    perPx > 0 ? (w * 0.9) / perPx : h, ((h - labelBlock - under) * 0.95) / (1.15 + (underline ? barGap + barH : 0)), 420));
+  // a unit too long to stay readable beside the digits takes its own line under them
+  const stacked = !!suffix && solve(inlinePx, 0) * SUF < floor;
+  const unitLine = stacked
+    ? fitBlock(suffix, w * 0.94, h * 0.24, { max: Math.min(96, h * 0.12), min: floor, maxLines: 2, family: FONTS.sans, weight: 900, lineHeight: 1.2 })
+    : { size: 0, lines: [] as string[] };
+  const unitH = unitLine.lines.length * unitLine.size * 1.2 + (stacked ? unitLine.size * 0.3 : 0); // clear of the underline
+  const size = stacked ? solve(unit(prefix, PRE) + digits, unitH) : solve(inlinePx, 0);
+  const block = size * 1.15 + unitH + (underline ? size * (barGap + barH) : 0) + labelBlock;
   const top = Math.max(0, (h - block) / 2);
   const appear = ease(f, at, at + 4);
   const pop = f >= land ? 1 + 0.06 * Math.max(0, 1 - (f - land) / 8) : 1;
@@ -74,11 +81,18 @@ export default function CountUp({ props }: { props: any }) {
           {prefix ? <span style={{ fontSize: size * PRE }}>{prefix}</span> : null}
           <span>{shown}</span>
         </span>
-        {suffix ? <span style={{ fontSize: size * SUF, marginLeft: size * sufGap }}>{suffix}</span> : null}
+        {suffix && !stacked ? <span style={{ fontSize: size * SUF, marginLeft: size * sufGap }}>{suffix}</span> : null}
       </div>
+      {stacked ? (
+        <div style={{
+          position: "absolute", left: 0, width: w, top: top + size * 1.15, height: unitH, whiteSpace: "pre",
+          textAlign: left ? "left" : "center", fontFamily: FONTS.sans, fontWeight: 900, fontSize: unitLine.size, lineHeight: 1.2,
+          color, opacity: appear,
+        }}>{unitLine.lines.join("\n")}</div>
+      ) : null}
       {underline ? (
         <div style={{
-          position: "absolute", top: top + size * (1.15 + barGap), height: Math.max(4, size * barH), width: barW,
+          position: "absolute", top: top + unitH + size * (1.15 + barGap), height: Math.max(4, size * barH), width: barW,
           left: left ? 0 : (w - barW) / 2, background: color, borderRadius: size,
         }} />
       ) : null}

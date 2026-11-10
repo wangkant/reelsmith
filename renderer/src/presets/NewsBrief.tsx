@@ -110,8 +110,8 @@ const LEAD_RE = /^(source\s*:|\u636e|\u64da|\u51fa\u5178\s*[:\uff1a])\s*[:\uff1a
 export default function NewsBrief({ props }: { props: any }) {
   const { w, h, fps, theme, locale, width, height } = useClip();
   const f = useCurrentFrame();
-  const u = Math.min(width, height) / 1080; // px at a 1080 short side -> this canvas
-  if (!(w >= 200 * u && h >= 200 * u)) return null;
+  const u0 = Math.min(width, height) / 1080; // px at a 1080 short side -> this canvas
+  if (!(w >= 200 * u0 && h >= 200 * u0)) return null;
   const headline = String(props?.headline ?? "").trim();
   if (!headline) return null;
   const at = frameOr(props?.at, 0);
@@ -146,66 +146,90 @@ export default function NewsBrief({ props }: { props: any }) {
   });
   hots.sort((p, q) => p[0] - q[0]);
 
-  // the card hugs a text column of at most 1040 px and centres in the box
-  const innerW = Math.min(w - 96 * u, 1040 * u);
-  const pad = Math.min((w - innerW) / 2, 64 * u);
-  const cardW = innerW + pad * 2;
-  const cardLeft = (w - cardW) / 2;
-  const left = cardLeft + pad;
-
-  // kicker: "source · date" in one pill when it fits, else the date drops under it; a long source wraps in the pill
-  const kSize = 30 * u;
-  const dotD = 16 * u;
-  const pillPadL = 18 * u, pillPadR = 24 * u, pillGap = 12 * u, pillPadY = 12 * u;
-  const pillTextW = innerW - pillPadL - dotD - pillGap - pillPadR;
-  const kSep = " \u00b7 ";
-  const kWidth = (t: string) => textWidth(t, kSize, FONTS.sans, 700);
-  const oneRow = srcText && date ? kWidth(srcText + kSep + date) <= pillTextW : true;
-  const pillText = oneRow ? (srcText && date ? srcText + kSep + date : srcText || date) : srcText;
-  const pillLines = pillText ? fitWrap(pillText, pillTextW, kSize, kSize, FONTS.sans, 700).lines : [];
-  const dateBelow = !oneRow ? fitWrap(date, innerW - 6 * u, kSize, kSize, FONTS.sans, 500).lines : [];
-  const kH = pillLines.length ? Math.max(54 * u, pillLines.length * kSize * 1.3 + pillPadY * 2) : 0;
-  const kBlock = kH + (dateBelow.length ? 10 * u + dateBelow.length * kSize * 1.3 : 0);
-
   const chars = headline.replace(/\s/g, "").length;
   const latin = !CJK.test(headline);
-  const maxH = Math.min((chars <= (latin ? 14 : 6) ? 132 : chars <= (latin ? 26 : 12) ? 108 : 96) * u, innerW / 4);
-  const markW = 44 * u;
-  const ptW = innerW - markW;
-  const hm = (s: number) => (t: string) => textWidth(t, s, FONTS.display, 400);
-  const plan = (compact: boolean) => {
-    const padY = compact ? 40 * u : Math.max(46 * u, pad * 0.95);
-    const gapK = kBlock ? (compact ? 18 : 30) * u : 0;
-    const hlh = compact ? 1.12 : 1.18;
-    const plh = compact ? 1.26 : 1.36;
-    const ptGap = (compact ? 12 : 22) * u;
-    const ruleGap = (compact ? 22 : 34) * u;
-    const ruleBlock = pts.length ? ruleGap * 2 + 3 * u : 0;
-    const hFloor = (compact ? 48 : 56) * u;
-    const maxHL = compact ? 5 : chars >= (latin ? 32 : 16) ? 4 : 3;
-    const maxPL = compact ? 3 : 2;
-    const ptLay = (ps: number) => pts.map((p) => wrap(p.text, ptW, (t) => textWidth(t, ps, FONTS.sans, p.hot ? 700 : 500), []));
-    let pick: { hs: number; H: Wrap; ps: number; P: Wrap[]; total: number } | null = null;
-    let first = 0;
-    for (let hs = Math.round(maxH); hs >= hFloor; hs -= 4 * u) {
-      if (first && hs < first * 0.75) break;
-      const H = wrap(headline, innerW, hm(hs), hots);
-      if (H.over || H.lines.length > maxHL) continue;
-      for (const ps of [44 * u, 42 * u, 40 * u]) {
-        const P = ptLay(ps);
-        if (P.some((l) => l.over || l.lines.length > maxPL)) continue;
-        const pH = P.reduce((s, l) => s + l.lines.length * ps * plh, 0) + Math.max(0, P.length - 1) * ptGap;
-        const total = padY * 2 + kBlock + gapK + H.lines.length * hs * hlh + ruleBlock + pH;
-        if (total > h) continue;
+  // the headline's ceiling stays put while the rest of the card grows to the box, so a short one never turns into a poster
+  const maxH0 = (chars <= (latin ? 14 : 6) ? 132 : chars <= (latin ? 26 : 12) ? 108 : 96) * u0;
+
+  // the whole layout at a unit size u (u0 x a fill factor); the largest factor whose roomy plan fits the box wins
+  const build = (u: number) => {
+    // the card hugs a text column of at most 1040 px and centres in the box
+    const innerW = Math.min(w - 96 * u, 1040 * u);
+    const pad = Math.min((w - innerW) / 2, 64 * u);
+    const cardW = innerW + pad * 2;
+    const cardLeft = (w - cardW) / 2;
+    const left = cardLeft + pad;
+
+    // kicker: "source · date" in one pill when it fits, else the date drops under it; a long source wraps in the pill
+    const kSize = 34 * u;
+    const dotD = 16 * u;
+    const pillPadL = 18 * u, pillPadR = 24 * u, pillGap = 12 * u, pillPadY = 12 * u;
+    const pillTextW = innerW - pillPadL - dotD - pillGap - pillPadR;
+    const kSep = " · ";
+    const kWidth = (t: string) => textWidth(t, kSize, FONTS.sans, 700);
+    const oneRow = srcText && date ? kWidth(srcText + kSep + date) <= pillTextW : true;
+    const pillText = oneRow ? (srcText && date ? srcText + kSep + date : srcText || date) : srcText;
+    const pillLines = pillText ? fitWrap(pillText, pillTextW, kSize, kSize, FONTS.sans, 700).lines : [];
+    const dateBelow = !oneRow ? fitWrap(date, innerW - 6 * u, kSize, kSize, FONTS.sans, 500).lines : [];
+    const kH = pillLines.length ? Math.max(58 * u, pillLines.length * kSize * 1.3 + pillPadY * 2) : 0;
+    const kBlock = kH + (dateBelow.length ? 10 * u + dateBelow.length * kSize * 1.3 : 0);
+
+    const maxH = Math.min(maxH0, innerW / 4);
+    const markW = 48 * u;
+    const ptW = innerW - markW;
+    const hm = (s: number) => (t: string) => textWidth(t, s, FONTS.display, 400);
+    const plan = (compact: boolean) => {
+      const padY = compact ? 40 * u : Math.max(46 * u, pad * 0.95);
+      const gapK = kBlock ? (compact ? 18 : 30) * u : 0;
+      const hlh = compact ? 1.12 : 1.18;
+      const plh = compact ? 1.26 : 1.34;
+      const ptGap = (compact ? 12 : 22) * u;
+      const ruleGap = (compact ? 22 : 34) * u;
+      const ruleBlock = pts.length ? ruleGap * 2 + 3 * u : 0;
+      const hFloor = (compact ? 48 : 56) * u0;
+      const maxHL = compact ? 5 : chars >= (latin ? 32 : 16) ? 4 : 3;
+      const maxPL = compact ? 3 : 2;
+      const ptLay = (ps: number) => pts.map((p) => wrap(p.text, ptW, (t) => textWidth(t, ps, FONTS.sans, p.hot ? 700 : 500), []));
+      let pick: { hs: number; H: Wrap; ps: number; P: Wrap[]; total: number } | null = null;
+      let first = 0;
+      for (let hs = Math.round(maxH); hs >= hFloor; hs -= 4 * u0) {
+        if (first && hs < first * 0.75) break;
+        const H = wrap(headline, innerW, hm(hs), hots);
+        if (H.over || H.lines.length > maxHL) continue;
+        // the points stay a clear step below the headline; a size up to 12% smaller wins when it saves a line
+        let pt: { ps: number; P: Wrap[]; total: number; n: number } | null = null;
+        for (const ps of (compact ? [44, 42, 40] : [48, 45, 42]).map((s) => Math.min(s * u, hs * 0.66))) {
+          const P = ptLay(ps);
+          if (P.some((l) => l.over || l.lines.length > maxPL)) continue;
+          const pH = P.reduce((s, l) => s + l.lines.length * ps * plh, 0) + Math.max(0, P.length - 1) * ptGap;
+          const total = padY * 2 + kBlock + gapK + H.lines.length * hs * hlh + ruleBlock + pH;
+          const n = P.reduce((s, l) => s + l.lines.length, 0);
+          if (total <= h && (!pt || n < pt.n)) pt = { ps, P, total, n };
+        }
+        if (!pt) continue;
         if (!first) first = hs;
-        if (!pick || (+H.bad - +pick.H.bad || H.ugly - pick.H.ugly || H.soft - pick.H.soft) < 0) pick = { hs, H, ps, P, total };
-        break;
+        if (!pick || (+H.bad - +pick.H.bad || H.ugly - pick.H.ugly || H.soft - pick.H.soft) < 0) pick = { hs, H, ps: pt.ps, P: pt.P, total: pt.total };
       }
-    }
-    return { padY, gapK, hlh, plh, ptGap, ruleGap, pick };
+      return { padY, gapK, hlh, plh, ptGap, ruleGap, pick };
+    };
+    return {
+      u, innerW, pad, cardW, cardLeft, left, kSize, dotD, pillPadL, pillPadR, pillGap, pillLines, dateBelow, kH, kBlock,
+      markW, ptW, hm, plan,
+    };
   };
-  let L = plan(false);
-  if (!L.pick) L = plan(true);
+  let B = build(u0);
+  let L = B.plan(false);
+  for (const k of [1.4, 1.32, 1.24, 1.16, 1.08]) {
+    const b = build(u0 * k);
+    const l = b.plan(false);
+    if (l.pick) {
+      B = b;
+      L = l;
+      break;
+    }
+  }
+  if (!L.pick) L = B.plan(true);
+  const { u, innerW, cardW, cardLeft, left, kSize, dotD, pillPadL, pillPadR, pillGap, pillLines, dateBelow, kH, kBlock, markW, ptW, hm } = B;
   const fallback = () => {
     const hs = 48 * u, ps = 40 * u;
     const H = wrap(headline, innerW, hm(hs), hots);
@@ -218,8 +242,10 @@ export default function NewsBrief({ props }: { props: any }) {
   const { padY, gapK, hlh, plh, ptGap, ruleGap } = L;
   const { hs, ps } = pick;
   const cardH = pick.total;
-  const fitScale = cardH > h ? h / cardH : 1; // last resort only: the compact plan fits every box the meta allows
-  const top = Math.max(0, (h - cardH * fitScale) / 2);
+  // last resort when even the compact plan is too tall (the longest headline and points); 1.012 leaves room for the drift
+  const fitScale = cardH > h ? h / (cardH * 1.012) : 1;
+  // the card scales about 40 % of its height, so its top moves down by 0.4 x the height it loses
+  const top = (h - cardH * fitScale) / 2 - 0.4 * cardH * (1 - fitScale);
 
   const life = (f - at) * (30 / fps);
   const cardIn = springAt(f, at, { fps, durationInFrames: fr(12) });
@@ -229,7 +255,9 @@ export default function NewsBrief({ props }: { props: any }) {
   const hotAt = hAt + fr(14);
   const totalHot = hots.reduce((s, [a, b]) => s + b - a, 0);
   const hotP = ease(f, hotAt, hotAt + Math.max(fr(12), Math.round(fr(totalHot * (latin ? 0.8 : 1.6)))));
-  const ruleT = ease(f, at + fr(16), at + fr(32));
+  // the rule closes the header when the first point is on its way
+  const ruleAt = pts.length ? Math.max(at + fr(16), pts[0].at - fr(8)) : at + fr(16);
+  const ruleT = ease(f, ruleAt, ruleAt + fr(16));
   const drift = 1 + 0.012 * ease(f, at, at + Math.max(30, Math.round(8 * fps)));
   const pulse = 0.5 + 0.5 * Math.sin(life / 9);
 
@@ -260,11 +288,19 @@ export default function NewsBrief({ props }: { props: any }) {
 
   const headTop = padY + kBlock + gapK;
   const ruleTop = headTop + pick.H.lines.length * hs * hlh + ruleGap;
+  // the card grows down to each point as it lands, so it never shows room for what has not come yet
   let y = ruleTop + 3 * u + ruleGap;
+  let cardVis = ruleTop - ruleGap + padY;
+  const ptTops = pts.map((_, i) => {
+    const t0 = y;
+    const bottom = y + pick.P[i].lines.length * ps * plh;
+    y = bottom + ptGap;
+    cardVis += (bottom + padY - cardVis) * springAt(f, pts[i].at - fr(4), { fps, durationInFrames: fr(12) });
+    return t0;
+  });
   const ptEls = pts.map((p, i) => {
     const lines = pick.P[i].lines.map(([a, b]) => p.text.slice(a, b).trimEnd());
-    const top0 = y;
-    y += lines.length * ps * plh + ptGap;
+    const top0 = ptTops[i];
     if (f < p.at) return null;
     const t = springAt(f, p.at, { fps, durationInFrames: fr(12) });
     const sweep = p.hot ? ease(f, p.at + fr(12), p.at + fr(12 + 8 * lines.length)) : 0;
@@ -307,13 +343,13 @@ export default function NewsBrief({ props }: { props: any }) {
         transform: `scale(${fitScale * (0.96 + 0.04 * cardIn) * drift}) translateY(${(1 - cardIn) * 24 * u}px)`, opacity: cardIn,
       }}>
         <div style={{
-          position: "absolute", left: cardLeft, top: 0, width: cardW, height: cardH, borderRadius: 34 * u, background: cardBg, overflow: "hidden",
+          position: "absolute", left: cardLeft, top: 0, width: cardW, height: cardVis, borderRadius: 34 * u, background: cardBg, overflow: "hidden",
           border: `${1.5 * u}px solid ${dark ? withAlpha(theme.snow, 0.12) : withAlpha(theme.ink, 0.07)}`,
           boxShadow: `0 ${24 * u}px ${60 * u}px rgba(20,14,8,0.30), 0 ${3 * u}px ${10 * u}px rgba(20,14,8,0.14)`,
         }}>
           {/* corner rings, turning slowly */}
           <svg width={ringR * 2} height={ringR * 2} style={{
-            position: "absolute", right: -ringR * 0.8, bottom: -ringR * 0.8, transform: `rotate(${life * 0.25}deg)`,
+            position: "absolute", right: -ringR * 0.8, top: cardH - ringR * 1.2, transform: `rotate(${life * 0.25}deg)`,
           }}>
             {[0.98, 0.74, 0.5].map((k, i) => (
               <circle key={i} cx={ringR} cy={ringR} r={ringR * k - 2 * u} fill="none" stroke={withAlpha(theme.gold, dark ? 0.22 : 0.28)}

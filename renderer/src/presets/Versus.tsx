@@ -69,7 +69,7 @@ export default function Versus({ props }: { props: any }) {
   const TITLE_MAX = 72 * u;
   const TITLE_MIN = 52 * u;
   const TEXT_FLOOR = 40 * u;
-  const TAG_SIZE = 32 * u;
+  const TAG_SIZE = 34 * u;
 
   const g = onGround(theme, props.ground);
   const dark = g.dark;
@@ -97,9 +97,9 @@ export default function Versus({ props }: { props: any }) {
   const bar = 10 * u; // accent edge width, reserved on every panel so the text never moves
   const bulletW = 34 * u;
   const tagGap = 14 * u;
-  const geo = (size: number, tight: boolean) => {
-    const gap = cols ? Math.max(28 * u, w * 0.04) : tight ? 30 * u : Math.max(40 * u, h * 0.05);
-    const pw = cols ? (w - gap) / 2 : w;
+  const geo = (size: number, tight: boolean, W = w) => {
+    const gap = cols ? Math.max(28 * u, W * 0.04) : tight ? 30 * u : Math.max(40 * u, h * 0.05);
+    const pw = cols ? (W - gap) / 2 : W;
     const pad = Math.round(tight ? Math.max(22 * u, Math.min(32 * u, pw * 0.05)) : Math.max(26 * u, Math.min(44 * u, pw * 0.07)));
     const textX = pad + bar;
     const textW = pw - textX - pad;
@@ -110,7 +110,9 @@ export default function Versus({ props }: { props: any }) {
       const room = tagBelow ? textW : textW - tagW;
       const one = (room * 100) / Math.max(1, textWidth(s.title, 100, FONTS.display));
       const tmin = tight ? 44 * u : TITLE_MIN;
-      let tsize = Math.max(tmin, Math.min(tight ? TITLE_MIN + 4 * u : TITLE_MAX, Math.floor(one)));
+      // a title is a label: never larger than the points under it
+      const tmax = tight ? TITLE_MIN + 4 * u : Math.max(TITLE_MIN, Math.min(TITLE_MAX, size * 0.92));
+      let tsize = Math.max(tmin, Math.min(tmax, Math.floor(one)));
       if (textWidth(s.title, tsize, FONTS.display) <= room) return { size: tsize, lines: [s.title], tagW, tagBelow };
       // wraps between words; a long word shrinks the title (to the text floor) before it is cut
       tsize = Math.max(TEXT_FLOOR, Math.min(tmin, Math.floor((room * 100) / widestWord(s.title, FONTS.display))));
@@ -135,8 +137,9 @@ export default function Versus({ props }: { props: any }) {
     return { size, gap, pw, pad, textX, textW, titles, titleBlock, rows, lh, lineGap, ruleGap, bodyInset, heights, need };
   };
   // Bounded search: roomy layout first (fewest wrapped rows, then the largest size), then a tight one; when even the
-  // tight floor does not fit, the whole group scales down to the box.
-  const maxLine = cols ? 54 : 64;
+  // tight floor does not fit, the group is laid out in a box as much larger as it needs (wider too, so the points take
+  // fewer rows) and scaled down to this one.
+  const maxLine = cols ? 60 : 80;
   let G: ReturnType<typeof geo> | null = null;
   for (const tight of [false, true]) {
     let best = Infinity;
@@ -147,13 +150,23 @@ export default function Versus({ props }: { props: any }) {
     }
     if (G) break;
   }
-  const lay = G ?? geo(TEXT_FLOOR, true);
-  const fitScale = G ? 1 : h / lay.need;
+  let lay = G ?? geo(TEXT_FLOOR, true);
+  let fitScale = 1;
+  if (!G) {
+    for (let k = 0.96; k >= 0.6; k -= 0.04) {
+      lay = geo(TEXT_FLOOR, true, w / k);
+      fitScale = k;
+      if (lay.need <= h / k) break;
+    }
+    fitScale = Math.min(fitScale, h / lay.need);
+  }
+  const W = w / fitScale;
+  const H = h / fitScale;
   const { size, gap, pw, pad, textX, textW, titles, titleBlock } = lay;
   const tall = Math.max(...lay.heights);
   const phs = cols ? [tall, tall] : lay.heights;
   const groupH = cols ? tall : phs[0] + phs[1] + gap;
-  const top0 = (h - groupH) / 2;
+  const top0 = (H - groupH) / 2;
   const origin = (i: number) => (cols ? { x: i * (pw + gap), y: top0 } : { x: 0, y: top0 + (i ? phs[0] + gap : 0) });
 
   // Colours: side a is the muted "claim" card, side b the bright "fact" card.
@@ -180,6 +193,15 @@ export default function Versus({ props }: { props: any }) {
     const tt = titles[i];
     const rows = lay.rows[i];
     const bodyTop = pad + titleBlock(i) + lay.ruleGap;
+    // the card grows down to each point as it lands: no empty body waits for its first line
+    let rowsDone = 0;
+    let visH = pad + titleBlock(i) + pad;
+    s.lines.forEach((_, li) => {
+      rowsDone += rows.filter((r) => r.line === li).length;
+      const end = li === s.lines.length - 1 ? phs[i] : bodyTop + 2 * u + lay.bodyInset + rowsDone * lay.lh + li * lay.lineGap + pad;
+      visH += (end - visH) * springAt(f, lineAts[i][li] - 3, { fps, durationInFrames: 10 });
+    });
+    const ruleIn = s.lines.length ? springAt(f, lineAts[i][0] - 3, { fps, durationInFrames: 10 }) : 0;
     const shadow = pk > 0
       ? `0 ${(18 + 14 * pk) * u}px ${(44 + 20 * pk) * u}px rgba(20,14,8,${0.22 + 0.12 * pk})`
       : `0 ${16 * u}px ${40 * u}px rgba(20,14,8,${dark ? 0.4 : 0.16})`;
@@ -226,7 +248,7 @@ export default function Versus({ props }: { props: any }) {
         opacity: Math.min(1, pin * 1.4), transformOrigin: "50% 60%",
       }}>
         <div style={{
-          position: "absolute", inset: 0, borderRadius: radius, background: cardBg[i], overflow: "hidden",
+          position: "absolute", left: 0, top: 0, width: pw, height: visH, borderRadius: radius, background: cardBg[i], overflow: "hidden",
           boxShadow: shadow, border: `${2 * u}px solid ${pk > 0 ? withAlpha(accent, pk) : border}`, boxSizing: "border-box",
         }}>
           <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: bar + 2 * u, background: accent, opacity: pk * (0.85 + 0.15 * Math.sin(t * 3)) }} />
@@ -238,7 +260,7 @@ export default function Versus({ props }: { props: any }) {
           </div>
           {tt.tagBelow && tagEl ? <div style={{ position: "absolute", left: textX, top: pad + tt.lines.length * tt.size * 1.18 + 10 * u }}>{tagEl}</div> : null}
           {rows.length ? (
-            <div style={{ position: "absolute", left: textX, top: bodyTop, width: textW, height: 2 * u, background: withAlpha(ink, dark ? 0.14 : 0.12) }} />
+            <div style={{ position: "absolute", left: textX, top: bodyTop, width: textW * ruleIn, height: 2 * u, background: withAlpha(ink, dark ? 0.14 : 0.12) }} />
           ) : null}
           {rows.map((r, k) => {
             const la = lineAts[i][r.line];
@@ -270,7 +292,7 @@ export default function Versus({ props }: { props: any }) {
   // The VS badge sits in the gap once panel b has landed.
   const vsP = springAt(f, bAt, { fps, damping: 11, durationInFrames: 14 });
   const vsD = Math.min(96 * u, Math.max(72 * u, gap * 1.6));
-  const vsC = cols ? { x: w / 2, y: top0 + tall / 2 } : { x: w / 2, y: top0 + phs[0] + gap / 2 };
+  const vsC = cols ? { x: W / 2, y: top0 + tall / 2 } : { x: W / 2, y: top0 + phs[0] + gap / 2 };
   const breathe = 1 + 0.035 * Math.sin(t * 2.2);
   const vs = f >= bAt ? (
     <div style={{
@@ -283,7 +305,7 @@ export default function Versus({ props }: { props: any }) {
   ) : null;
 
   return (
-    <div style={{ position: "absolute", width: w, height: h, transform: fitScale < 1 ? `scale(${fitScale})` : undefined }}>
+    <div style={{ position: "absolute", width: W, height: H, transform: fitScale < 1 ? `scale(${fitScale})` : undefined, transformOrigin: "0 0" }}>
       {panel(0)}
       {panel(1)}
       {vs}
