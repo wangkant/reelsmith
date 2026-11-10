@@ -26,6 +26,14 @@ def _lines_arg(value: str):
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
 
+def _source_arg(value: str) -> str:
+    """import's source: a relative path the shell's folder holds is read from there, not from the project folder."""
+    here = Path(value).expanduser()
+    if "://" in value or here.is_absolute() or not here.is_file():
+        return value
+    return str(here.resolve())
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith",
                                  description="A video editing harness for AI coding agents (and the people who run them).")
@@ -47,6 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--title", default="")
     p.add_argument("--canvas", default="", help="WIDTHxHEIGHT[@FPS] for a canvas of your own, e.g. 1920x1080@25")
     p.add_argument("--locale", default="", help="the film's language, a BCP-47 tag (en, zh-CN, ja)")
+    p.add_argument("--from", default="", dest="from_project",
+                   help="a project to put on this canvas: its assets, voice and edit, boxes mapped to the safe area")
     proj(cmd("edit", tools.edit)).add_argument("ops", help="JSON list of ops, @file.json, or - for stdin")
     proj(cmd("undo", tools.undo)).add_argument("--steps", type=int, default=1)
     proj(cmd("redo", tools.redo))
@@ -143,7 +153,7 @@ def _call(args) -> tools.ToolResult:
     if c == "describe":
         return tools.describe(args.project, args.at)
     if c in ("new", "new_project"):
-        return tools.new_project(args.project, args.profile, args.title, args.canvas, args.locale)
+        return tools.new_project(args.project, args.profile, args.title, args.canvas, args.locale, args.from_project)
     if c == "edit":
         return tools.edit(args.project, _text_arg(args.ops))
     if c == "undo":
@@ -169,7 +179,7 @@ def _call(args) -> tools.ToolResult:
     if c == "animate":
         return tools.animate(args.project, args.id, args.image_asset, args.motion, args.seconds, args.camera)
     if c in ("import", "import_asset"):
-        return tools.import_asset(args.project, args.id, args.source, args.kind)
+        return tools.import_asset(args.project, args.id, _source_arg(args.source), args.kind)
     if c == "note":
         return tools.note(args.project, _text_arg(args.text))
     if c == "probe":

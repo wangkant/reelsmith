@@ -19,7 +19,7 @@ name. Check it with `typecheck(p)`, then `preview(p, [...])` a moment where it s
 - **Time**: animate from `useCurrentFrame()` (frames from the clip's start) only. No `Date`, no `Math.random`: use
   remotion's `random(seed)` for noise. Every frame is rendered on its own, in any order.
 - **Text**: draw it as HTML (`div`/`span`), so the layout check can measure it; size it to the box with `fit` and
-  keep it at 40 px or more at a 1080 px short side, `Math.min(width, height) / 1080` times that on other canvases
+  aim for 40 px or more at a 1080 px short side, `Math.min(width, height) / 1080` times that on other canvases
   (the layout check warns under 28 px and render refuses under 20 px, scaled the same way). Use
   `whiteSpace: "pre"` for text you have fitted, so the browser does not wrap it again.
 - **SVG ids** (`clipPath`, `mask`, gradients) are global to the page: two copies of a component on screen share them

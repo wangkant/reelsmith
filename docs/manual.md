@@ -56,10 +56,12 @@ Pixel sizes in this manual (28 px text, 40 px evidence) are for a canvas whose s
 scale them with your canvas.
 
 **One project, one canvas, one film.** A project renders one mp4 (h264/aac) on its own canvas. For the same edit on
-another canvas (a 9:16 cut of a 16:9 film): `new_project` with that profile, `import_asset` the same files from the
-first project (on one drive they are hard-linked, so nothing is copied), copy the first project's `tracks`,
-`markers` and `chapters` into the new project.json and re-lay the boxes for the new canvas (they are canvas pixels),
-then `preview` it. Other formats (webm, GIF, ProRes, audio only, a transparent overlay) are not made here.
+another canvas (a 9:16 cut of a 16:9 film): `new_project(p2, profile="vertical", from_project=p1)`. It brings the
+first project's assets and voice (hard-linked on one drive, so nothing is copied), tracks, markers, chapters, meta
+and theme, and maps every pixel box from the old safe area to the new one (x and w by its width, y and h by its
+height; `"full"` and `"safe"` stay). Text sizes stay as they were, and a wide layout squeezed into a tall one is
+rarely right as it lands: `preview` every scene and re-lay what needs it. Other formats (webm, GIF, ProRes, audio
+only, a transparent overlay) are not made here.
 
 **Locale**: project.json `"locale"` (else workspace.json's, else `en`) is the film's language as a BCP-47 tag
 (`en`, `en-GB`, `zh-CN`, `ja`). It sets how captions are cut, capture's browser language, the words components add
@@ -402,7 +404,7 @@ transcript. No narration: the film lasts until `a_2` ends.
 | `manual()` | this manual | `manual()` |
 | `notes(project)` | your workspace notes | `notes("/home/me/studio/projects/tshirt")` |
 | `note(project, text)` | append a dated lesson at the end of the notes (to file it under a heading, edit `library/NOTES.md` with your file tools) | `note(p, "evidence: match one 8-20 character line, not a paragraph")` |
-| `new_project(project, profile?, title?, canvas?, locale?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
+| `new_project(project, profile?, title?, canvas?, locale?, from_project?)` | create a project folder; `canvas` `"WxH"` or `"WxH@fps"` (fps may be 29.97) for a canvas of your own; `from_project` puts another project's film on this canvas | `new_project("/home/me/studio/projects/tshirt", profile="vertical", locale="en")` |
 | `describe(project, at?)` | the editor's window as text; with `at`, what is on screen then | `describe(p, at="line:4")` |
 | `edit(project, ops)` | apply a batch of ops atomically | `edit(p, [{"op": "remove_clip", "id": "arrow"}])` |
 | `undo(project, steps=1)` | undo applied batches (an asset registration is one too) | `undo(p)` |
@@ -443,7 +445,8 @@ transcript. No narration: the film lasts until `a_2` ends.
   measures how much of the film is words over a still.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
   limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
-  crossed. Transcribe a recording once; re-speak only the lines that changed.
+  crossed. Transcribing the same recording again with the same settings is free (the saved transcript comes
+  back); re-speak only the lines that changed.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters). A box spanning two lines, or a whole wide paragraph, comes out too small to read; `check`
   warns when the sentence will read under 40 px (at a 1080 px short side). Re-box an evidence asset with
@@ -530,8 +533,9 @@ export default function Tally({ props }: { props: any }) {
 ```
 
 Fuller worked examples: the sample component in `examples/workspace/library/components/` (the starter workspace),
-and every preset's source (`library(p, name)` gives the path). Lay yourself out in `w × h`; keep text at 28 px or
-more at a 1080 px short side (on other canvases scale by `Math.min(width, height) / 1080`, both from `useClip()`);
+and every preset's source (`library(p, name)` gives the path). Lay yourself out in `w × h`; aim for text of 40 px
+or more at a 1080 px short side: the layout check warns under 28 px and render refuses under 20 px (on other
+canvases all three scale by `Math.min(width, height) / 1080`, both from `useClip()`);
 choose the words a component adds itself by `useClip().locale`; animate from the frame, never from time or
 randomness; give SVG ids (`clipPath`, gradients) `React.useId()` so two instances do not collide. Then `typecheck`
 and `preview` a moment where it shows. A component that crashes shows a red box in previews and is reported first,
