@@ -1,20 +1,24 @@
-"""`reelsmith watch`: a local, read-only editor window over a project (or a workspace of projects) while an agent
-edits it. Standard library only; binds 127.0.0.1."""
+"""`reelsmith watch`: a local editor window over a project (or a workspace of projects) while an agent edits it, with
+a chat that asks an agent for changes. Standard library only; binds 127.0.0.1. Reading needs a same-origin (or
+address-bar) request; a POST also needs the server's token, which only its own page can read."""
 from __future__ import annotations
 
 import argparse
 import array
 import hashlib
+import hmac
 import json
 import math
 import mimetypes
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -25,6 +29,7 @@ from .. import render as R
 from .. import resolve as RS
 from .. import timeexpr as T
 from ..workspace import PROJECT_FILE, WORKSPACE_FILE, WorkspaceError, find_workspace, project_file
+from . import chat as C
 from . import presence as P
 from . import state as S
 
@@ -41,9 +46,13 @@ KEEP_CACHED = 400                   # files per cache folder under build/watch/
 WAVE_RATE = 8000
 WAVE_PER_S = 100
 WAVE_MAX = 4000
-RENDER_STALE_S = 3600               # a render that left its marks this long ago has died, not run
 PLAYER_BUILD_S = 600
+PLAYER_KEEP_S = 1800                # another window may still serve an older build this long
 CHUNK = 256 * 1024
+MAX_BODY = 128 * 1024
+MAX_T = 24 * 3600.0
+CHAT_EVENTS = 256                   # chat payloads an events stream can catch up on
+TOKEN_HEADER = "X-Reelsmith-Token"
 TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".json": "application/json",
          ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff",
          ".ttf": "font/ttf", ".otf": "font/otf", ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
@@ -73,7 +82,8 @@ def fenced(root: Path, rel: str) -> Path | None:
     """A file under one of the served project folders; anything else (.., absolute, a link leading out) is None."""
     rel = unquote(rel).replace("\\", "/")
     parts = rel.split("/")
-    if not rel or parts[0] not in S.SERVED or any(p in ("", ".", "..") for p in parts) or ":" in rel:
+    if (not rel or parts[0] not in S.SERVED or any(p in ("", ".", "..") for p in parts) or ":" in rel
+            or "\x00" in rel):
         return None
     full = project_file(root, rel)
     if full is None or not inside(full, (root / parts[0]).resolve()) or not full.is_file():
@@ -82,23 +92,20 @@ def fenced(root: Path, rel: str) -> Path | None:
 
 
 def render_busy(root: Path) -> bool:
-    """A render of this project is running in some process: it writes resolved.film.json first and report.json
-    last, and keeps film.raw.mp4 / film.mastered.mp4 only while it runs."""
-    build = root / "build"
-    now = time.time()
-    for name in ("film.raw.mp4", "film.mastered.mp4"):
-        p = build / name
-        if p.is_file() and now - p.stat().st_mtime < RENDER_STALE_S:
-            return True
-    try:
-        started = (build / "resolved.film.json").stat().st_mtime
-    except OSError:
+    """A render, preview or draft of this project holds its lock (render.project_lock) in some process. Probing
+    takes the lock for an instant only when nobody holds it."""
+    lock = root / "build" / "render.lock"
+    if not lock.is_file():
         return False
     try:
-        finished = (build / "report.json").stat().st_mtime
+        fh = open(lock, "a+b")
     except OSError:
-        finished = 0.0
-    return started > finished and now - started < RENDER_STALE_S
+        return False
+    with fh:
+        if R._try_os_lock(fh):
+            R._os_unlock(fh)
+            return False
+        return True
 
 
 def _prune(folder: Path, keep: int = KEEP_CACHED) -> None:
@@ -143,6 +150,11 @@ class Player:
             h.update(str(self.script.stat().st_mtime_ns).encode())
         return h.hexdigest()[:16]
 
+    def version(self) -> str:
+        """The stamp of the renderer and components the window currently draws with."""
+        self.current()
+        return self._stamp
+
     def current(self) -> Path | None:
         """The folder to serve from (starting a build when the sources moved), or None while there is none."""
         with self._lock:
@@ -173,9 +185,7 @@ class Player:
                 raise RuntimeError(f"the player did not build: {why}")
             with self._lock:
                 self.ready, self.error = out, None
-            for old in self.cache.iterdir():
-                if old.is_dir() and old != out:
-                    shutil.rmtree(old, ignore_errors=True)
+            self._tidy(out)
         except Exception as exc:  # noqa: BLE001 - shown in the 503 and the window falls back to stills
             with self._lock:
                 self.error = str(exc)
@@ -183,10 +193,26 @@ class Player:
         finally:
             self.building = False
 
+    def _tidy(self, keep: Path) -> None:
+        """The cache is shared by every window on the workspace: an older build goes only once another window has
+        had ample time to move to a newer one (it looks every 2 s), and another process's build in progress
+        (<stamp>.build-*) only once it has long outlived its timeout."""
+        now = time.time()
+        for old in self.cache.iterdir():
+            if not old.is_dir() or old == keep:
+                continue
+            limit = 2 * PLAYER_BUILD_S if ".build-" in old.name else PLAYER_KEEP_S
+            try:
+                age = now - old.stat().st_mtime
+            except OSError:
+                continue
+            if age > limit:
+                shutil.rmtree(old, ignore_errors=True)
+
 
 # ------------------------------------------------------------------ one project
 class Site:
-    def __init__(self, root: Path, base: str, player: Player):
+    def __init__(self, root: Path, base: str, player: Player, chat_options: dict | None = None):
         self.root, self.base, self.player = root, base, player
         self.cache = S.StateCache(root, base)
         self.changed = threading.Condition()
@@ -195,6 +221,9 @@ class Site:
         self.running: dict | None = None            # as last announced
         self.running_seq = 0                        # moves whenever the running call is announced
         self._running_at = 0.0
+        self.chat_seq = 0                           # moves with every chat payload
+        self.chat_events: deque = deque(maxlen=CHAT_EVENTS)
+        self.chat = C.Chat(root, self.chat_changed, **(chat_options or {}))
         self._still = threading.Lock()
         self._media = threading.BoundedSemaphore(2)
         self._resolved: tuple[tuple, bytes, str] | None = None
@@ -226,6 +255,18 @@ class Site:
             self.running_seq += 1
             self.changed.notify_all()
 
+    def chat_changed(self, payload: dict) -> None:
+        with self.changed:
+            self.chat_seq += 1
+            self.chat_events.append((self.chat_seq, payload))
+            self.changed.notify_all()
+
+    def chat_since(self, seq: int) -> tuple[list[dict], bool]:
+        """(payloads after seq, whether some were already dropped); call with self.changed held."""
+        pending = [p for s, p in self.chat_events if s > seq]
+        lost = self.chat_seq - seq > len(pending)
+        return pending, lost
+
     def state(self) -> dict:
         st = self.cache.get()
         if st["revision"] != self.revision:
@@ -247,7 +288,7 @@ class Site:
                 self._resolved = (sig, body, hashlib.sha1(body).hexdigest()[:16])
             return self._resolved[1], self._resolved[2]
 
-    def asset(self, aid: str, kinds: tuple) -> tuple[Path, str]:
+    def asset(self, aid: str, kinds: tuple) -> tuple[Path, dict]:
         st = self.cache.get()
         row = next((a for a in st["assets"] if a["id"] == aid), None)
         if row is None or row["kind"] not in kinds:
@@ -255,22 +296,34 @@ class Site:
         path = fenced(self.root, row["path"])
         if path is None:
             raise HTTPError(404, {"error": f"asset {aid} has no file the window may read"})
-        return path, row["kind"]
+        return path, row
 
     def _cached(self, sub: str, key: str) -> Path:
         folder = self.watch_dir / sub
         folder.mkdir(parents=True, exist_ok=True)
         return folder / key
 
+    def still_key(self, st: dict, film_key: str) -> str:
+        """The film as resolved, the renderer and components that draw it, and the files it shows: an edit to a
+        component or an asset replaced in place makes a new still."""
+        h = hashlib.sha1(f"{film_key}|{self.player.version()}".encode())
+        rels = [a["path"] for a in st["assets"]] + ([st["voice"]["url"].split("/project/", 1)[-1]]
+                                                     if st.get("voice") and st["voice"].get("url") else [])
+        for rel in rels:
+            path = project_file(self.root, rel)
+            h.update(f"|{rel}|{S._stamp(path) if path is not None else None}".encode())
+        return h.hexdigest()[:16]
+
     def still(self, t: float, w: int) -> Path:
         st = self.cache.get()
         if not st["valid"]:
             raise HTTPError(503, {"error": st["error"]})
         fps, frames = st["canvas"]["fps"], st["frames"]
-        frame = min(max(0, T.to_frame(max(0.0, t), fps)), frames - 1)
+        t = min(max(0.0, t), st["duration"] or 0.0)
+        frame = min(max(0, T.to_frame(t, fps)), frames - 1)
         w = min(max(64, w), st["canvas"]["width"])
         body, key = self.resolved()
-        out = self._cached("stills", f"{key}_{frame}_{w}.jpg")
+        out = self._cached("stills", f"{self.still_key(st, key)}_{frame}_{w}.jpg")
         if out.is_file():
             return out
         if render_busy(self.root):
@@ -297,9 +350,10 @@ class Site:
             self._still.release()
 
     def thumb(self, aid: str, t: float, h: int) -> Path:
-        path, kind = self.asset(aid, ("image", "video", "evidence"))
+        path, row = self.asset(aid, ("image", "video", "evidence"))
+        kind = row["kind"]
         h = min(max(16, h), 480)
-        t = max(0.0, t) if kind == "video" else 0.0
+        t = min(max(0.0, t), row.get("duration") or MAX_T) if kind == "video" else 0.0
         stamp = hashlib.sha1(f"{path}|{S._stamp(path)}".encode()).hexdigest()[:10]
         out = self._cached("thumbs", f"{aid}_{stamp}_{t:.2f}_{h}.jpg")
         if out.is_file():
@@ -356,26 +410,69 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):         # quiet: the window is the output
         pass
 
+    def send_response(self, code, message=None):
+        self.started = True
+        super().send_response(code, message)
+
+    def end_headers(self):
+        # nothing here is for other sites: no CORS header ever, and no embedding of a response elsewhere
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        super().end_headers()
+
     def do_HEAD(self):
         self.do_GET(head=True)
 
     def do_GET(self, head: bool = False):
         self.head = head
+        self.answer(lambda url: self.route(url.path))
+
+    def do_POST(self):
+        self.head = False
+        self.answer(self.post)
+
+    def answer(self, handle) -> None:
+        """Run one request; whatever goes wrong, the client gets a JSON answer unless the reply has begun."""
+        self.started = False
         try:
             if not self.server.host_ok(self.headers.get("Host", "")):
                 raise HTTPError(403, {"error": "unexpected Host header"})
             url = urlsplit(self.path)
             self.query = {k: v[-1] for k, v in parse_qs(url.query).items()}
-            self.route(url.path)
-        except HTTPError as exc:
-            self.send_json(exc.body, exc.code)
+            handle(url)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
+        except Exception as exc:  # noqa: BLE001 - a bad request must not drop the connection or print a traceback
+            if isinstance(exc, HTTPError):
+                code, body = exc.code, exc.body
+            elif isinstance(exc, ValueError):
+                code, body = 400, {"error": f"bad request: {exc}"}
+            else:
+                code, body = 500, {"error": f"the server failed on this request ({type(exc).__name__}: {exc})"}
+            if self.started:
+                self.close_connection = True
+                return
+            try:
+                self.send_json(body, code)
+            except OSError:
+                self.close_connection = True
+
+    def cross_site(self) -> bool:
+        """A request another site's page made (a link from elsewhere counts too): refused on everything but the
+        page itself. An address-bar visit sends Sec-Fetch-Site none; old clients send neither header."""
+        if self.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site"):
+            return True
+        origin = self.headers.get("Origin")
+        return origin is not None and not self.server.own_origin(origin)
+
+    def refuse_cross_site(self) -> None:
+        if self.cross_site():
+            raise HTTPError(403, {"error": "refused: this request came from another site"})
 
     def route(self, path: str) -> None:
         srv = self.server
         if srv.workspace is not None:
             if path == "/api/projects":
+                self.refuse_cross_site()
                 return self.send_json(srv.projects())
             m = re.match(r"^/p/([^/]+)(/.*)?$", path)
             if m:
@@ -403,8 +500,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.static("icon.ico")
         if path.startswith("/static/"):
             return self.static(path[len("/static/"):])
+        self.refuse_cross_site()
+        if path == "/api/session":
+            return self.send_json({"token": self.server.token})
         if path == "/api/state":
             return self.send_json(site.state())
+        if path == "/api/chat":
+            return self.send_json(site.chat.status())
         if path == "/api/events":
             return self.events(site)
         m = re.match(r"^/api/history/(\d+)$", path)
@@ -430,6 +532,56 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/player/"):
             return self.player(site.player, path[len("/player/"):])
         raise HTTPError(404, {"error": "not found"})
+
+    # ---- changes: the chat
+    def post(self, url) -> None:
+        body = self.body()
+        origin = self.headers.get("Origin")
+        if not origin or not self.server.own_origin(origin) or self.headers.get("Sec-Fetch-Site") in (
+                "cross-site", "same-site"):
+            raise HTTPError(403, {"error": "refused: a change must come from this window's own page"})
+        if not hmac.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), self.server.token.encode()):
+            raise HTTPError(403, {"error": f"refused: the {TOKEN_HEADER} header is missing or wrong (GET api/session "
+                                           "gives it)"})
+        site, path = self.post_site(url.path)
+        if path == "/api/chat":
+            try:
+                data = json.loads(body.decode("utf-8") or "{}")
+            except ValueError:
+                raise HTTPError(400, {"error": "the body must be JSON: {\"message\": \"...\"}"}) from None
+            if not isinstance(data, dict):
+                raise HTTPError(400, {"error": "the body must be a JSON object"})
+            engine = data.get("engine")
+            if engine is not None and not isinstance(engine, str):
+                raise HTTPError(400, {"error": "engine must be a string"})
+            try:
+                turn = site.chat.send(data.get("message"), engine or None, data.get("context"))
+            except C.ChatError as exc:
+                raise HTTPError(exc.code, {"error": str(exc)}) from None
+            return self.send_json({"turn": turn}, 202)
+        if path == "/api/chat/stop":
+            return self.send_json({"stopped": site.chat.stop()})
+        raise HTTPError(404, {"error": "not found"})
+
+    def post_site(self, path: str) -> tuple[Site, str]:
+        srv = self.server
+        if srv.workspace is None:
+            return srv.site(None), path
+        m = re.match(r"^/p/([^/]+)(/.*)$", path)
+        if not m:
+            raise HTTPError(404, {"error": "not found: a change goes to /p/<project>/api/..."})
+        return srv.site(unquote(m.group(1))), m.group(2)
+
+    def body(self) -> bytes:
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            size = -1
+        if size < 0 or size > MAX_BODY:
+            self.close_connection = True            # the unread body would be taken for the next request
+            raise HTTPError(413 if size > 0 else 400, {"error": f"the body must have a Content-Length of at most "
+                                                                f"{MAX_BODY} bytes"})
+        return self.rfile.read(size) if size else b""
 
     # ---- helpers
     def num(self, key: str, default: float) -> float:
@@ -533,24 +685,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.close_connection = True
-        sent, seq = None, site.running_seq
+        sent, seq, chat_seq = None, site.running_seq, site.chat_seq
         stop = self.server.stopping
         while not stop.is_set():
             with site.changed:
-                if site.revision == sent and site.running_seq == seq:
+                if site.revision == sent and site.running_seq == seq and site.chat_seq == chat_seq:
                     site.changed.wait(timeout=KEEPALIVE_S)
                 rev, now_seq, running = site.revision, site.running_seq, site.running
+                chats, lost = site.chat_since(chat_seq)
+                chat_seq = site.chat_seq
             if stop.is_set():
                 break
+            out = []
             if rev is not None and rev != sent:
-                data = json.dumps({"revision": rev, "running": running}, ensure_ascii=False)
-                self.wfile.write(f"event: change\ndata: {data}\n\n".encode())
+                out.append(("change", {"revision": rev, "running": running}))
                 sent, seq = rev, now_seq
             elif now_seq != seq:
-                self.wfile.write(f"event: running\ndata: {json.dumps(running, ensure_ascii=False)}\n\n".encode())
+                out.append(("running", running))
                 seq = now_seq
+            if lost:                    # this stream fell too far behind: the page refetches api/chat
+                last = chats[-1] if chats else {}
+                out.append(("chat", {"rows": [], "busy": last.get("busy"), "turn": last.get("turn"),
+                                     "stopping": last.get("stopping"), "resync": True}))
             else:
+                out += [("chat", payload) for payload in chats]
+            if not out:
                 self.wfile.write(b": keepalive\n\n")
+            for name, data in out:
+                self.wfile.write(f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
 
 
@@ -558,8 +720,11 @@ class WatchServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, target: str | Path, port: int = 0):
+    def __init__(self, target: str | Path, port: int = 0, chat_options: dict | None = None):
+        """chat_options: the chat's seams (query_fn, client_factory, tools_factory, engines_fn), for tests."""
         target = Path(target).expanduser().resolve()
+        self.token = secrets.token_urlsafe(24)
+        self.chat_options = chat_options
         if target.name == PROJECT_FILE and target.is_file():
             target = target.parent
         self.target = target
@@ -591,6 +756,9 @@ class WatchServer(ThreadingHTTPServer):
         # a page from elsewhere reaching this port through a rebound DNS name sends its own name
         return host in (f"{HOST}:{self.port}", f"localhost:{self.port}", HOST, "localhost")
 
+    def own_origin(self, origin: str) -> bool:
+        return origin in (f"http://{HOST}:{self.port}", f"http://localhost:{self.port}")
+
     def handle_error(self, request, client_address) -> None:
         if not isinstance(sys.exc_info()[1], ConnectionError):        # a browser dropping a video read is normal
             super().handle_error(request, client_address)
@@ -600,10 +768,10 @@ class WatchServer(ThreadingHTTPServer):
             if name in self.sites:
                 return self.sites[name]
             if name is None:
-                site = Site(self.target, "", self.player)
+                site = Site(self.target, "", self.player, self.chat_options)
             else:
                 root = self.project_dir(name)
-                site = Site(root, f"/p/{name}", self.player)
+                site = Site(root, f"/p/{name}", self.player, self.chat_options)
             self.sites[name] = site
             return site
 
@@ -651,8 +819,17 @@ class WatchServer(ThreadingHTTPServer):
                 except Exception:  # noqa: BLE001, S112 - a half-written file: the next poll reads it whole
                     continue
 
+    def stop_chats(self, wait_s: float = 15) -> None:
+        """A closing window takes its chat's agent along (a CLI child would outlive it otherwise)."""
+        sites = list(self.sites.values())
+        for site in sites:
+            site.chat.stop()
+        for site in sites:
+            site.chat.wait(wait_s)
+
     def stop(self) -> None:
         self.stopping.set()
+        self.stop_chats()
         for site in list(self.sites.values()):
             with site.changed:
                 site.changed.notify_all()
@@ -664,9 +841,9 @@ def _esc(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def serve(target: str | Path, port: int = 0) -> WatchServer:
+def serve(target: str | Path, port: int = 0, chat_options: dict | None = None) -> WatchServer:
     """A started server (in a background thread); stop it with .stop()."""
-    srv = WatchServer(target, port)
+    srv = WatchServer(target, port, chat_options)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -674,9 +851,10 @@ def serve(target: str | Path, port: int = 0) -> WatchServer:
 # ------------------------------------------------------------------ command line
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith watch",
-                                 description="Open a read-only editor window on a project (or a workspace of "
-                                             "projects), to watch an agent edit it: a desktop window when the `app` "
-                                             "extra is installed, else a browser tab. Local only.")
+                                 description="Open an editor window on a project (or a workspace of projects): watch "
+                                             "an agent edit it, and ask an agent for changes in its chat. A desktop "
+                                             "window when the `app` extra is installed, else a browser tab. Local "
+                                             "only.")
     ap.add_argument("project", help="a project folder, or a workspace folder for all its projects")
     ap.add_argument("--port", type=int, default=0, help="the port on 127.0.0.1 (default: a free one)")
     ap.add_argument("--browser", action="store_true", help="open it in the browser instead of a desktop window")
@@ -707,8 +885,8 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, WorkspaceError, OSError) as exc:
         print(f"reelsmith watch: {exc}", file=sys.stderr)
         return 2
-    print(f"reelsmith watch: {srv.url}  (read-only, local; "
-          f"{'closing the window' if as_app else 'Ctrl+C'} stops it)", flush=True)
+    print(f"reelsmith watch: {srv.url}  (local; {'closing the window' if as_app else 'Ctrl+C'} stops it and any "
+          "chat turn it runs)", flush=True)
     recorded = as_app and srv.workspace is None
     try:
         if as_app:
@@ -730,5 +908,6 @@ def main(argv: list[str] | None = None) -> int:
         if recorded:
             P.forget_window(srv.target)
         srv.stopping.set()
+        srv.stop_chats()
         srv.server_close()
     return 0

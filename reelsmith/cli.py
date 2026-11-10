@@ -128,7 +128,7 @@ def _parser() -> argparse.ArgumentParser:
                    add_help=False)
     sub.add_parser("doctor", help="check what reelsmith and its optional tools need on this machine (local, free)",
                    add_help=False)
-    sub.add_parser("watch", help="open a read-only editor window on a project, to watch an agent edit it",
+    sub.add_parser("watch", help="open an editor window on a project: watch an agent edit it, ask one for changes",
                    add_help=False)
     return ap
 

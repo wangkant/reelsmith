@@ -17,7 +17,7 @@ The reelsmith MCP server must be connected: its tools are `manual`, `notes`, `ne
 `frames`, `scenes`, `silences` and `transcribe`, and the asset tools `import_asset`, `speak`, `capture`, `draw`, `animate` and `assets`. If they
 are missing, tell the user to run `reelsmith setup <their agent>` and restart the agent. Every tool is also a shell
 command (`reelsmith <tool> --help`) when no MCP client is attached. The user can watch the work as you do it with
-`reelsmith watch <project>` (a read-only editor window): tell them so once when you start a film, unless a tool's
+`reelsmith watch <project>` (an editor window, with a chat for asking changes): tell them so once when you start a film, unless a tool's
 result says it already opened that window for them.
 
 ## The loop

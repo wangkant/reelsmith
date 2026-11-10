@@ -173,16 +173,6 @@ def _batch_mark(project: str):
         return None
 
 
-def _masked(root: Path, text: str) -> str:
-    """The text with the workspace's keys and anything shaped like a key masked (tools keep keys out of results;
-    this makes sure)."""
-    config = _mod("providers.config")
-    try:
-        return config.context(root).redact(text)
-    except Exception:  # noqa: BLE001 - a workspace whose keys cannot be read: the shape-based masking still runs
-        return config.redact(text)
-
-
 def _log_activity(project: str, name: str, result: ToolResult, seconds: float, before,
                   sources: list[str] = ()) -> None:
     """Never the arguments, only the result (masked) and the pictures it names; never fails the tool."""
@@ -192,7 +182,8 @@ def _log_activity(project: str, name: str, result: ToolResult, seconds: float, b
         if _batch_mark(project) != before:
             last = (root / ".history" / "log.jsonl").read_text(encoding="utf-8").splitlines()[-1]
             batch = int(json.loads(last)["n"])
-        text = _masked(root, str(result))
+        from .watch.state import tidier
+        text = tidier(root)(str(result))            # keys masked, paths relative: no folder layout on disk
         row = {"ts": datetime.now().isoformat(timespec="seconds"), "tool": name, "ok": bool(result.ok),
                "seconds": round(seconds, 2), "summary": text.split("\n", 1)[0][:300], "batch": batch,
                "files": named_files(root, str(result), sources), "text": text[:ACTIVITY_TEXT]}

@@ -19,6 +19,8 @@ from pathlib import Path
 from ..guard import brief_input
 
 NUDGE = "(runner) continue, or say you are done."
+STOPPED = "stopped by the person"
+NOT_RUN = "(not run: the person stopped the turn before this call)"
 STUB = "[older output elided: {what}]"
 IMAGE_STUB = "[older images elided: {names}]"
 # max_images: per tool turn (a preview is 24 stills and a contact sheet); max_context_images: per request
@@ -73,8 +75,9 @@ class Agent:
     """One model, its tools, a system prompt and limits. A model error ends run() with out["error"]."""
 
     def __init__(self, client, tools: list, system: str, limits: dict | None = None, log=None, price=None, *,
-                 on_turn=None, clock=None, session_id: str | None = None):
+                 on_turn=None, clock=None, session_id: str | None = None, stop=None):
         self.client = client
+        self.stop = stop            # () -> bool, asked before each model call and each tool call
         self.tools = {}
         for tool in tools or []:
             if tool.name in self.tools:
@@ -106,6 +109,30 @@ class Agent:
         if hasattr(self.log, "line"):
             self.log.line(text)
 
+    # a SessionLog hears the steps themselves; another log gets the same console lines
+    def _say(self, text: str) -> None:
+        if hasattr(self.log, "say"):
+            self.log.say(text)
+        else:
+            self._line("say " + _flat(text)[:200])
+
+    def _called(self, name: str, args, cid: str) -> None:
+        if hasattr(self.log, "called"):
+            self.log.called(name, args, cid)
+        else:
+            self._line(f"-> {name} {brief_input(name, args)}")
+
+    def _returned(self, name: str, cid: str, error: bool, text: str) -> None:
+        line = (f"<- {name or '?'} " + ("" if text.lower().startswith("error") else "error ") + _flat(text)[:200]
+                if error else None)
+        if hasattr(self.log, "returned"):
+            self.log.returned(cid, not error, text if error else "", name=name, line=line)
+        elif line:
+            self._line(line)
+
+    def _stopped(self) -> bool:
+        return bool(self.stop and self.stop())
+
     # ------------------------------------------------------------ the loop
     def run(self, prompt: str, history: list[dict] | None = None) -> dict:
         started = self.clock()
@@ -126,6 +153,11 @@ class Agent:
         self._event("start", session_id=self.session_id, prompt=prompt, resumed=bool(history),
                     tools=list(self.tools), limits=self.limits)
         while True:
+            if self._stopped():
+                out["aborted"] = STOPPED
+                self._event("abort", reason=STOPPED, turn=out["turns"])
+                self._line(f"abort: {STOPPED}")
+                break
             sent = len(messages)
             try:
                 reply = self.client.complete(messages, self.specs)
@@ -157,7 +189,7 @@ class Agent:
                         model=reply.get("model"), provider=reply.get("provider"), usage=usage,
                         cost_usd=out["cost_usd"], message=message)
             if text.strip():
-                self._line("say " + _flat(text)[:200])
+                self._say(text)
             if calls:
                 nudged = False
                 messages.append(message)
@@ -238,7 +270,10 @@ class Agent:
             call.setdefault("type", "function")
             self._ids.add(cid)
             names.append(name or "?")
-            text, error, pics = self._call(name, fn.get("arguments"))
+            if self._stopped():         # every call still gets its answer, or the history is refused
+                messages.append({"role": "tool", "tool_call_id": cid, "content": NOT_RUN})
+                continue
+            text, error, pics = self._call(name, fn.get("arguments"), cid)
             if error and not text.lower().startswith("error"):
                 text = "error: " + text
             messages.append({"role": "tool", "tool_call_id": cid, "content": text or "(no output)"})
@@ -247,7 +282,7 @@ class Agent:
             messages.append(self._image_message(images))
         return names
 
-    def _call(self, name: str, raw_args) -> tuple[str, bool, list]:
+    def _call(self, name: str, raw_args, cid: str = "") -> tuple[str, bool, list]:
         """(text, error, images) for one tool call; a tool's exception goes back to the model as text."""
         args, text, error, pics = raw_args, "", True, []
         t0 = time.monotonic()
@@ -259,7 +294,7 @@ class Agent:
             if why:
                 text = why
             else:
-                self._line(f"-> {name} {brief_input(name, args)}")
+                self._called(name, args, cid)
                 try:
                     result = tool.run(args)
                     if isinstance(result, str) or result is None:
@@ -272,9 +307,7 @@ class Agent:
                     text = f"error: {name} failed with {type(exc).__name__}: {str(exc)[:1000]}"
         self._event("tool", name=name, input=args, error=error, text=text, images=[str(p) for p in pics],
                     seconds=round(time.monotonic() - t0, 2))
-        if error:
-            self._line(f"<- {name or '?'} " + ("" if text.lower().startswith("error") else "error ")
-                       + _flat(text)[:200])
+        self._returned(name, cid, error, text)
         return text, error, pics
 
     def _image_message(self, images: list[tuple[str, Path]]) -> dict:
