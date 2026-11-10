@@ -15,6 +15,9 @@ TITLE_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 HTTP_URL = re.compile(r"^https?://\S+$", re.I)
 LEVEL_ORDER = {"error": 0, "warning": 1, "advice": 2}
 STILL_TYPES = {"image", "evidence"}     # videos and components move by themselves
+# max_slide_share: footage fills this much of the frame; a component this large is a scene, not a tag; this many
+# shapes at once are a diagram, fewer are plates and rules behind the words
+FULL_FRAME, SCENE_FRAME, DIAGRAM_SHAPES, SLIDE_STEP_S = 0.6, 0.12, 3, 0.5
 VISIBLE_OPACITY = 0.1          # fainter text is decoration, not something to read
 # px thresholds below are for a canvas whose short side is 1080 px; each canvas scales them (Profile.scale)
 SMALL_TEXT_PX = 28             # the renderer's own min_size for fitted text
@@ -152,8 +155,36 @@ def _any_words(value) -> bool:
     return False
 
 
+def slide_runs(resolved: dict) -> list[tuple[float, float]]:
+    """[(start s, end s)] where the screen is only words over a still picture or a flat ground: no footage filling
+    the frame, no component scene, no evidence, no diagram of DIAGRAM_SHAPES shapes or more."""
+    fps = _fps(resolved)
+    canvas = (resolved.get("width") or 0) * (resolved.get("height") or 0)
+    clips = _visual_clips(resolved)
+    end = max((((c.get("from") or 0) + (c.get("dur") or 0)) / fps for c in clips), default=0.0)
+
+    def share(c: dict) -> float:
+        box = c.get("box") or {}
+        return (box.get("w") or 0) * (box.get("h") or 0) / canvas if canvas else 0.0
+
+    runs: list[list[float]] = []
+    for i in range(int(end / SLIDE_STEP_S)):
+        t = i * SLIDE_STEP_S
+        on = [c for c in clips if (c.get("from") or 0) / fps <= t < ((c.get("from") or 0) + (c.get("dur") or 0)) / fps]
+        if (any(c.get("type") == "evidence" for c in on)
+                or any(c.get("type") == "video" and share(c) >= FULL_FRAME for c in on)
+                or any(c.get("type") == "component" and share(c) >= SCENE_FRAME for c in on)
+                or sum(c.get("type") == "shape" for c in on) >= DIAGRAM_SHAPES):
+            continue
+        if runs and abs(runs[-1][1] - t) < SLIDE_STEP_S / 2:
+            runs[-1][1] = round(t + SLIDE_STEP_S, 1)
+        else:
+            runs.append([round(t, 1), round(t + SLIDE_STEP_S, 1)])
+    return [(a, b) for a, b in runs]
+
+
 def advice_issues(resolved: dict, rules: dict, profile: Profile) -> list[Issue]:
-    """Information for the editor (never blocks): the hook, long single visuals, length against the target."""
+    """Information for the editor (never blocks): the hook, long single visuals, slides, length against the target."""
     advice = rules.get("advice") or {}
     fps = _fps(resolved)
     total = (resolved.get("durationInFrames") or 0) / fps
@@ -181,6 +212,17 @@ def advice_issues(resolved: dict, rules: dict, profile: Profile) -> list[Issue]:
                                  f"one still {c.get('type')} on screen for {secs:.1f} s with nothing moving it "
                                  f"(advice: <= {max_same:g} s): split it, cut to another visual, cover part of it "
                                  "or move it (motion, keyframes)"))
+
+    max_slides = advice.get("max_slide_share")
+    if max_slides is not None and total:
+        runs = slide_runs(resolved)
+        share = sum(b - a for a, b in runs) / total
+        if share > max_slides + 1e-9:
+            spots = ", ".join(f"{a:g}-{b:g} s" for a, b in sorted(runs, key=lambda r: r[0] - r[1])[:4])
+            out.append(Issue("advice", "slides",
+                             f"{share:.0%} of the film is words over a still picture or a flat ground (advice: <= "
+                             f"{max_slides:.0%}; the longest stretches: {spots}): it plays like slides. Turn the "
+                             "pictures into clips (animate) or put a component scene or a diagram there"))
 
     target = target_of(rules, profile)
     if target and total and not target[0] <= total <= target[1]:

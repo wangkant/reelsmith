@@ -126,6 +126,9 @@ def _check_rules(rules: dict) -> None:
         v = advice.get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
             raise WorkspaceError(f"rules.json: advice.{key} must be a positive number (got {v!r})")
+    slides = advice.get("max_slide_share")
+    if slides is not None and (isinstance(slides, bool) or not isinstance(slides, (int, float)) or not 0 <= slides <= 1):
+        raise WorkspaceError(f"rules.json: advice.max_slide_share must be a number from 0 to 1 (got {slides!r})")
     target = advice.get("target_s")
     if target not in (None, True, False) and not (
             isinstance(target, list) and len(target) == 2 and all(isinstance(t, (int, float)) for t in target)
