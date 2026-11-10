@@ -71,7 +71,8 @@ const clipped = (r: Edges, el: Element | null, clip: Element, cache: Map<Element
 };
 
 /** Every visible clip container and text node under `root`, in canvas pixels. Text a component clips away inside
- *  itself (a row sliding in under its card's edge) is measured by the part that shows. */
+ *  itself (a row sliding in under its card's edge) is measured by the part that shows, and `cut` says how much of
+ *  it is hidden (0-1): the check tells a row passing an edge from one its card keeps cut. */
 export const measure = (root: HTMLElement, width: number, height: number): InspectItem[] => {
   const rr = root.getBoundingClientRect();
   const sx = rr.width / width || 1;
@@ -115,11 +116,12 @@ export const measure = (root: HTMLElement, width: number, height: number): Inspe
       const seen = clipped({ left: l, top: t, right: r, bottom: b }, n.parentElement, el, clips);
       if (!seen) continue;
       const cs = n.parentElement ? getComputedStyle(n.parentElement) : null;
+      const shown = ((seen.right - seen.left) * (seen.bottom - seen.top)) / ((r - l) * (b - t));
       items.push({
         clip, track, kind: "text",
         rect: rect({ left: seen.left, top: seen.top, width: seen.right - seen.left, height: seen.bottom - seen.top }),
         opacity: round3(o), text: [...text.trim()].slice(0, 24).join(""),
-        size: round(parseFloat(cs?.fontSize ?? "") || 0), color: cs?.color ?? "",
+        size: round(parseFloat(cs?.fontSize ?? "") || 0), color: cs?.color ?? "", cut: round3(Math.max(0, 1 - shown)),
       });
     }
   }

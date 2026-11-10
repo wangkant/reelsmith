@@ -313,16 +313,18 @@ footage needs no `speak`, and without a voice it lasts until its last clip ends 
 3. Lay it down: `{"id": "a", "type": "video", "asset": "talk", "start": 0, "end": "src:a@95", "volume": 1}` runs
    until source second 95. `trim_in` skips the head, `rate` speeds it up; give video `volume` 1 to hear it.
 4. Cut. `ripple_delete` takes a range out and closes the gap: clips crossing its edges are split (the part after
-   the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on; a clip whose head is cut keeps its id), later
+   the cut continues as `a_2`, `a_3`, ... with its `trim_in` moved on, numbered in the order the cuts are made, so
+   read the pieces' spans in the result; a clip whose head is cut keeps its id), later
    clips, markers, chapters and caption items move up. Jump cuts from `silences`: one `ripple_delete` per silence
    from `"src:a@<start + 0.1>"` to `"src:a@<end - 0.1>"` (a breath of air each side), all in one batch, in any
-   order: a `src:a@...` that an earlier cut left to a later piece names that piece, and a second no piece plays any
-   more is refused. Name the tracks to cut
+   order: a `src:a@...` that an earlier cut left to a later piece names that piece (the result says so), and a second no piece plays any
+   more is refused, as is one that only another clip of the same recording plays (name that clip). Name the tracks to cut
    (`"tracks": ["v1"]`, plus the track of its sound if that is separate, and a captions track with `items`): left
    out, every track is cut, a music bed included, and the music skips at each jump; or cut first and lay the bed
    after. A cut that falls inside a transition keeps what is left of it (shortened to fit). `trim_clip` sets a clip's
    in/out in source seconds (`ripple: true` pulls the rest of its track along; without it the picture stays put and
-   only the edges move, and clips timed from a moved edge stay where they were), `insert_gap` opens room, and
+   only the edges move, and clips timed from a moved edge stay where they were: the result names the gap that leaves, and check lists
+   it), `insert_gap` opens room, and
    `split_clip` cuts a clip in two (a clip timed from another stays a chain: its second half starts at
    `clip:<first>.end`). Anchors that stay true after a ripple edit stay; the rest become numbers. On tracks the edit
    does not cut, a time anchored on a clip follows that clip, and a number stays put.
@@ -568,7 +570,7 @@ latest attempt, `out/report.json` the delivered film's.
 **Warnings** (information; take them seriously): text under 28 px (at a 1080 px short side); text of one clip
 over text of another
 (captions included); text on a background of about its own brightness (contrast measured on the still); text
-overflowing its clip box; evidence whose proving sentence will read under 40 px; on platform profiles (or when
+overflowing its clip box; text a component's own card keeps cut; evidence whose proving sentence will read under 40 px; on platform profiles (or when
 `rules.json` sets `hook_seconds`), words that are not whole on frame 0, which is the cover (mid-reveal, mid-enter,
 fading in), or no words there at all.
 **Advice**, only what the owner's `rules.json` asks for: for example no words on screen in the first 2 s (the

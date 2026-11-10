@@ -400,9 +400,11 @@ it and written as a number; then each Time that was an anchor (`"line:4"`, `"cli
 `"src:c@3"`) is put back wherever it still lands on the same frame. Anchors survive where they stay true (a clip
 timed from a clip that moved with it); the others become numbers (a clip after the cut timed from a voice line,
 since the voice is not cut). A Time inside a clip keeps its place in the clip. A clip split by an edit continues under a new id
-(`<id>_2`, `<id>_3`, ...); one whose head is cut away keeps its id on what is left of it. A `src:<id>@S` argument
-(`start`, `end`, `at`, `in`, `out`) whose S clip `<id>` does not play names the piece of the same recording on its
-track that does, and is refused when none does. Whether a Time is at, before or after an edit point is decided in
+(`<id>_2`, `<id>_3`, ..., numbered in the order the cuts are made, which in a batch need not be timeline order); one
+whose head is cut away keeps its id on what is left of it. A `src:<id>@S` argument (`start`, `end`, `at`, `in`,
+`out`) whose S clip `<id>` does not play names the piece of `<id>` on its track that does (one named from its stem,
+`<id>_N`, or one that plays on in the source from where such a piece stops), and the result says so; it is refused
+when none does, naming any other clip of the same recording that plays S. Whether a Time is at, before or after an edit point is decided in
 frames. Where an edit point falls inside a transition's overlap, a piece that still overlaps the clip before it keeps
 the transition, shortened to the overlap left, and one that kept it but is longer than its overlap or either clip
 is shortened to fit. Captions from a transcript whose clip is cut away (or removed with `remove_clip`) follow the earliest piece left on its track that plays the same asset with sound.
@@ -422,7 +424,8 @@ is shortened to fit. Captions from a transcript whose clip is cut away (or remov
 - `trim_clip`: for a video or audio clip, `in` and `out` are seconds of its source (its new `trim_in` and the
   source second where it ends); for any other clip, Times of its new start and end. Without `ripple` the picture
   stays where it is on the timeline and only the clip's edges move (extending past a neighbour is refused as an
-  overlap; clips timed from a moved edge stay where they were, as numbers); with `ripple` the clip keeps its start,
+  overlap; clips timed from a moved edge stay where they were, as numbers, and the result names the gap that opens
+beside a clip that touched the old edge); with `ripple` the clip keeps its start,
   and the clips after it on its track move by the change in its length. Other clips anchored on it follow their
   anchors. An out point past the end of a non-looping source, an in point that would start the clip before 0 s
   without ripple, and a reversed, held or speed-curved video clip (its source seconds are not in film order) are
@@ -454,7 +457,8 @@ export default function Receipt({ props }: { props: any }) {
 
 - It renders inside an absolutely positioned div of the clip box's size and lays itself out in `w × h`.
 - Imports allowed: `react`, `remotion`, installed `@remotion/*`, `@reelsmith/kit`, relative files in the same
-  folder. Anything else (node builtins, other packages, absolute paths) is refused at bundle time.
+  folder. Anything else (node builtins, other packages, a package path with `.` or `..` in it, absolute paths) is
+  refused at bundle time.
 - Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `BarCompare`, `CountUp`, `DotGrid`,
   `EvidenceCard`, `Highlighter`, `NewsBrief`, `Parties`, `QuoteCard`, `Receipt`, `Seesaw`, `Stamp`, `StoryBeats`,
   `TimelineRule`, `Versus`. Library: `<workspace>/library/components/`.
@@ -1011,15 +1015,17 @@ refused. Each `status` step end carries its usage (`inputTokens`, `cacheReadToke
 
 When resolved.json has `"inspect": true`, the renderer measures each rendered frame and logs one line:
 `@@inspect {"frame": F, "items": [{"clip", "track", "kind": "clip"|"text", "rect": [x,y,w,h], "opacity", "text",
-"size", "color"}]}`.
+"size", "color", "cut"}]}`.
 
 - One `clip` item per visible clip container; one `text` item per visible text node (Range rects, merged per node)
   with its effective opacity (the product up the tree), the first 24 characters, the computed font size in px and
-  the colour.
+  the colour. Text a component clips inside its clip (an `overflow` other than visible) is measured by the part
+  that shows, and `cut` is the share hidden (0 when whole).
 - `scripts/render.mjs inspect <resolved.json> <project dir> <out dir> <frame...>` renders those stills and writes
   `<out dir>/inspect.json` = `{"frames": [{"frame", "png", "items"}]}`.
 - `check_layout` turns it into issues (section 14): text outside the safe area or cut by the canvas edge, tiny or
-  small text, text overflowing its clip box, text over other text, and contrast sampled from the still.
+  small text, text overflowing its clip box, text its own component keeps cut, text over other text, and contrast
+  sampled from the still.
 
 ## 13. render.mjs (node, renderer/scripts)
 
@@ -1084,12 +1090,14 @@ value.
    component and caption that none of those lands on (after its enter and before its exit). Errors: visible text
    outside the safe area or cut by the canvas edge, text under 20 px, a component that crashes. Text during its
    enter/exit animation or a transition between clips, and text fainter than 10 % opacity, are not counted.
-   Warnings: text under 28 px, text overflowing its clip box, text of one clip over text of another (captions
-   included), and contrast under 3:1 against the background sampled from the still (between 2:1 and 3:1 a clearly
+   Warnings: text under 28 px, text overflowing its clip box, text its own component keeps cut (hidden by the same
+   share in two stills half a second or more apart; a row passing an edge in an entrance is not), text of one clip
+   over text of another (captions included), and contrast under 3:1 against the background sampled from the still (between 2:1 and 3:1 a clearly
    different hue passes). The stills go to render.mjs 200 a call; after each call the stills that show no problem
    are deleted, so a long film needs no more disk or memory than a short one. A clean pass is kept in
    `build/layout.json` and reused while everything it read is unchanged (the resolved film, the profile, the
-   renderer's sources, the workspace's components, each shown file's size and time): after `preview` with
+   package's code, the renderer's sources, the workspace's components, each shown file's size and time) and its
+   kept stills are the pictures it measured: after `preview` with
    `sweep=true`, or a render that failed later, the layout is not measured again.
 3. **film**: the renderer encodes the film.
 4. **master**: loudness is normalised to the profile's target (true peak −1 dBTP) and the sound cut to the
@@ -1101,12 +1109,13 @@ value.
    no stretch longer than `max_still_s` (5 s on the social profiles) without any motion; a limit that is null is
    not checked; the length is the picture's. A failure names the longest stretches and the clips on screen in
    them, and the report keeps every black and frozen span (`black_spans`, `still_spans`; `review` lists the frozen
-   ones as its still screens). A rejected film is kept as `build/film.rejected.mp4` to look at.
+   ones as its still screens, with the runs too short for the film check that its own frames show). A rejected film is kept as `build/film.rejected.mp4` to look at.
 
 Every attempt writes `build/report.json`; a delivered film also `out/report.json` and `out/meta.json`. A renderer
 failure that is not the project's (its local server or browser) is retried once and reported as transient.
-`render`, `preview` and a draft of one project run one at a time: a second one in this process waits, one in
-another process is refused (the lock is `build/render.lock`, released when its process ends).
+`render`, `preview` and a draft of one project run one at a time: a second one, in this process or another, waits
+up to 60 s for its turn and is then refused, saying which (the lock is `build/render.lock`, released when its
+process ends).
 
 A delivered film comes with its side files, the stale ones removed: `out/captions/<track>.srt` (SubRip) and `.vtt`
 (WebVTT, with a `Language:` header line) for every captions track, hidden ones included, each item one cue (its

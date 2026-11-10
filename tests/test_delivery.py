@@ -8,6 +8,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import zlib
 from pathlib import Path
 
@@ -183,23 +184,68 @@ def test_render_reuses_the_layout_pass_of_the_same_film(tmp_path, monkeypatch):
     assert node.calls[calls]["mode"] == "inspect"
 
 
+def test_a_kept_layout_whose_still_a_later_preview_redrew_is_measured_again(tmp_path, monkeypatch):
+    root = make_project(tmp_path, monkeypatch, duration=5, tracks=[
+        {"id": "v1", "kind": "visual", "clips": [{"id": "t", "type": "text", "text": "Hi", "start": 0, "end": "end",
+                                                  "box": {"x": 20, "y": 20, "w": 150, "h": 30}}]}])
+    node = Node(items_for=lambda f: [text_item("t", [0, 0, 150, 30], "Hi")] if f == 60 else [], film_ok=False)
+    monkeypatch.setattr(R, "run_node", node)
+    assert T.preview(str(root), [], sweep=True).ok
+    kept = json.loads((root / "build" / "layout.json").read_text(encoding="utf-8"))["frames"]
+    assert [Path(s["png"]).name for s in kept] == ["still_00060.png"]
+    write_png(Path(kept[0]["png"]), w=17)                       # another cut's preview, under the same name
+    swept = len(node.calls)
+    rep = R.render(root)
+    assert not rep.get("layout_reused") and node.calls[swept]["mode"] == "inspect"
+
+
 def test_one_render_or_preview_of_a_project_at_a_time(tmp_path, monkeypatch):
     root = make_project(tmp_path, monkeypatch, duration=5)
     script = ("import sys, time; from reelsmith import render as R; "
               "cm = R.project_lock(R.project_paths(sys.argv[1]).build); cm.__enter__(); print('held', flush=True); "
-              "time.sleep(30)")
-    holder = subprocess.Popen([sys.executable, "-c", script, str(root)], stdout=subprocess.PIPE, text=True,
-                              env={**os.environ, "PYTHONPATH": str(Path(R.__file__).parent.parent)})
+              "time.sleep(float(sys.argv[2]))")
+
+    def hold(seconds):
+        p = subprocess.Popen([sys.executable, "-c", script, str(root), str(seconds)], stdout=subprocess.PIPE,
+                             text=True, env={**os.environ, "PYTHONPATH": str(Path(R.__file__).parent.parent)})
+        assert p.stdout.readline().strip() == "held"
+        return p
+    monkeypatch.setattr(R, "LOCK_WAIT_S", 0.5)
+    holder = hold(30)
     try:
-        assert holder.stdout.readline().strip() == "held"
         res = T.preview(str(root), [1])
-        assert not res.ok and "another render or preview of this project is running" in res
+        assert not res.ok and "another render or preview of this project is running (another process)" in res
+        assert "did not finish within 0.5 s" in res
         assert not T.render(str(root)).ok
     finally:
         holder.kill()
         holder.wait()
     monkeypatch.setattr(R, "run_node", Node())
     assert T.preview(str(root), [1]).ok                         # a dead process's lock is gone with it
+    monkeypatch.setattr(R, "LOCK_WAIT_S", 20)
+    holder = hold(1)
+    try:
+        assert T.preview(str(root), [1]).ok                     # a short one ahead of it: it waits its turn
+    finally:
+        holder.wait()
+    # a thread of this process holding the same build folder under another spelling
+    monkeypatch.setattr(R, "LOCK_WAIT_S", 0.5)
+    other = str(root / "build" / ".." / "build").upper() if os.name == "nt" else str(root / "build" / ".." / "build")
+    held, done = threading.Event(), threading.Event()
+
+    def keep():
+        with R.project_lock(Path(other)):
+            held.set()
+            done.wait(10)
+    t = threading.Thread(target=keep)
+    t.start()
+    try:
+        assert held.wait(10)
+        res = T.preview(str(root), [1])
+        assert not res.ok and "running in this process and did not finish within 0.5 s" in res
+    finally:
+        done.set()
+        t.join()
 
 
 def test_preview_sweep_of_a_long_film_is_batched_too(tmp_path, monkeypatch):

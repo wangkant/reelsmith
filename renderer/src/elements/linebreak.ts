@@ -215,17 +215,23 @@ export const breakLines = (text: string, width: number, measure: (s: string) => 
 
 const HAN_UNIT = /[（(\[【《「『“‘〈]*[^\s（(\[【《「『“‘〈][，、：；？！。,.:;?!）)\]】》」』”’〉…—]*/gu;
 
-/** Han text broken between characters into the fewest lines `width` allows, evened out. Numbers and Latin words stay
- *  whole (with their units), closing punctuation stays with the character before it, opening with the one after. */
+/** Han text broken between characters into the fewest lines `width` allows, evened out: between words when that
+ *  takes no more lines, else between characters. Numbers and Latin words stay whole (with their units), closing
+ *  punctuation stays with the character before it, opening with the one after. */
 export const hanLines = (text: string, width: number, measure: (s: string) => number): string[] => {
-  const units: string[] = [];
+  const words: string[] = [];
+  const chars: string[] = [];
   for (const p of pieces(text.trim())) {
     if (p.space) {
-      if (units.length) units[units.length - 1] += p.text;
-    } else if (/[0-9０-９A-Za-z]/u.test(p.text)) units.push(p.text);
-    else units.push(...(p.text.match(HAN_UNIT) ?? [p.text]));
+      if (words.length) words[words.length - 1] += p.text;
+      if (chars.length) chars[chars.length - 1] += p.text;
+      continue;
+    }
+    words.push(p.text);
+    if (/[0-9０-９A-Za-z]/u.test(p.text)) chars.push(p.text);
+    else chars.push(...(p.text.match(HAN_UNIT) ?? [p.text]));
   }
-  const fill = (limit: number) => {
+  const fill = (units: string[], limit: number) => {
     const out: string[] = [];
     let cur = "";
     for (const unit of units) {
@@ -238,11 +244,15 @@ export const hanLines = (text: string, width: number, measure: (s: string) => nu
     if (cur.trim()) out.push(cur.trimEnd());
     return out;
   };
-  const least = fill(width);
+  const least = fill(chars, width);
   const even = measure(text.trim()) / least.length;
-  for (let limit = even; limit < width; limit += (width - even) / 8 + 0.01) {
-    const lines = fill(limit);
-    if (lines.length <= least.length) return lines;
-  }
-  return least;
+  // the narrowest limit from the even width up to `width` that keeps `least`'s count
+  const evened = (units: string[]) => {
+    for (let limit = even; ; limit = Math.min(width, limit + (width - even) / 8 + 0.01)) {
+      const lines = fill(units, limit);
+      if (lines.length <= least.length) return lines;
+      if (limit >= width) return null;
+    }
+  };
+  return (words.every((w) => measure(w.trim()) <= width) && evened(words)) || evened(chars) || least;
 };
