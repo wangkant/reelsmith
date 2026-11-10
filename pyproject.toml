@@ -7,7 +7,7 @@ name = "reelsmith"
 version = "0.1.0"
 description = "A video editing harness for AI coding agents: an NLE timeline the agent edits, renders and checks, for any canvas and language"
 readme = "README.md"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 requires-python = ">=3.10"
 authors = [{ name = "Qiankang Wang" }]
 dependencies = ["pydantic>=2.7", "mcp>=2.3,<3", "jsonschema>=4.20", "pillow>=11"]

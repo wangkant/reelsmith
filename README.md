@@ -25,7 +25,7 @@ land on the rendered frames, masters the loudness and holds the film to its deli
 There is no pipeline and no template. Every tool can be called at any time, `project.json` can be edited by hand,
 and the agent decides the story, the cut, the sound and the look.
 
-## It looks at its own work
+## Visual verification
 
 <p align="center">
   <img src="docs/media/preview.webp" width="100%" alt="A contact sheet of eight stills from the film with the safe area outlined; in the seventh, a number card is cut off by the right edge">
@@ -52,16 +52,17 @@ One `undo` later:
 DELIVERED: out/film.mp4 (29.43 s, 1920x1080 30 fps, h264/aac, -13.9 LUFS, 35.4 MB; rendered in 82.0 s). Look at it with review.
 ```
 
-## Watch it work, and say what you want changed
+## Monitoring and conversational editing
 
 <p align="center">
   <img src="docs/media/window.webp" width="100%" alt="The reelsmith window: a monitor playing the cut, a chat where the agent has just changed a title's colour, and a multi-track timeline with narration, captions, titles, footage and sound">
 </p>
 
 `reelsmith watch <project>` opens a desktop window on the film your agent is making: a monitor that plays the current
-cut with the film's own renderer, a timeline that changes as the agent edits, a feed of what it did (the frames it
-looked at, what a check found, what a step cost), and a chat. Say "make this title red" with a clip selected and the
-agent edits, looks at the result and answers; the picture and the timeline follow. It runs on your machine and
+cut with the film's own renderer, a timeline that updates as the agent edits, a record of each step (the frames it
+inspected, the result of each check, the cost of each paid call), and a chat. A request such as "make this title
+red", sent with a clip selected, is carried out by the agent, verified on a rendered frame and reported back; the
+monitor and the timeline update accordingly. It runs on your machine and
 talks to the engine you already have (Claude through the Agent SDK, Codex, DeepSeek Harness, or any
 OpenAI-compatible API). [docs/watch.md](docs/watch.md) has the details.
 
@@ -102,7 +103,7 @@ Read https://raw.githubusercontent.com/wangkant/reelsmith/main/docs/setup-for-ag
 It asks where to install and before installing any system tool, checks the machine with `reelsmith doctor`,
 attaches itself with `reelsmith setup <agent>` and renders a test film without a paid call.
 
-## What the agent can do
+## Capabilities
 
 - **Edit a timeline.** Visual, audio and caption tracks; image, video, text, shape, evidence and component clips;
   keyframes with easing, Ken Burns moves, enter/exit presets, transitions, flips, filters and blend modes. Edits
@@ -130,7 +131,7 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
   the previous film and says what to fix, with clip ids and times. Films of any length render.
 - **Spend control.** Paid calls go through a ledger with a per-project budget and an account balance floor.
 
-## Scenes it can reach for
+## Built-in scene components
 
 <p align="center">
   <img src="docs/media/presets.webp" width="100%" alt="Twelve built-in components: Parties, QuoteCard, NewsBrief, Versus, StoryBeats, Seesaw, Receipt, BarCompare, CountUp, TimelineRule, DotGrid and Stamp">
@@ -224,7 +225,9 @@ python integrations/sync_skills.py --check     # the plugin's copy of the skill
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+reelsmith is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): it may be used, modified
+and shared for noncommercial purposes. Commercial use requires a separate license from the author; open an issue
+to enquire. Releases published before 10 November 2026 were made under the MIT license.
 
 The renderer depends on [Remotion](https://www.remotion.dev), which has its own license: free for individuals and
 small teams; larger companies need a Remotion company license (https://www.remotion.dev/license). The bundled

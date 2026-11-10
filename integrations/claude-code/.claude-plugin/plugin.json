@@ -7,7 +7,7 @@
   },
   "homepage": "https://github.com/wangkant/reelsmith",
   "repository": "https://github.com/wangkant/reelsmith",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["video", "video-editing", "mcp", "remotion", "nle"],
   "mcpServers": {
     "reelsmith": {

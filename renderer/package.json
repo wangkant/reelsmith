@@ -2,7 +2,7 @@
   "name": "reelsmith-renderer",
   "private": true,
   "description": "reelsmith's Remotion renderer: one generic Film composition that plays a resolved project",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Qiankang Wang",
   "repository": {
     "type": "git",
