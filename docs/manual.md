@@ -427,6 +427,12 @@ transcript. No narration: the film lasts until `a_2` ends.
   any other language needs the owner to choose a voice, which `speak` says.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
+- A film from a script plays like slides when every screen is words over a still picture. `animate` the pictures
+  that fill the frame (say in `motion` who moves and how); a 4 s clip goes further played forward and then again
+  with `reverse: true`, slowed with `rate`, or dimmed (`filter`) under a scene. Cut to another shot every few
+  seconds, and tell the story with the scene presets (Components) between the shots. Keep lit screens and signs
+  with writing out of a picture you will animate: the model scrambles them. The owner's `advice.max_slide_share`
+  measures how much of the film is words over a still.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
   limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
   crossed. Transcribe a recording once; re-speak only the lines that changed.
@@ -454,6 +460,19 @@ transcript. No narration: the film lasts until `a_2` ends.
 A component clip renders a React component inside the clip box. Built-in presets: `Receipt`, `Stamp`, `CountUp`,
 `BarCompare`, `TimelineRule`, `DotGrid`, `EvidenceCard`, `Highlighter`, `Arrow` — `library(project)` lists them
 with their prop names, `library(project, "Receipt")` shows the schema, an example and the source file.
+
+Six presets are whole scenes for telling what happened. Each fills a large box (about 800 × 800), lands its parts
+at their own `at`, keeps moving gently while it holds, and reads on a `light` or `dark` `ground`, over a dimmed
+picture or a plain one:
+
+| preset | the scene | reach for it when |
+|---|---|---|
+| `Parties` | 2–4 parties as cards, arrows with labels between them, coins or people flowing along a link, a link that can be cut | the story is who pays whom, who took whose customers, who stopped paying |
+| `QuoteCard` | a speaker plate (silhouette, name, role) and the quote revealed phrase by phrase, hot words marked | a scene is about what someone said |
+| `NewsBrief` | a source and date pill, your one-line retelling as the headline, up to three facts landing one by one | a scene says what a report found |
+| `Versus` | two versions side by side; one can be struck out, the other lifted | the beat is a contrast or a correction: the claim and the record |
+| `StoryBeats` | 3–5 events on a rail, the newest large, earlier ones folded small | the voice tells what happened next, one step at a time |
+| `Seesaw` | chips dropping onto two plates, the beam tipping to the heavier side, a verdict under it | one event has winners and losers |
 
 In props, any key named `at` or ending in `_at` takes a Time (a number = seconds from the clip's start) and
 arrives in the component as **frames from the clip's start**; any key named `asset` or ending in `_asset` takes an

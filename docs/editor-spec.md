@@ -92,7 +92,7 @@ A malformed `locale`, `profiles` or `fonts` entry makes every tool report the wo
 
 ```json
 {"hard": {"max_title": 24, "max_title_numbers": 2, "min_sources": 1, "banned": []},
- "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "target_s": [45, 75]}}
+ "advice": {"hook_seconds": 2, "max_same_visual_s": 8, "max_slide_share": 0.6, "target_s": [45, 75]}}
 ```
 
 Every key is optional and none has a default: without rules.json (or with `{}`) there is no hard rule and no
@@ -101,6 +101,8 @@ advice. The example above is a news-explainer channel's set (`examples/news-expl
 many numbers it may hold, how many sources with an http(s) url `meta.sources` needs, and words that may not appear
 in the title, description or topic. Advice never blocks: words
 on screen within `hook_seconds`, no still image or evidence held longer than `max_same_visual_s` without movement,
+at most `max_slide_share` (0 to 1) of the film spent on words over a still picture or a flat ground (footage that
+fills the frame, a component scene, evidence or a diagram of three or more shapes is not a slide),
 the length against `target_s`: `[min, max]` seconds, or `true` for the profile's target (section 15; a profile
 without one gives no advice). An empty title is a warning only where a title rule (`max_title` or
 `max_title_numbers`) is set: a film for a generic canvas needs no post title.
@@ -443,7 +445,8 @@ export default function Receipt({ props }: { props: any }) {
 - Imports allowed: `react`, `remotion`, installed `@remotion/*`, `@reelsmith/kit`, relative files in the same
   folder. Anything else (node builtins, other packages, absolute paths) is refused at bundle time.
 - Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `BarCompare`, `CountUp`, `DotGrid`,
-  `EvidenceCard`, `Highlighter`, `Receipt`, `Stamp`, `TimelineRule`. Library: `<workspace>/library/components/`.
+  `EvidenceCard`, `Highlighter`, `NewsBrief`, `Parties`, `QuoteCard`, `Receipt`, `Seesaw`, `Stamp`, `StoryBeats`,
+  `TimelineRule`, `Versus`. Library: `<workspace>/library/components/`.
   The renderer discovers both; a library component shadows a preset of the same name.
 - `@reelsmith/kit` is documented in full in [kit.md](kit.md).
 - `typecheck` type-checks the library with the renderer's TypeScript; a component that throws fails `render` and
@@ -1047,7 +1050,8 @@ value.
   second past its clip's end, an asset whose transcript is missing, both `enter` and `transition` on a clip,
   `overrides` on captions from a transcript.
 - Advice (only what rules.json `advice` sets): nothing on screen at 0 s or no words within `hook_seconds`; a still
-  image or evidence held longer than `max_same_visual_s` without anything moving it; the length outside `target_s`.
+  image or evidence held longer than `max_same_visual_s` without anything moving it; more than `max_slide_share` of
+  the film as words over a still picture or a flat ground; the length outside `target_s`.
 
 `render(project)` stops at the first stage that fails and keeps the previous `out/film.mp4`:
 

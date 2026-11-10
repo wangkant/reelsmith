@@ -23,6 +23,18 @@ import Stamp from "../../src/presets/Stamp";
 import StampMeta from "../../src/presets/Stamp.meta.json";
 import TimelineRule from "../../src/presets/TimelineRule";
 import TimelineRuleMeta from "../../src/presets/TimelineRule.meta.json";
+import NewsBrief from "../../src/presets/NewsBrief";
+import NewsBriefMeta from "../../src/presets/NewsBrief.meta.json";
+import Parties from "../../src/presets/Parties";
+import PartiesMeta from "../../src/presets/Parties.meta.json";
+import QuoteCard from "../../src/presets/QuoteCard";
+import QuoteCardMeta from "../../src/presets/QuoteCard.meta.json";
+import Seesaw from "../../src/presets/Seesaw";
+import SeesawMeta from "../../src/presets/Seesaw.meta.json";
+import StoryBeats from "../../src/presets/StoryBeats";
+import StoryBeatsMeta from "../../src/presets/StoryBeats.meta.json";
+import Versus from "../../src/presets/Versus";
+import VersusMeta from "../../src/presets/Versus.meta.json";
 import PriceTag from "../../../examples/workspace/library/components/PriceTag";
 import PriceTagMeta from "../../../examples/workspace/library/components/PriceTag.meta.json";
 import RingStat from "./RingStat";
@@ -57,6 +69,8 @@ const ENTRIES: [Comp, Meta][] = [
   [Receipt, ReceiptMeta], [Stamp, StampMeta], [CountUp, CountUpMeta], [BarCompare, BarCompareMeta],
   [TimelineRule, TimelineRuleMeta], [DotGrid, DotGridMeta], [EvidenceCard, EvidenceCardMeta],
   [Highlighter, HighlighterMeta], [Arrow, ArrowMeta], [PriceTag, PriceTagMeta as Meta],
+  [Parties, PartiesMeta as Meta], [QuoteCard, QuoteCardMeta as Meta], [NewsBrief, NewsBriefMeta as Meta],
+  [Versus, VersusMeta as Meta], [StoryBeats, StoryBeatsMeta as Meta], [Seesaw, SeesawMeta as Meta],
 ] as [Comp, Meta][];
 
 const VARIANTS = [

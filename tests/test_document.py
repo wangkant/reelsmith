@@ -405,7 +405,7 @@ def test_every_shipped_example_validates_against_its_schema():
     # a project folder need not exist: the library comes from the nearest workspace.json above it
     comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
     presets = {"Receipt", "Stamp", "CountUp", "BarCompare", "TimelineRule", "DotGrid", "EvidenceCard",
-               "Highlighter", "Arrow"}
+               "Highlighter", "Arrow", "Parties", "QuoteCard", "NewsBrief", "Versus", "StoryBeats", "Seesaw"}
     assert presets <= set(comps)
     assert comps["PriceTag"].source == "library"
     for name, comp in comps.items():
@@ -458,6 +458,23 @@ def test_presets_take_latin_text_and_lead_with_english_examples():
         "Arrow": {"label": "the part the buyer never sees"},
         "EvidenceCard": {"asset": "ev", "source": "Source: Example Mall member centre, rules of the 100-day challenge"},
         "PriceTag": {"price": "$4.50", "old": "$3.80", "label": "Large latte, oat milk"},
+        "Parties": {"parties": [{"id": "a", "name": "City Bank", "icon": "bank"}, {"id": "b",
+                    "name": "The developer", "icon": "company"}], "links": [{"from": "a", "to": "b",
+                    "label": "$2B loan", "flow": "money", "at": 1}]},
+        "QuoteCard": {"quote": "He gives the bowls away for free, so I sell two hundred fewer a day.",
+                      "who": "Maria Lopez", "role": "owns the noodle shop next door",
+                      "hot": ["two hundred fewer a day"]},
+        "NewsBrief": {"source": "Daily Ledger", "headline": "Free noodles next door cut three shops' sales in half",
+                      "points": [{"text": "Next door: from 300 bowls a day to 100", "hot": True}]},
+        "Versus": {"a": {"title": "What they said", "lines": [{"text": "Orders booked through next year"}]},
+                   "b": {"title": "What the filing shows", "lines": [{"text": "Unsold stock up 40%"}]},
+                   "strike": "a", "pick": "b"},
+        "StoryBeats": {"beats": [{"when": "March", "text": "A bakery chain cuts bread prices by half"},
+                       {"when": "Week two", "text": "Queues stretch around the block", "hot": True},
+                       {"text": "Two rivals close"}]},
+        "Seesaw": {"left": {"title": "Borrowers", "items": [{"text": "cheaper mortgages"}]},
+                   "right": {"title": "Savers", "items": [{"text": "less interest"}]}, "tilt": "right",
+                   "verdict": {"text": "Savers pay for the cut"}},
     }
     for name, props in latin.items():
         assert L.validate_props(comps[name], props) == [], name

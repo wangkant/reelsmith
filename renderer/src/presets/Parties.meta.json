@@ -1,0 +1,62 @@
+{
+  "name": "Parties",
+  "description": "Who is involved and what passes between them: 2-4 party cards (icon badge, name, role) and links that draw themselves card to card with an arrowhead and a label pill. Money links keep coins flowing along them, people links keep small people flowing, cut_at breaks a link (grey dashes and an accent slash, the flow stops), and one party can be hot (accent ring and badge). Use it when the story turns on a relationship or a flow of money between people, shops, companies, banks or officials: who pays whom, who takes whose customers, who stopped paying. Give it a box about 800 x 800 (600-900 wide, 500-1100 tall); 2 parties stack top and bottom (side by side in a wide box), 3 make a triangle, 4 a grid. Text keeps 40 px (roles 30 px) and wraps at word boundaries; a box too small for the cards is laid out larger and scaled down as a whole.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["parties"],
+    "properties": {
+      "parties": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 4,
+        "description": "the parties, in reading order (with 3, the first is the top card)",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "name", "icon"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1, "maxLength": 24, "description": "short id the links refer to"},
+            "name": {"type": "string", "minLength": 1, "maxLength": 22, "description": "who it is, e.g. City Bank (48-60 px, wraps to two lines when long)"},
+            "role": {"type": "string", "maxLength": 28, "description": "one short line under the name, e.g. main lender (34-40 px, two lines when long)"},
+            "icon": {"type": "string", "enum": ["person", "shop", "company", "official", "bank", "crowd", "factory"], "description": "badge silhouette"},
+            "at": {"type": ["number", "string"], "description": "Time the card lands: \"line:3\" or seconds from the clip start. Default: 0.45 s apart from the clip start. Nothing shows before the first card"},
+            "hot": {"type": "boolean", "default": false, "description": "the one party that matters: accent ring and badge (use on at most one)"}
+          }
+        }
+      },
+      "links": {
+        "type": "array",
+        "maxItems": 6,
+        "description": "what passes between parties; two links between the same pair run side by side. With 4 parties the two diagonals cross in the middle and share its room: label at most one of them",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to", "at"],
+          "properties": {
+            "from": {"type": "string", "description": "id of the party it starts at"},
+            "to": {"type": "string", "description": "id of the party the arrow points to"},
+            "label": {"type": "string", "maxLength": 16, "description": "what passes, on a pill near the middle, e.g. $2B loan (40 px, two lines when long; one or two short words read best)"},
+            "flow": {"type": "string", "enum": ["money", "people", "none"], "default": "none", "description": "money = coins keep travelling along it, people = small people do, none = a plain arrow"},
+            "at": {"type": ["number", "string"], "description": "Time the link starts drawing: \"line:4\" or seconds from the clip start"},
+            "cut_at": {"type": ["number", "string"], "description": "Time the link breaks: it turns grey and dashed, an accent slash crosses it, the flow stops"}
+          }
+        }
+      },
+      "layout": {"type": "string", "enum": ["auto", "column", "row", "triangle", "grid"], "default": "auto", "description": "auto: 2 parties stack (side by side in a box at least 1.25x wider than tall), 3 a triangle, 4 a grid"},
+      "color": {"type": "string", "default": "accent", "description": "colour of the hot party and the slash: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "light: paper panel with ink text; dark: night panel with snow text"}
+    }
+  },
+  "example": {
+    "parties": [
+      {"id": "dev", "name": "The developer", "role": "building 40 towers", "icon": "company", "hot": true, "at": 0.2},
+      {"id": "bank", "name": "City Bank", "role": "main lender", "icon": "bank", "at": 0.8},
+      {"id": "buyers", "name": "Home buyers", "role": "paid up front", "icon": "crowd", "at": 1.4}
+    ],
+    "links": [
+      {"from": "buyers", "to": "dev", "label": "deposits", "flow": "money", "at": 2.2},
+      {"from": "bank", "to": "dev", "label": "$2B loan", "flow": "money", "at": 3.2, "cut_at": 5}
+    ]
+  }
+}

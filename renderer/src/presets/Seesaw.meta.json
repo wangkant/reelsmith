@@ -1,0 +1,78 @@
+{
+  "name": "Seesaw",
+  "description": "Who gains and who loses from the same thing: a beam on a triangular pivot with a level plate at each end and a title above each side. Items drop onto their plate as stacked weight chips, then the beam tips (about 9 degrees) toward the side that carries more, the plates riding with it, sways gently while it holds, and a verdict pill lands under the pivot; the sinking side's title turns the accent colour and gets an underline. Use it when one event has two sides that weigh differently: who pays and who benefits, what you give up and what you get. Give it a box about 800 x 800 (600-900 wide, 600-1100 tall). Text keeps 40 px and wraps at word boundaries; a box too small is laid out larger and scaled down as a whole.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["left", "right", "tilt"],
+    "properties": {
+      "left": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "description": "the left side",
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 18, "description": "who this side is, e.g. Borrowers (48-62 px on one line, two lines when long)"},
+          "items": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "what lands on this side, bottom chip first",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 28, "description": "one gain or loss, 40-46 px, two lines when long"},
+                "at": {"type": ["number", "string"], "description": "Time the chip drops: \"line:3\" or seconds from the clip start. Default: staggered from 0.6 s, left side first"}
+              }
+            }
+          }
+        }
+      },
+      "right": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "description": "the right side, same shape as left",
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 18, "description": "who this side is, e.g. Savers"},
+          "items": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "what lands on this side, bottom chip first",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 28, "description": "one gain or loss"},
+                "at": {"type": ["number", "string"], "description": "Time the chip drops: \"line:3\" or seconds from the clip start"}
+              }
+            }
+          }
+        }
+      },
+      "tilt": {"type": "string", "enum": ["left", "right", "level"], "description": "the side that goes down (carries more); level stays balanced"},
+      "tilt_at": {"type": ["number", "string"], "description": "Time the beam tips: \"line:5\" or seconds from the clip start. Default: 0.6 s after the last chip"},
+      "verdict": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text"],
+        "description": "one line under the pivot that lands last",
+        "properties": {
+          "text": {"type": "string", "minLength": 1, "maxLength": 40, "description": "the takeaway, e.g. Savers pay for the rate cut (44-60 px on one line, two lines down to 40 px when long)"},
+          "at": {"type": ["number", "string"], "description": "Time it lands: \"line:6\" or seconds from the clip start. Default: 0.8 s after the tilt"}
+        }
+      },
+      "color": {"type": "string", "default": "accent", "description": "colour of the sinking side's title and underline: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "light: paper panel with ink text; dark: night panel with snow text"}
+    }
+  },
+  "example": {
+    "left": {"title": "Borrowers", "items": [{"text": "cheaper mortgages", "at": 0.6}, {"text": "lower card bills", "at": 1.2}]},
+    "right": {"title": "Savers", "items": [{"text": "less interest", "at": 2.0}, {"text": "pensions earn less", "at": 2.6}, {"text": "cash loses value", "at": 3.2}]},
+    "tilt": "right",
+    "tilt_at": 4.0,
+    "verdict": {"text": "Savers pay for the rate cut", "at": 5.0}
+  }
+}
