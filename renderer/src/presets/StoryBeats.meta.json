@@ -1,0 +1,38 @@
+{
+  "name": "StoryBeats",
+  "description": "What happened, in order, one beat at a time (who did what, what happened next, how it ended). A rail on the left grows down to each beat as it lands; the latest beat is large under its date chip, earlier beats fold into compact dimmed lines, later beats stay hidden until their time; the current dot pulses and a hot beat (the turning point) takes the accent. Use it when the voice retells a sequence of 3-5 events; for dates laid out all at once use TimelineRule. The card grows downward as beats land, from a top that centres its final height in the box. Wants a box about 800 x 900 (4 beats of about 40 characters fit 800 x 800); 5 long beats want about 800 x 1000. A card that cannot fit at the 40 px text floor scales down as a whole, so a 600 x 500 box suits 3 short beats.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["beats"],
+    "properties": {
+      "beats": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 5,
+        "description": "the events in order, each landing at its own time",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "when": {"type": "string", "maxLength": 18, "description": "optional short time label shown as a chip, e.g. March 3 / Next day / Two weeks later"},
+            "text": {"type": "string", "minLength": 1, "maxLength": 44, "description": "what happened, in a short sentence; long ones wrap between words"},
+            "at": {"type": ["number", "string"], "description": "Time this beat lands: \"line:4\" or seconds from the clip start. Nothing shows before the first beat. Default: 1.6 s apart from the clip start"},
+            "hot": {"type": "boolean", "default": false, "description": "the turning point: its dot and chip take the accent colour; use on at most one beat"}
+          }
+        }
+      },
+      "color": {"type": "string", "default": "accent", "description": "colour of the hot beat: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on: a light card with ink text, or a dark card with snow text"}
+    }
+  },
+  "example": {
+    "beats": [
+      {"when": "March", "text": "A bakery chain cuts bread prices by half", "at": 0.3},
+      {"when": "Week two", "text": "Queues stretch around the block", "at": 1.8},
+      {"when": "A month later", "text": "Three bakeries nearby lose half their trade", "at": 3.3, "hot": true},
+      {"when": "May", "text": "Two of them put up for-sale signs", "at": 4.8}
+    ]
+  }
+}

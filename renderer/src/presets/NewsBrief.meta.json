@@ -1,0 +1,34 @@
+{
+  "name": "NewsBrief",
+  "description": "A news report retold as a brief card, for a scene about what a report found (use it instead of a screenshot of a news page): a dark pill kicker with the source and date (the card adds the lead-in in the project's language: \"Source: \" in English, a Chinese or Japanese one in those locales; the date drops under the pill when both do not fit), the headline big in the display face (up to 132 px for a short one) with a gold marker sweeping under hot words, a rule drawing across, then up to three points landing one by one with small markers (a hot point gets an accent dot and a marker band). The card hugs its content and centres in the box: give it about 760-840 wide x 600-1000 tall (it works from 600 x 500 up to wide boxes); three long points want h >= 760.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["source", "headline"],
+    "properties": {
+      "source": {"type": "string", "minLength": 1, "maxLength": 32, "description": "who reported it, e.g. Reuters; the card adds the lead-in (a leading \"Source:\" here is dropped)"},
+      "date": {"type": "string", "maxLength": 20, "description": "when, e.g. Nov 3 or November 3, 2026"},
+      "headline": {"type": "string", "minLength": 1, "maxLength": 60, "description": "your own one-line retelling of the report, not the outlet's title; best under 50 Latin or 26 CJK characters"},
+      "points": {
+        "type": "array",
+        "maxItems": 3,
+        "description": "0-3 key facts that land one by one under the rule",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 50, "description": "one fact: at most 50 Latin or 22 CJK characters"},
+            "at": {"type": ["number", "string"], "description": "Time it lands: \"line:4\" or seconds from the clip start. Default: 1 s after the card, then every 0.8 s"},
+            "hot": {"type": "boolean", "default": false, "description": "the one point that matters: accent dot and a marker band"}
+          }
+        }
+      },
+      "hot": {"type": "array", "maxItems": 2, "items": {"type": "string", "minLength": 1}, "description": "exact substrings of headline to sweep with the gold marker after it lands"},
+      "at": {"type": ["number", "string"], "description": "Time the card lands: \"line:2\" or seconds from the clip start. Nothing shows before it. Default: the clip start"},
+      "color": {"type": "string", "default": "accent", "description": "colour of the hot point's dot: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "light = cream card with ink text; dark = night card with snow text"}
+    }
+  },
+  "example": {"source": "Daily Ledger", "date": "Nov 3", "headline": "Free noodles next door cut three shops' sales in half", "hot": ["sales in half"], "points": [{"text": "A month in, a queue of 100+ every day", "at": 1.2}, {"text": "Next door: from 300 bowls a day to 100", "at": 2.2, "hot": true}, {"text": "The owner pays for it with livestream sales", "at": 3.2}], "at": 0.2}
+}

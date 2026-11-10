@@ -1,0 +1,22 @@
+{
+  "name": "QuoteCard",
+  "description": "One person's words typeset as a quote card, for a scene about what someone said (use it instead of a screenshot of the quote): a speaker plate (round silhouette avatar, bold name, muted role) lands first, a gold quotation badge drops onto the card's top-right corner, then the quote reveals phrase by phrase in a big serif (up to 112 px for a short line, never under 40); hot substrings turn accent with a band sweeping under them, and a small source line closes. The card hugs its content and centres in the box: give it about 760-840 wide x 620-900 tall (it works from 600 x 500 up to wide boxes; a quote at the length limit wants h >= 700).",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["quote"],
+    "properties": {
+      "quote": {"type": "string", "minLength": 1, "maxLength": 120, "description": "the words, without quotation marks; best at 40-100 Latin characters or 10-40 CJK characters (60 CJK at most). Punctuation splits the reveal into phrases"},
+      "who": {"type": "string", "maxLength": 28, "description": "the speaker, e.g. Maria Lopez; wraps to two lines when long"},
+      "role": {"type": "string", "maxLength": 40, "description": "who they are, e.g. owns the noodle shop next door"},
+      "source": {"type": "string", "maxLength": 40, "description": "small line at the bottom, shown as written, e.g. via Reuters"},
+      "icon": {"type": "string", "enum": ["person", "shop", "company", "official", "phone", "crowd"], "default": "person", "description": "avatar silhouette"},
+      "hot": {"type": "array", "maxItems": 2, "items": {"type": "string", "minLength": 1}, "description": "exact substrings of quote to mark in accent after they appear; give one (the accent is the scene's one hot element), two only when they say one thing"},
+      "at": {"type": ["number", "string"], "description": "Time the card lands: \"line:3\" or seconds from the clip start; the quote starts 0.4 s later. Nothing shows before it. Default: the clip start"},
+      "over": {"type": "number", "minimum": 0.6, "maximum": 7, "description": "seconds the phrase reveal takes (default 0.05 s per Latin or 0.11 s per CJK character, at most 4.5 s; always shortened to leave 1.6 s of the clip for the source and a hold)"},
+      "color": {"type": "string", "default": "accent", "description": "colour of the hot words: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "light = cream card with ink text; dark = night card with snow text"}
+    }
+  },
+  "example": {"quote": "He gives the bowls away for free, so I sell two hundred fewer a day. I can barely make rent.", "who": "Maria Lopez", "role": "owns the noodle shop next door", "source": "via the Daily Ledger", "icon": "shop", "hot": ["two hundred fewer a day"], "at": 0.3}
+}

@@ -13,7 +13,7 @@ import pytest
 from reelsmith import checks as C
 from reelsmith.issues import Issue
 from reelsmith.profiles import DOUYIN as DOUYIN_NOW, Box
-from reelsmith.workspace import DEFAULT_RULES, default_rules, merge_rules
+from reelsmith.workspace import DEFAULT_RULES, WorkspaceError, default_rules, merge_rules
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
 # the layout fixtures are drawn on the douyin screen as it was (x 40-880, y 220-1460); the checks are geometry-free
@@ -236,6 +236,39 @@ def test_an_evidence_box_outside_the_safe_area_is_an_error(tmp_path):
     full = clip("full", "evidence", 0, 90, box={"x": 0, "y": 0, "w": 1080, "h": 1920}, content=one_line)
     assert C.evidence_panel([1200, 684], [42, 42, 300, 60], 1080, 1920) == (198.0, 820.0, 684.0, 280.0)
     assert C.evidence_issues(resolved([full]), tmp_path, DOUYIN) == []
+
+
+def test_advice_slides_measures_words_over_stills():
+    rules = merge_rules({"advice": {"max_slide_share": 0.6}})
+    full = {"x": 0, "y": 0, "w": 1080, "h": 1920}
+    scene = {"x": 120, "y": 300, "w": 760, "h": 900}
+    words = clip("t", "text", dur=1800, content={"text": "Free noodles"})
+    photos = [clip("p1", start=0, dur=900, box=full), clip("p2", start=900, dur=900, box=full)]
+
+    def slides(*more):
+        found = [i for i in C.advice_issues(resolved([*photos, words, *more]), rules, DOUYIN) if i.where == "slides"]
+        return str(found[0]) if found else ""
+
+    assert "100% of the film is words over a still picture or a flat ground" in slides()
+    assert "0-60 s" in slides() and "plays like slides" in slides()
+    # three scenes of eight seconds leave 60 %: within the advice
+    scenes = [clip(f"c{t0}", "component", start=t0 * 30, dur=240, box=scene, content={"name": "Parties", "props": {}})
+              for t0 in (4, 20, 40)]
+    assert slides(*scenes) == "" and "73%" in slides(*scenes[:2])
+    assert slides(clip("v", "video", start=0, dur=1800, box=full)) == ""                    # footage is no slide
+    # a tag, plates behind the words and an inset clip are still slides; three shapes at once are a diagram
+    small = {"x": 0, "y": 0, "w": 300, "h": 120}
+    dressed = [clip("tag", "component", dur=1800, box=small, content={"name": "Arrow", "props": {}}),
+               clip("s1", "shape", dur=1800), clip("s2", "shape", dur=1800),
+               clip("in", "video", dur=1800, box={"x": 300, "y": 900, "w": 400, "h": 400})]
+    assert "100%" in slides(*dressed)
+    assert slides(*dressed, clip("s3", "shape", dur=1800)) == ""
+    assert C.slide_runs(resolved([*photos, words, *scenes])) == [(0.0, 4.0), (12.0, 20.0), (28.0, 40.0), (48.0, 60.0)]
+    # unset: no advice
+    assert not [i for i in C.advice_issues(resolved([*photos, words]), merge_rules({}), DOUYIN) if i.where == "slides"]
+    for bad in (1.5, -0.1, True, "half"):
+        with pytest.raises(WorkspaceError, match="max_slide_share"):
+            merge_rules({"advice": {"max_slide_share": bad}})
 
 
 def test_advice_duration_target_from_rules_or_profile():

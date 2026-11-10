@@ -1,0 +1,69 @@
+{
+  "name": "Versus",
+  "description": "Two versions of the same thing compared: what people think vs what the record shows, what a company says vs what its filing shows, shop A vs shop B. Panel a (a muted card) lands with its title and its lines one by one, then panel b (a bright card) with a VS badge between them; one side can be crossed out (strike) and the other can lift with an accent edge (pick). Use it when the beat is a contrast or a correction. Wants a box about 800 x 900 (stack) or 1200 x 600 (columns, which also suits a landscape frame). Three long points a side need about 800 x 1000 in a stack; content that does not fit tightens its spacing, then scales down as a whole, so a 600 x 500 box holds only short one-line points at full size.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["a", "b"],
+    "properties": {
+      "a": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "lines"],
+        "description": "first side, shown as the muted card: the claim, the common belief, shop A",
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 24, "description": "who or what this side is, e.g. What they said"},
+          "tag": {"type": "string", "maxLength": 14, "description": "optional small chip next to the title (under it when long or in columns), e.g. Press release / Oct"},
+          "lines": {
+            "type": "array", "minItems": 1, "maxItems": 3, "description": "1-3 short points, landing one by one",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 36, "description": "one point; long ones wrap between words"},
+                "at": {"type": ["number", "string"], "description": "Time this line lands: \"line:4\" or seconds from the clip start. Default: shortly after the previous one"}
+              }
+            }
+          }
+        }
+      },
+      "b": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "lines"],
+        "description": "second side, shown as the bright card: the fact, what the books say, shop B",
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 24, "description": "who or what this side is, e.g. What the filing shows"},
+          "tag": {"type": "string", "maxLength": 14, "description": "optional small chip next to the title (under it when long or in columns)"},
+          "lines": {
+            "type": "array", "minItems": 1, "maxItems": 3, "description": "1-3 short points, landing one by one",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 36, "description": "one point; long ones wrap between words"},
+                "at": {"type": ["number", "string"], "description": "Time this line lands: \"line:4\" or seconds from the clip start. Default: shortly after the previous one"}
+              }
+            }
+          }
+        }
+      },
+      "layout": {"type": "string", "enum": ["stack", "columns"], "default": "stack", "description": "stack: a on top, b below, the biggest text; columns: side by side, for short lines in a wide box"},
+      "strike": {"type": "string", "enum": ["a", "b"], "description": "the side that gets crossed out and dims (the wrong one)"},
+      "strike_at": {"type": ["number", "string"], "description": "Time the strike is drawn. Default: 0.8 s after the last line"},
+      "pick": {"type": "string", "enum": ["a", "b"], "description": "the side that lifts and gets the accent edge (the right one)"},
+      "pick_at": {"type": ["number", "string"], "description": "Time the pick happens. Default: 0.8 s after the last line"},
+      "a_at": {"type": ["number", "string"], "description": "Time panel a lands. Nothing shows before it. Default: the clip start"},
+      "b_at": {"type": ["number", "string"], "description": "Time panel b and the VS badge land. Default: 0.6 s after a's last line"},
+      "color": {"type": "string", "default": "accent", "description": "strike and pick colour: theme token or CSS"},
+      "ground": {"type": "string", "enum": ["light", "dark"], "default": "light", "description": "what it sits on: light cards with ink text, or dark cards with snow text"}
+    }
+  },
+  "example": {
+    "a": {"title": "What they said", "tag": "Earnings call", "lines": [{"text": "Orders booked through next year", "at": 0.6}, {"text": "Factories running at full tilt", "at": 1.2}]},
+    "b": {"title": "What the filing shows", "tag": "10-Q", "lines": [{"text": "Unsold stock up 40%", "at": 2.6}, {"text": "Customers paying late", "at": 3.2}]},
+    "b_at": 2.0, "strike": "a", "strike_at": 4.4, "pick": "b", "pick_at": 4.8
+  }
+}
