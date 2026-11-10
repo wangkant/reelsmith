@@ -605,6 +605,9 @@ def screen_issues(resolved: dict, profile: Profile) -> list[Issue]:
     return out
 
 
+OVERRUN_S = 0.25             # a held last frame shorter than this passes for a cut
+
+
 def overrun_issues(resolved: dict, root: Path) -> list[Issue]:
     """Video and audio clips that run past the end of their source (a frozen last frame, or silence)."""
     fps = _fps(resolved)
@@ -628,7 +631,7 @@ def overrun_issues(resolved: dict, root: Path) -> list[Issue]:
                                                 f"under {length:.2f}"))
             continue
         runs_out = start / fps + (length - trim) / rate
-        if (start + dur) / fps - runs_out > 1 / fps:
+        if (start + dur) / fps - runs_out > OVERRUN_S:
             out.append(Issue("warning", str(cid), f"its source ends at {length:.1f} s, film {runs_out:.1f} s; from "
                                                   f"there to {(start + dur) / fps:.1f} s it is {frozen}: end the "
                                                   "clip there, or loop"))

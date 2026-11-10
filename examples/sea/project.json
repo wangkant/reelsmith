@@ -11,6 +11,10 @@
    {
     "title": "Why is the ocean salty? (NOAA Ocean Service)",
     "url": "https://oceanservice.noaa.gov/facts/whysalty.html"
+   },
+   {
+    "title": "Saline water use in the United States (USGS)",
+    "url": "https://www.usgs.gov/water-science-school/science/saline-water-use-united-states"
    }
   ]
  },
@@ -67,6 +71,44 @@
    "path": "assets/bed.m4a",
    "kind": "audio",
    "note": "from bed.m4a"
+  },
+  "crust": {
+   "path": "assets/crust.png",
+   "kind": "image",
+   "note": "A shallow tidal pool at a rocky shore drying in the sun, a thick white crust of sea salt crystals around its rim, the last clear water in the middle, the ocean beyond, low warm light. Photograph, natu"
+  },
+  "river": {
+   "path": "assets/river.png",
+   "kind": "image",
+   "note": "A clear shallow mountain river running over smooth round pebbles, seen close to the water surface, sunlight glinting on small ripples, green banks softly blurred behind. Photograph, natural light, cin"
+  },
+  "ev_usgs": {
+   "path": "assets/ev_usgs.png",
+   "kind": "evidence",
+   "box": [
+    28,
+    345,
+    2386,
+    40
+   ],
+   "site": "USGS",
+   "url": "https://www.usgs.gov/special-topics/water-science-school/science/saline-water-use-united-states",
+   "note": "Saline Water Use in the United States | U.S. Geological Survey | Fresh water - Less than 1,000 ppm",
+   "line": 54,
+   "around": [
+    102,
+    74
+   ]
+  },
+  "river_v": {
+   "path": "assets/river_v.mp4",
+   "kind": "video",
+   "note": "from river: Clear water flows steadily over the pebbles from left to right, ripples and sun glints move on the surface, the grass sways a little"
+  },
+  "crust_v": {
+   "path": "assets/crust_v.mp4",
+   "kind": "video",
+   "note": "from crust: Small waves break on the rocks behind, the water in the pool shimmers, the low sun glitters on the salt crystals"
   }
  },
  "tracks": [
@@ -75,76 +117,98 @@
    "kind": "visual",
    "clips": [
     {
-     "id": "a1",
+     "id": "s1",
      "type": "video",
      "asset": "delta_v",
      "start": 0,
-     "end": "line:2",
-     "rate": 0.9
+     "dur": 1.9
     },
     {
-     "id": "a2",
+     "id": "s2",
+     "type": "video",
+     "asset": "river_v",
+     "start": "clip:s1.end",
+     "end": "line:2"
+    },
+    {
+     "id": "s3",
      "type": "video",
      "asset": "rain_v",
      "start": "line:2",
-     "dur": 3.6
+     "dur": 3.2
     },
     {
-     "id": "a3",
+     "id": "s4",
+     "type": "video",
+     "asset": "river_v",
+     "start": "clip:s3.end",
+     "dur": 2.3,
+     "trim_in": 1.6
+    },
+    {
+     "id": "s5",
      "type": "video",
      "asset": "delta_v",
-     "start": "clip:a2.end-0.4",
+     "start": "clip:s4.end",
      "end": "line:3",
-     "reverse": true,
-     "filter": {
-      "brightness": 0.8
-     },
-     "transition": {
-      "type": "crossfade",
-      "dur": 0.4
-     }
+     "trim_in": 0.6
     },
     {
-     "id": "a4",
+     "id": "s6",
      "type": "video",
      "asset": "sun_v",
      "start": "line:3",
-     "end": "line:4",
-     "rate": 0.74
+     "dur": 3.5
+    },
+    {
+     "id": "s7",
+     "type": "video",
+     "asset": "crust_v",
+     "start": "clip:s6.end",
+     "end": "line:4"
     },
     {
      "id": "m1",
      "type": "video",
      "asset": "rain_v",
      "start": "line:4",
-     "dur": 1.2,
+     "dur": 0.9,
      "rate": 2,
-     "trim_in": 0.5
+     "trim_in": 0.4
     },
     {
      "id": "m2",
      "type": "video",
-     "asset": "delta_v",
+     "asset": "river_v",
      "start": "clip:m1.end",
-     "dur": 1.2,
+     "dur": 0.9,
      "rate": 2,
-     "trim_in": 0.5
+     "trim_in": 0.4
     },
     {
      "id": "m3",
      "type": "video",
-     "asset": "sun_v",
+     "asset": "delta_v",
      "start": "clip:m2.end",
-     "dur": 1.2,
+     "dur": 0.9,
      "rate": 2,
-     "trim_in": 0.5
+     "trim_in": 0.4
     },
     {
-     "id": "a6",
+     "id": "m4",
+     "type": "video",
+     "asset": "crust_v",
+     "start": "clip:m3.end",
+     "dur": 0.9,
+     "rate": 2,
+     "trim_in": 0.4
+    },
+    {
+     "id": "s8",
      "type": "image",
      "asset": "salt",
-     "start": "clip:m3.end",
-     "end": "line:5",
+     "start": "clip:m4.end",
+     "end": "line:5+0.4",
      "motion": "push",
      "focus": [
       0.3,
@@ -152,12 +216,15 @@
      ]
     },
     {
-     "id": "a7",
+     "id": "s9",
      "type": "video",
-     "asset": "delta_v",
-     "start": "clip:a6.end-0.5",
+     "asset": "river_v",
+     "start": "clip:s8.end-0.5",
      "end": "end",
-     "rate": 0.85,
+     "rate": 0.9,
+     "filter": {
+      "brightness": 0.62
+     },
      "transition": {
       "type": "crossfade",
       "dur": 0.5
@@ -177,7 +244,7 @@
      "opacity": 0.78,
      "radius": 28,
      "start": "line:4+5.5",
-     "end": "line:5",
+     "end": "clip:s8.end-0.5",
      "box": {
       "x": 1010,
       "y": 230,
@@ -228,10 +295,65 @@
      }
     },
     {
+     "id": "n1",
+     "type": "component",
+     "name": "CountUp",
+     "start": "line:4+5.5",
+     "end": "clip:s8.end-0.5",
+     "box": {
+      "x": 1050,
+      "y": 260,
+      "w": 720,
+      "h": 400
+     },
+     "props": {
+      "value": 35,
+      "suffix": "g",
+      "label": "of salt in every litre of seawater",
+      "at": "line:4+5.75",
+      "dur": 0.9,
+      "ground": "dark",
+      "color": "gold"
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.3
+     }
+    },
+    {
+     "id": "e1",
+     "type": "component",
+     "name": "EvidenceCard",
+     "start": "line:2+0.5",
+     "end": "clip:s3.end-0.2",
+     "box": {
+      "x": 330,
+      "y": 320,
+      "w": 1260,
+      "h": 440
+     },
+     "props": {
+      "asset": "ev_noaa",
+      "context": 110,
+      "highlight_at": 0.8,
+      "highlight_dur": 0.7,
+      "ground": "dark",
+      "source": "Source: NOAA Ocean Service"
+     },
+     "enter": {
+      "preset": "rise",
+      "dur": 0.4
+     },
+     "exit": {
+      "preset": "fade",
+      "dur": 0.25
+     }
+    },
+    {
      "id": "sb",
      "type": "component",
      "name": "StoryBeats",
-     "start": "clip:a3",
+     "start": "clip:s4",
      "end": "line:3.end",
      "box": {
       "x": 1030,
@@ -250,7 +372,7 @@
        {
         "when": "Rivers",
         "text": "carry them down to the sea",
-        "at": 1.5
+        "at": 1.4
        },
        {
         "when": "The sun",
@@ -260,7 +382,7 @@
        {
         "when": "The salt",
         "text": "stays behind",
-        "at": "line:3+3.2",
+        "at": "clip:s7+0.1",
         "hot": true
        }
       ]
@@ -275,7 +397,7 @@
      "type": "text",
      "text": "× **billions** of years",
      "start": "line:4+0.3",
-     "end": "clip:m3.end",
+     "end": "clip:m4.end",
      "box": {
       "x": 260,
       "y": 380,
@@ -303,56 +425,45 @@
      }
     },
     {
-     "id": "n1",
+     "id": "vs",
      "type": "component",
-     "name": "CountUp",
-     "start": "line:4+5.5",
-     "end": "line:5",
-     "box": {
-      "x": 1050,
-      "y": 260,
-      "w": 720,
-      "h": 400
-     },
-     "props": {
-      "value": 35,
-      "suffix": "g",
-      "label": "of salt in every litre of seawater",
-      "at": "line:4+5.75",
-      "dur": 0.9,
-      "ground": "dark",
-      "color": "gold"
-     },
-     "exit": {
-      "preset": "fade",
-      "dur": 0.3
-     }
-    },
-    {
-     "id": "e1",
-     "type": "component",
-     "name": "EvidenceCard",
-     "start": "line:2+0.5",
-     "end": "clip:a2.end-0.4",
+     "name": "Versus",
+     "start": "clip:s9+0.3",
+     "end": "end",
      "box": {
       "x": 240,
-      "y": 300,
+      "y": 270,
       "w": 1440,
-      "h": 480
+      "h": 440
      },
      "props": {
-      "asset": "ev_noaa",
-      "context": 110,
-      "highlight_at": 0.9,
-      "highlight_dur": 0.7,
       "ground": "dark",
-      "source": "Source: NOAA Ocean Service"
+      "a": {
+       "title": "A litre of river water",
+       "lines": [
+        {
+         "text": "under 1 g of salt",
+         "at": 0.5
+        }
+       ]
+      },
+      "b": {
+       "title": "A litre of seawater",
+       "lines": [
+        {
+         "text": "about 35 g of salt",
+         "at": 1.7
+        }
+       ]
+      },
+      "a_at": 0.1,
+      "b_at": 1.3,
+      "pick": "b",
+      "pick_at": 2.4,
+      "color": "gold",
+      "layout": "columns"
      },
      "enter": {
-      "preset": "rise",
-      "dur": 0.4
-     },
-     "exit": {
       "preset": "fade",
       "dur": 0.3
      }
