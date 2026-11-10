@@ -117,13 +117,17 @@ def _parser() -> argparse.ArgumentParser:
                    add_help=False)
     sub.add_parser("doctor", help="check what reelsmith and its optional tools need on this machine (local, free)",
                    add_help=False)
+    sub.add_parser("watch", help="open a read-only editor window on a project in the browser, to watch an agent "
+                                 "edit it", add_help=False)
     return ap
 
 
 def command_parser(name: str) -> argparse.ArgumentParser:
-    """The parser that reads `reelsmith <name> ...`: run, mcp, setup and doctor have their own."""
+    """The parser that reads `reelsmith <name> ...`: run, mcp, setup, doctor and watch have their own."""
     if name == "run":
         from .runner import parser
+    elif name == "watch":
+        from .watch.server import parser
     elif name == "mcp":
         from .mcp_server import parser
     elif name == "setup":
@@ -201,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["doctor"]:
         from .doctor import main as doctor
         return doctor(argv[1:])
+    if argv[:1] == ["watch"]:
+        from .watch.server import main as watch
+        return watch(argv[1:])
     args = _parser().parse_args(argv)
     try:
         result = _call(args)
