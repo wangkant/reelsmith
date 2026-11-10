@@ -110,7 +110,7 @@ at y 826–1026, so the other words stay above it):
   "tracks": [
     {"id": "bg", "kind": "visual", "clips": [
       {"id": "c1", "type": "image", "asset": "field", "start": 0, "end": "line:3", "motion": "push"},
-      {"id": "c2", "type": "video", "asset": "mill", "start": "line:3", "end": "line:5", "filter": {"brightness": 0.7}},
+      {"id": "c2", "type": "video", "asset": "mill", "start": "line:3", "end": "line:5"},
       {"id": "c3", "type": "evidence", "asset": "ev_water", "start": "line:5", "end": "end",
        "box": {"x": 120, "y": 160, "w": 1000, "h": 600}, "highlight": {"at": 0.8}}
     ]},
@@ -438,9 +438,9 @@ transcript. No narration: the film lasts until `a_2` ends.
 - `draw`: `size` is an aspect — `9:16` (1080×1920), `2:3`, `3:4`, `4:5` (1080×1350), `1:1` (1080×1080), `4:3`,
   `3:2`, `16:9` (1920×1080); the default is the one nearest your canvas — or pixels `"WxH"` (sides 256–4096).
 - A film from a script plays like slides when every screen is words over a still picture. `animate` the pictures
-  that fill the frame (say in `motion` who moves and how); a 4 s clip goes further played forward and then again
-  with `reverse: true`, slowed with `rate`, or dimmed (`filter`) under a scene. Cut to another shot every few
-  seconds, and tell the story with the scene presets (Components) between the shots. Keep lit screens and signs
+  that fill the frame (say in `motion` who moves and how); a 4 s clip goes further re-cropped (a closer `zoom`
+  with another `focus` reads as a new shot), slowed with `rate`, or played with `reverse: true` later in the film.
+  Cut to another shot every few seconds, and tell the story with the scene presets (Components) between the shots. Keep lit screens and signs
   with writing out of a picture you will animate: the model scrambles them. The owner's `advice.max_slide_share`
   measures how much of the film is words over a still.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
