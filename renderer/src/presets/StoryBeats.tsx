@@ -48,6 +48,37 @@ const wrap = (text: string, width: number, measure: (s: string) => number): stri
   return lines;
 };
 
+/** Han text broken between characters into the fewest lines `width` allows, evened out. Latin words and numbers
+ *  stay whole; closing punctuation stays with the character before it, opening punctuation with the one after. */
+const wrapHan = (text: string, width: number, measure: (s: string) => number): string[] => {
+  const units = text.trim().match(/[\u201C\u2018\u300C\u300E(\uFF08\u300A]*(?:[A-Za-z0-9.%-]+|\S)[\uFF0C\u3001\uFF1A\uFF1B\uFF1F\uFF01\u3002,.:;?!\u2026\u201D\u2019\u300D\u300F)\uFF09\u300B]*\s*/gu) ?? [text];
+  const fill = (limit: number) => {
+    const out: string[] = [];
+    let cur = "";
+    for (const unit of units) {
+      if (cur && measure((cur + unit).trimEnd()) > limit) { out.push(cur.trimEnd()); cur = ""; }
+      cur += unit;
+    }
+    if (cur.trim()) out.push(cur.trimEnd());
+    return out;
+  };
+  const least = fill(width);
+  const even = measure(text) / least.length;
+  for (let limit = even; limit < width; limit += (width - even) / 8 + 0.01) {
+    const lines = fill(limit);
+    if (lines.length <= least.length) return lines;
+  }
+  return least;
+};
+
+/** `wrap`, except that Han text breaks between characters (as Chinese is set) when word breaks cost a line. */
+const wrapTight = (text: string, width: number, measure: (s: string) => number): string[] => {
+  const byWord = wrap(text, width, measure);
+  if (!/\p{Script=Han}/u.test(text)) return byWord;
+  const byChar = wrapHan(text, width, measure);
+  return byChar.length < byWord.length ? byChar : byWord;
+};
+
 /** Width at 100 px of the widest unbreakable word. */
 const widestWord = (text: string, family: string, weight: number | string = 400) =>
   Math.max(1, ...words(text).filter((s) => s.trim()).map((s) => textWidth(s, 100, family, weight)));
@@ -117,7 +148,7 @@ export default function StoryBeats({ props }: { props: any }) {
     const items = beats.map((b, i) => {
       const cLines = textWidth(b.text, cs, FONTS.sans, 600) <= cRoom
         ? [b.text]
-        : wrap(b.text, cRoom, (t) => textWidth(t, cs, FONTS.sans, 600));
+        : wrapTight(b.text, cRoom, (t) => textWidth(t, cs, FONTS.sans, 600));
       const w100 = (t: string) => textWidth(t, 100, FONTS.sans, 800);
       const one = Math.floor((textW * 100) / Math.max(1, w100(b.text)));
       // the smallest large size: 56, less when one long word needs it (never under the 40 floor)
