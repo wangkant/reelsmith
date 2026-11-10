@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -70,7 +71,59 @@ def tool(fn):
         if isinstance(result, ToolResult):
             return result
         return _ok(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=1))
+    return _logged(fn.__name__, wrapper)
+
+
+UNLOGGED = {"manual", "notes", "library", "describe", "assets"}     # read-only chatter
+ACTIVITY_LOG = ".history/activity.jsonl"
+ACTIVITY_KEEP = 1000
+
+
+def _logged(name: str, call):
+    """A call on a project leaves a line in its activity log (what `reelsmith watch` shows)."""
+    if name in UNLOGGED:
+        return call
+
+    @functools.wraps(call)
+    def wrapper(*args, **kwargs):
+        project = args[0] if args else kwargs.get("project")
+        if not isinstance(project, str):
+            return call(*args, **kwargs)
+        started, before = time.monotonic(), _batch_mark(project)
+        result = call(*args, **kwargs)
+        _log_activity(project, name, result, time.monotonic() - started, before)
+        return result
     return wrapper
+
+
+def _batch_mark(project: str):
+    try:
+        return (_project(project) / ".history" / "log.jsonl").stat().st_mtime_ns
+    except (ToolInputError, OSError):
+        return None
+
+
+def _log_activity(project: str, name: str, result: ToolResult, seconds: float, before) -> None:
+    """Never the arguments, only the result's first line (tools keep keys out of it); never fails the tool."""
+    try:
+        root = _project(project)
+        batch = None
+        if _batch_mark(project) != before:
+            last = (root / ".history" / "log.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+            batch = int(json.loads(last)["n"])
+        row = {"ts": datetime.now().isoformat(timespec="seconds"), "tool": name, "ok": bool(result.ok),
+               "seconds": round(seconds, 2), "summary": str(result).split("\n", 1)[0][:300], "batch": batch}
+        path = root / ACTIVITY_LOG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if len(lines) > ACTIVITY_KEEP:
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            tmp.write_text("".join(lines[-ACTIVITY_KEEP:]), encoding="utf-8", newline="\n")
+            os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 - the log is for watching; the tool's result matters more
+        pass
 
 
 def _project(project: str, must_exist: bool = True) -> Path:

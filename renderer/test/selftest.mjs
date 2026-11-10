@@ -3,11 +3,12 @@
 // to its picture and time (focus keyframes, flips, filters, an animated GIF, hold, a speed curve, an NTSC rate), a
 // film with looping video and audio (video.resolved.json), stills on several pages at once, a draft film (scale and
 // frame range), the import guard, context narrowing, component crashes, word-by-word captions, the locale, transient
-// failures, parallel calls and argument errors. Offline; needs ffmpeg on PATH;
+// failures, parallel calls, argument errors and the live player (scripts/player.mjs). Offline; needs ffmpeg on PATH;
 // ~3-4 minutes (each case bundles once).
 //   node test/selftest.mjs [--keep <dir>]     (--keep leaves the stills there to look at)
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -641,6 +642,70 @@ console.log("arguments");
   const many = Array.from({ length: 601 }, (_, i) => String(i));
   const r8 = run(["stills", fixture, HERE, OUT, ...many]);
   check(r8.code === 2 && /601 frames asked; at most 600 per call/.test(r8.result?.error ?? ""), "more than 600 stills a call are refused");
+}
+
+console.log("live player");
+{
+  const build = (out, lib) => {
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "player.mjs"), out, "--library", lib], { cwd: ROOT, encoding: "utf8" });
+    return { code: r.status, result: lastJson(r.stdout), s: ((Date.now() - t0) / 1000).toFixed(1) };
+  };
+  const dir = path.join(OUT, "player");
+  const r = build(dir, library);
+  console.log(`  (${r.s} s)`);
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  check(r.code === 0 && r.result?.ok === true && ["index.html", "bundle.js"].every((f) => files.includes(f)) &&
+    files.some((f) => f.endsWith(".woff2")), `the player builds: index.html, bundle.js and fonts (${r.result?.error ?? ""})`);
+  check(["Badge", "Stamp", "Window"].every((n) => r.result?.components?.includes(n)) &&
+    Object.keys(r.result?.skipped ?? {}).length === 0, `it holds every library component (${r.result?.components})`);
+  const bad = build(path.join(OUT, "player-bad"), badlib);
+  const skipped = bad.result?.skipped ?? {};
+  check(bad.result?.ok === true && JSON.stringify(bad.result.components) === '["Crash"]' &&
+    ["Escape", "Pkg", "UsesFs"].every((n) => /only react, remotion/.test(skipped[n] ?? "")),
+  `components the guard refuses are left out, the build still passes (${JSON.stringify(skipped)})`);
+
+  // the page in a browser: /player/ is the bundle, /project/ the test folder, / a host page that frames it
+  const host = `<!doctype html><iframe id="p" src="/player/index.html" style="width:540px;height:480px"></iframe><script>
+    window.msgs = []; addEventListener("message", (e) => window.msgs.push(e.data));
+    window.send = (m) => document.getElementById("p").contentWindow.postMessage(m, location.origin);</script>`;
+  const server = http.createServer((req, res) => {
+    const url = decodeURIComponent(new URL(req.url, "http://x").pathname);
+    const file = url.startsWith("/player/") ? path.join(dir, url.slice(8)) : url.startsWith("/project/") ? path.join(HERE, url.slice(9)) : null;
+    if (url === "/") res.writeHead(200, { "Content-Type": "text/html" }).end(host);
+    else if (file && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      res.writeHead(200, { "Content-Type": file.endsWith(".html") ? "text/html" : file.endsWith(".js") ? "text/javascript" : "application/octet-stream" });
+      fs.createReadStream(file).pipe(res);
+    } else res.writeHead(404).end();
+  });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const { openBrowser } = await import("@remotion/renderer");
+  const browser = await openBrowser("chrome", { logLevel: "error" });
+  try {
+    const page = await browser.newPage({ context: () => null, logLevel: "error", indent: false, pageIndex: 0, onBrowserLog: null, onLog: () => undefined });
+    await page.goto({ url: `http://127.0.0.1:${server.address().port}/`, timeout: 60000 });
+    const waitFor = async (pred) => {
+      for (let i = 0; i < 300; i++) {
+        const msgs = await page.evaluate(() => window.msgs);
+        if (pred(msgs)) return msgs;
+        await new Promise((ok) => setTimeout(ok, 100));
+      }
+      return await page.evaluate(() => window.msgs);
+    };
+    const ready = await waitFor((m) => m.some((x) => x.type === "ready"));
+    check(ready.some((x) => x.type === "ready"), "the page says ready");
+    await page.evaluate((r) => window.send({ type: "load", resolved: r }), basic);
+    const loaded = await waitFor((m) => m.some((x) => x.type === "loaded"));
+    check(loaded.some((x) => x.type === "loaded" && x.frames === 120 && x.fps === 30), "a load answers loaded with frames and fps");
+    await page.evaluate(() => window.send({ type: "seek", frame: 64 }));
+    const sought = await waitFor((m) => m.some((x) => x.type === "frame" && x.frame === 64));
+    check(sought.some((x) => x.type === "frame" && x.frame === 64), "a seek answers with its frame");
+    const errors = sought.filter((x) => x.type === "error");
+    check(errors.length === 0, `no errors from the test film ${JSON.stringify(errors)}`);
+  } finally {
+    await browser.close({ silent: true }).catch(() => undefined);
+    server.close();
+  }
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
