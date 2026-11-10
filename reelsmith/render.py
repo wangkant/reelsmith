@@ -38,8 +38,10 @@ WATCH_MAX_FRAMES = 150              # ... spread out on films longer than this m
 WATCH_SHEET_WIDTH = 1600            # a watch sheet's side stays readable when a model scales it to 1280-1568 px
 STILL_DIFF = 0.255                  # mean grey-level change (0-255) under which a frame is "same" (-60 dB, as
                                     # the film check's freezedetect)
+FREEZE_MIN_S = 2.0                  # the shortest frozen span the film check records (media.FREEZE_FILTER's d)
 LOUD_GAIN_DB = 12.0                # mastering that raises the mix more than this is worth a note
 LAYOUT_EVERY_S = 1.0
+LOCK_WAIT_S = 60.0                  # how long a render, preview or draft waits for another of the same project
 LAYOUT_GRID_MAX = 600               # grid stills of the layout pass; a longer film's grid is spaced out evenly
 LAYOUT_BATCH = 200                  # stills per render.mjs call (it takes 600); each batch is pruned before the next
 TEXT_TYPES = ("text", "component")  # clips that get a measured still of their own when no grid still lands on them
@@ -60,7 +62,7 @@ class RenderError(RuntimeError):
     """A request the platform cannot carry out as given; the message says what to do."""
 
 
-_PROJECT_LOCKS: dict[str, threading.RLock] = {}
+_PROJECT_LOCKS: dict[tuple, threading.RLock] = {}
 _PROJECT_GUARD = threading.Lock()
 _HELD = threading.local()
 
@@ -91,27 +93,37 @@ def _os_unlock(fh) -> None:
 
 @contextmanager
 def project_lock(build: Path):
-    """One render, preview or draft of a project at a time: threads of this process wait their turn, another
-    process is refused. The OS drops the lock of a process that dies."""
-    key = str(Path(build).resolve()).lower()
+    """One render, preview or draft of a project at a time: another, in this process or another one, waits up to
+    LOCK_WAIT_S for its turn and is then refused. The OS drops the lock of a process that dies."""
+    Path(build).mkdir(parents=True, exist_ok=True)
+    st = os.stat(build)
+    key = (st.st_dev, st.st_ino)                # the folder itself, however its path is spelled
     with _PROJECT_GUARD:
         lock = _PROJECT_LOCKS.setdefault(key, threading.RLock())
-    with lock:
+    until = time.monotonic() + LOCK_WAIT_S
+    if not lock.acquire(timeout=LOCK_WAIT_S):
+        raise RenderError(f"a render or preview of this project is running in this process and did not finish "
+                          f"within {LOCK_WAIT_S:g} s: try again after it")
+    try:
         held = _HELD.__dict__.setdefault("keys", set())
         if key in held:
             yield
             return
-        Path(build).mkdir(parents=True, exist_ok=True)
         with open(Path(build) / "render.lock", "a+b") as fh:
-            if not _try_os_lock(fh):
-                raise RenderError("another render or preview of this project is running (another process): wait "
-                                  "for it to finish, then try again")
+            while not _try_os_lock(fh):
+                if time.monotonic() >= until:
+                    raise RenderError(f"another render or preview of this project is running (another process) and "
+                                      f"did not finish within {LOCK_WAIT_S:g} s: wait for it to finish, then try "
+                                      "again")
+                time.sleep(0.25)
             held.add(key)
             try:
                 yield
             finally:
                 held.discard(key)
                 _os_unlock(fh)
+    finally:
+        lock.release()
 
 
 def _one_at_a_time(fn):
@@ -483,12 +495,13 @@ def _srcs(value):
 
 
 def layout_key(root: Path, resolved: dict, frames: list[int], profile: Profile) -> str:
-    """Everything the layout pass reads: the film as resolved, the frames, the profile, the measuring code, the
-    renderer's sources, the workspace's components and the size and time of every file the film shows."""
+    """Everything the layout pass reads: the film as resolved, the frames, the profile, the package's code (the
+    measuring, the profiles' units), the renderer's sources, the workspace's components and the size and time of
+    every file the film shows."""
     h = hashlib.sha256(json.dumps({**resolved, "inspect": True}, sort_keys=True, ensure_ascii=False).encode("utf-8"))
     h.update(json.dumps(frames).encode() + repr(profile).encode("utf-8"))
-    for f in (Path(__file__), Path(__file__).with_name("checks.py")):
-        h.update(f.read_bytes())
+    for f in sorted(Path(__file__).parent.glob("*.py")):
+        h.update(f.name.encode("utf-8") + b"\0" + f.read_bytes())
     for name in ("src", "scripts"):
         _digest_files(h, RENDERER / name, RENDERER)
     for name in ("package.json", "package-lock.json", "remotion.config.ts", "tsconfig.json"):
@@ -506,23 +519,30 @@ def layout_key(root: Path, resolved: dict, frames: list[int], profile: Profile) 
     return h.hexdigest()
 
 
+def _png_digest(png) -> str:
+    return hashlib.sha256(Path(png).read_bytes()).hexdigest()
+
+
 def _keep_layout(paths, key: str, got: dict) -> None:
-    """A clean layout pass (no crash) for the next render of the same film."""
+    """A clean layout pass (no crash) for the next render of the same film, with its stills' digests: a later
+    preview reuses their names for other pictures."""
     if got["ok"] and not got["crashes"]:
+        frames = [{**s, "sha256": _png_digest(s["png"])} for s in got["frames"]]
         _write_json(paths.build / "layout.json", {
-            "key": key, "layout": [i.__dict__ for i in got["layout"]], "frames": got["frames"],
+            "key": key, "layout": [i.__dict__ for i in got["layout"]], "frames": frames,
             "measured": got["measured"], "res": got["res"]})
 
 
 def _kept_layout(paths, key: str) -> dict | None:
-    """The kept layout pass for `key`, with its flagged stills still on disk; None otherwise."""
+    """The kept layout pass for `key`, with its flagged stills on disk as they were; None otherwise."""
     try:
         data = json.loads((paths.build / "layout.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if data.get("key") != key or not all(_png_digest(s["png"]) == s.get("sha256") for s in data["frames"]):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
         return None
-    if data.get("key") != key or not all(Path(s["png"]).is_file() for s in data.get("frames") or []):
-        return None
-    return {"ok": True, "layout": [Issue(**i) for i in data["layout"]], "frames": data["frames"],
+    frames = [{"frame": s["frame"], "png": s["png"]} for s in data["frames"]]
+    return {"ok": True, "layout": [Issue(**i) for i in data["layout"]], "frames": frames,
             "measured": data["measured"], "crashes": {}, "res": data["res"]}
 
 
@@ -945,9 +965,11 @@ def review(project: str | Path, n: int = 0, every: float = WATCH_EVERY_S) -> dic
     shots = [{"t": t, "png": str(p)} for t, p in media.frames_every(paths.film, every, paths.review)
              if t < length]
     lines = _voice_lines(root)
+    still = _unchanged([s["png"] for s in shots])
     spans = _still_spans(paths)
-    still = _unchanged([s["png"] for s in shots]) if spans is None else \
-        [i > 0 and _within(spans, shots[i - 1]["t"], s["t"]) for i, s in enumerate(shots)]
+    if spans is not None:       # the film check's frozen spans, and the pictures for runs too short for it to report
+        short = _short_runs([s["t"] for s in shots], still)
+        still = [i > 0 and _within(spans, shots[i - 1]["t"], s["t"]) or short[i] for i, s in enumerate(shots)]
     for s, same in zip(shots, still):
         ln = next((x for x in lines if x.t0 <= s["t"] < x.t1), None)
         s.update(line=ln.i if ln else None, said=ln.text if ln else "", same=same)
@@ -980,6 +1002,20 @@ def _still_spans(paths) -> list | None:
 
 def _within(spans: list, a: float, b: float) -> bool:
     return any(x - 0.02 <= a and b <= y + 0.02 for x, y in spans)
+
+
+def _short_runs(times: list[float], same: list[bool]) -> list[bool]:
+    """`same` kept only in runs of unchanged pictures shorter than the film check's freezedetect reports."""
+    out = [False] * len(same)
+    i = 1
+    while i < len(same):
+        j = i
+        while same[i] and j + 1 < len(same) and same[j + 1]:
+            j += 1
+        if same[i] and times[j] - times[i - 1] < FREEZE_MIN_S:
+            out[i:j + 1] = [True] * (j - i + 1)
+        i = j + 1
+    return out
 
 
 def _unchanged(pngs: list[str]) -> list[bool]:

@@ -11,6 +11,7 @@ from reelsmith import document as D
 from reelsmith import ops
 from reelsmith import resolve as R
 from reelsmith import timeexpr as T
+from reelsmith.checks import check_project
 from reelsmith.timeexpr import ClipTiming, Schedule, TimeError, TimeExpr
 
 needs_ffmpeg = pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")),
@@ -200,12 +201,26 @@ def test_jump_cuts_first_to_last_name_the_piece_that_plays_each_source_second(cu
     assert sp["c1"] == (0, 1) and sp["c1_2"] == (1, 2.5) and sp["c1_3"] == (2.5, 5) and sp["c2"] == (5, 8)
     assert [clip(d, k).get("trim_in") for k in ("c1", "c1_2", "c1_3")] == [2, 3.5, 5.5]
     assert "split c1 (the rest is c1_2)" in s and "split c1_2 (the rest is c1_3)" in s
+    assert "src:c1@5 is played by c1_2, so start counts from it" in s
     why = refused(cut, {"op": "ripple_delete", "start": "src:c1@3.2", "end": "src:c1@3.3"})
-    assert "no piece of v on track v1 plays source second 3.2" in why
+    assert "no piece of c1 on track v1 plays source second 3.2 (it was cut away)" in why
     assert "c1 2.00-3.00 s, c1_2 3.50-5.00 s, c1_3 5.50-8.00 s" in why
     ok(cut, {"op": "split_clip", "id": "c1_3", "at": "src:c1@6", "new_id": "c1x"})    # c1_3 plays it
     assert spans(cut)["c1x"] == (3, 5) and clip(raw(cut), "c1x")["trim_in"] == 6
     assert errors(cut) == []
+
+
+def test_a_source_second_is_never_moved_onto_a_clip_that_only_reuses_the_recording(cut):
+    data = raw(cut)
+    clip(data, "c2").update({"rate": 1, "trim_in": 9})                   # c1 plays source 2-8, c2 9-12
+    write(cut, data)
+    why = refused(cut, {"op": "ripple_delete", "start": "src:c1@10", "end": "src:c1@10.5", "tracks": ["v1"]})
+    assert "no piece of c1 on track v1 plays source second 10; c2 also plays v there but is not cut from c1" in why
+    assert "e.g. src:c2@10" in why
+    clip(data, "c2")["trim_in"] = 8                                       # c2 plays on where c1 stops
+    write(cut, data)
+    s = ok(cut, {"op": "ripple_delete", "start": "src:c1@10", "end": "src:c1@10.5", "tracks": ["v1"]})
+    assert "ripple-deleted 8.00-8.50 s" in s and "src:c1@10 is played by c2" in s
 
 
 def test_chapters_move_with_ripple_edits_as_markers_do(cut):
@@ -277,6 +292,7 @@ def test_insert_gap_moves_a_clip_starting_at_the_point_but_not_one_ending_there(
 def test_trim_clip_source_in_and_out_keep_the_picture_in_place(cut):
     s = ok(cut, {"op": "trim_clip", "id": "c1", "in": 3, "out": 7})
     assert "trimmed clip c1 to 1.00-5.00 s (source 3.00-7.00 s)" in s
+    assert "gap on v1 at 5.00-6.00 s before c2" in s
     d = raw(cut)
     assert clip(d, "c1")["trim_in"] == 3 and spans(cut)["c1"] == (1, 5) and spans(cut)["c2"] == (6, 9)
 
@@ -300,7 +316,9 @@ def test_trim_clip_without_ripple_leaves_clips_anchored_on_it_in_place(cut):
     assert sp["c1"] == (0, 4) and sp["c2"] == (6, 9) and sp["title"] == (6, 9)
     assert clip(d, "c2")["start"] == 6 and clip(d, "title")["start"] == "clip:c2"   # title's anchor did not move
     assert "c2 stay where they were: their times anchored on c1's moved edge are now numbers" in s
-    s = ok(cut, {"op": "trim_clip", "id": "c2", "out": 4})                         # rate 2: c2 now ends at 8
+    assert "this leaves a gap on v1 at 4.00-6.00 s before c2 (ripple: true closes it)" in s
+    assert any("nothing on screen 4.0-6.0 s, between c1 and c2" in i.msg for i in check_project(cut))
+    s = ok(cut, {"op": "trim_clip", "id": "c2", "out": 4})                      # rate 2: c2 now ends at 8
     assert spans(cut)["title"] == (6, 9) and clip(raw(cut), "title")["end"] == 9 and "title stay" in s
     assert errors(cut) == []
 
