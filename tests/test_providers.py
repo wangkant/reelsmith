@@ -258,6 +258,7 @@ def test_context_budget_from_workspace_and_env_override(env, monkeypatch):
     assert ctx.providers["tts"]["voice"] is ctx.providers["tts"]["model"] is None   # these follow the provider
     assert TTS.default_model(ctx.providers["tts"]) == "qwen/qwen-audio-3.0-tts-plus"    # and the locale (speak)
     assert TTS.default_model({"provider": "openai"}) == "gpt-4o-mini-tts"
+    assert TTS.default_model({"provider": "openrouter"}, "en-GB") == "elevenlabs/eleven-multilingual-v2"
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "0.25")
     assert P.context(env.project).budget["per_project_usd"] == 0.25
     monkeypatch.setenv("REELSMITH_BUDGET_USD", "lots")
@@ -460,6 +461,18 @@ def test_speech_body_steers_qwen_with_words_and_others_with_numbers():
     assert "speed" not in mm                                        # 1.25 * 0.8 = 1.0: no knob needed
     assert mm["emotion"] == "happy" and "happy" in mm["instructions"]
     assert OR.speech_body("x", {"model": "minimax/speech-2.8"}, 1.35)["speed"] == 1.35
+    eleven = {"model": "elevenlabs/eleven-multilingual-v2", "voice": "brian"}
+    assert "speed" not in OR.speech_body("x", eleven, 1.25)                  # its own 1.0 is the normal reading
+    assert OR.speech_body("x", eleven, 1.10)["speed"] == 0.88
+    assert OR.speech_body("x", eleven, 2.5)["speed"] == 1.2 and OR.speech_body("x", eleven, 0.6)["speed"] == 0.7
+
+
+def test_the_speech_estimate_is_never_below_the_published_price():
+    eleven = {"provider": "openrouter", "model": "elevenlabs/eleven-multilingual-v2", "usd_per_1k_chars": 0.02}
+    assert TTS._estimate(eleven, 1000) == pytest.approx(0.08)
+    assert TTS._estimate({**eleven, "usd_per_1k_chars": 0.5}, 1000) == pytest.approx(0.5)
+    assert TTS._estimate({**eleven, "model": "qwen/qwen-audio-3.0-tts-plus"}, 1000) == pytest.approx(0.02)
+    assert TTS._estimate({"provider": "openai", "model": "x", "usd_per_1k_chars": None}, 1000) == 0
 
 
 def test_synthesize_drops_an_unknown_emotion_and_does_not_retry_a_bad_key():
@@ -1934,9 +1947,10 @@ def test_speak_picks_the_voice_by_locale(env, monkeypatch):
     text, err = P.speak(env.project, lines=["一句话"])                 # zh-CN: the default voice
     assert err and "stop here" in text and seen[-1]["voice"] == "longanlufeng" and seen[-1]["locale"] == "zh-CN"
     assert seen[-1]["model"] == "qwen/qwen-audio-3.0-tts-plus"
-    env.config(locale="en-GB")                                         # it speaks English too
+    env.config(locale="en-GB")                                         # a native English voice
     text, err = P.speak(env.project, lines=["One line."])
-    assert err and "stop here" in text and seen[-1]["voice"] == "longanlufeng" and seen[-1]["locale"] == "en-GB"
+    assert err and "stop here" in text and seen[-1]["voice"] == "brian" and seen[-1]["locale"] == "en-GB"
+    assert seen[-1]["model"] == "elevenlabs/eleven-multilingual-v2"
     env.config(locale="ja")
     text, err = P.speak(env.project, lines=["一行。"])
     assert err and "no voice for locale ja" in text and "providers.tts.voice" in text and "openai" in text
@@ -1948,6 +1962,11 @@ def test_speak_picks_the_voice_by_locale(env, monkeypatch):
     chinese = Engine({"model": "qwen/q", "voice": "Cherry", "locale": "zh-CN"}, "k")
     assert english.identity().endswith("|en") and not chinese.identity().endswith("|zh")
     assert chinese.identity() == Engine({"model": "qwen/q", "voice": "Cherry"}, "k").identity()   # caches kept
+    env.config(locale="en-GB", providers={"tts": {"model": "qwen/qwen-audio-3.0-tts-plus", "voice": None}})
+    text, err = P.speak(env.project, lines=["One line."])             # a Qwen model named: its own voice
+    assert err and seen[-1]["voice"] == "longanlufeng"
+    assert "Chinese accent" in TTS.accent_note({"model": "qwen/qwen-audio-3.0-tts-plus"}, "en-GB")
+    assert TTS.accent_note({"model": "qwen/qwen-audio-3.0-tts-plus"}, "zh-CN") == ""
 
 
 def test_speech_body_speaks_the_locales_language_to_the_model():

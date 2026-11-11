@@ -169,13 +169,13 @@ Editing, previews, checks and rendering run locally at no cost. The following to
 |---|---|
 | `capture` (web-page evidence) | the `capture` extra and Edge, Chrome or `python -m playwright install chromium` |
 | `draw` (pictures) | the [Codex CLI](https://github.com/openai/codex), signed in |
-| `speak` (narration) | an [OpenRouter](https://openrouter.ai) key, or any OpenAI-compatible speech endpoint |
+| `speak` (narration) | an [OpenRouter](https://openrouter.ai) key (English is read by an ElevenLabs voice, Chinese by a Qwen voice), or any OpenAI-compatible speech endpoint |
 | `animate` (image-to-video) | an OpenRouter key |
 | `transcribe` | any OpenAI-compatible transcription endpoint, or the `transcribe` extra (faster-whisper, local) |
 | `reelsmith run` | a model API key, or Codex or DeepSeek Harness installed; the `runner` extra for the Claude Agent SDK |
 
 Paid calls are estimated first and refused above `budget.per_project_usd` (default $1) or below the account floor
-`budget.min_balance_usd` (default $5). The film shown above cost $0.53.
+`budget.min_balance_usd` (default $5). The film shown above cost about $0.55.
 
 ## Documentation
 
