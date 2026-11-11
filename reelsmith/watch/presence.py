@@ -165,6 +165,28 @@ def record_window(root: Path, url: str) -> None:
     _write(Path(root) / WINDOW, {"pid": os.getpid(), "url": url})
 
 
+def owner_elsewhere(root: Path) -> dict | None:
+    """{pid, url} of a live window on the project held by another process; None when this one holds it or nobody."""
+    row = window_of(root)
+    return row if row and row.get("pid") != os.getpid() else None
+
+
+def claim_window(root: Path, url: str) -> tuple[dict | None, bool]:
+    """(the other process's {pid, url} when it holds the project, whether this call recorded this process as the
+    holder). Nobody holding it: this process is recorded; the file is read back so two claims racing yield one."""
+    row = window_of(root)
+    if row is not None:
+        return (None, False) if row.get("pid") == os.getpid() else (row, False)
+    try:
+        record_window(root, url)
+    except OSError:
+        return None, False
+    row = window_of(root)
+    if row is not None and row.get("pid") != os.getpid():
+        return row, False
+    return None, True
+
+
 def forget_window(root: Path) -> None:
     path = Path(root) / WINDOW
     if (_read(path) or {}).get("pid") == os.getpid():
@@ -182,6 +204,12 @@ def wanted(root: Path) -> bool:
     except WorkspaceError:
         return False
     return bool(ws and ws.config.get("watch") is True)
+
+
+def skip_auto_open(root: Path) -> None:
+    """This process already shows the project: the tools it runs must not start another window on it."""
+    with _DECIDED_LOCK:
+        _DECIDED.add(os.path.normcase(str(root)))
 
 
 def maybe_open(root: Path) -> bool:

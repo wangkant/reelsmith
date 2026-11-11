@@ -248,6 +248,21 @@ def test_run_tree_hears_each_line_as_it_comes():
     assert steps == [("film", 0.45), ("film", 1.0)]
 
 
+def test_a_render_s_frame_progress_reaches_running_json(demo, monkeypatch):
+    # render.mjs's lines are heard on run_tree's reader thread, not on the tool call's own
+    seen = []
+
+    def fake_render(root, progress):
+        progress("film", 0.0)
+        script = "import time; time.sleep(0.4); print('render 40% (8/20 frames)', flush=True); time.sleep(0.6)"
+        media.run_tree([sys.executable, "-c", script], on_line=W.R._film_listener(progress))
+        seen.append(json.loads((demo / ".history" / "running.json").read_text(encoding="utf-8")))
+        return {"ok": False, "stage": "infra", "error": "stopped by the test"}
+    monkeypatch.setattr(tools.R, "render", fake_render)
+    tools.render(str(demo))
+    assert seen and seen[0]["stage"] == "film" and seen[0]["progress"] == 0.4
+
+
 def test_the_activity_log_is_capped_and_never_fails_a_tool(demo, monkeypatch):
     monkeypatch.setattr(tools, "ACTIVITY_KEEP", 5)
     for _ in range(8):
@@ -504,7 +519,8 @@ def test_a_workspace_lists_its_projects(demo):
         assert next(a for a in st["assets"] if a["id"] == "photo")["url"] == "/p/demo/project/assets/photo.png"
         assert get(srv, "/p/demo/project/assets/photo.png")[0] == 200
         assert get(srv, "/p/nope/api/state")[0] == 404 and get(srv, "/p/../api/state")[0] == 404
-        assert b"demo" in get(srv, "/")[2]
+        code, head, body = get(srv, "/")
+        assert code == 200 and head["Content-Type"].startswith("text/html") and b"home.js" in body
         page = {"Referer": f"{srv.url}p/demo/"}              # the window asks by absolute path
         assert json.loads(get(srv, "/api/state", page)[2])["project"]["name"] == "demo"
         code, head, _ = get(srv, "/player/index.html", page)
@@ -512,6 +528,188 @@ def test_a_workspace_lists_its_projects(demo):
         assert get(srv, "/api/state")[0] == 404
     finally:
         srv.stop()
+
+
+@pytest.fixture
+def ws_served(demo):
+    srv = W.serve(demo.parent.parent)
+    yield srv, demo.parent.parent
+    srv.stop()
+
+
+def test_the_home_lists_every_project_newest_first(ws_served, demo):
+    srv, ws = ws_served
+    assert tools.new_project(str(ws / "projects" / "fresh")).ok
+    old = time.time() - 3600
+    for f in demo.rglob("*"):
+        os.utime(f, (old, old))
+    home = json.loads(get(srv, "/api/home")[2])
+    assert home["workspace"] == {"name": ws.name, "path": ws.resolve().as_posix()}
+    assert [p["name"] for p in home["projects"]] == ["fresh", "demo"]
+    fresh, d = home["projects"]
+    # a project with nothing on it yet waits for its first clip; it is not broken and has no poster
+    assert fresh["empty"] is True and fresh["poster"] is None and fresh["result"]["state"] == "none"
+    assert d["empty"] is False and d["valid"] and d["title"] == "一杯奶茶的成本" and d["duration"]
+    assert d["url"] == "/p/demo/" and d["canvas"]["width"] and d["working"] is None
+    assert d["poster"].startswith("/p/demo/api/frame?t=") and f"v={d['revision'][:12]}" in d["poster"]
+    assert d["modified"] < fresh["modified"]
+    assert home["names"]["max"] == 64 and "con" in home["names"]["reserved"]
+    assert [p["name"] for p in json.loads(get(srv, "/api/projects")[2])] == ["fresh", "demo"]
+    assert get(srv, "/api/home", {"Origin": "http://evil.example"})[0] == 403
+
+
+def test_the_home_says_where_work_is_running(ws_served, demo):
+    srv, _ = ws_served
+    mark = P.Running(demo, "render").start()
+    try:
+        d = json.loads(get(srv, "/api/home")[2])["projects"][0]
+        assert d["working"]["tool"] == "render" and d["working"]["by"] == "agent"
+    finally:
+        mark.end()
+    assert json.loads(get(srv, "/api/home")[2])["projects"][0]["working"] is None
+
+
+def test_a_new_film_from_the_home(ws_served, demo):
+    srv, ws = ws_served
+    (ws / "workspace.json").write_text('{"profile": "vertical"}', encoding="utf-8")
+    code, body = post(srv, "/api/projects", {"name": "harbor_2"})
+    assert code == 201 and body["url"] == "/p/harbor_2/"
+    made = ws / "projects" / "harbor_2"
+    assert (made / "project.json").is_file()
+    assert json.loads(get(srv, "/p/harbor_2/api/state")[2])["canvas"]["profile"] == "vertical"
+    assert "harbor_2" in [p["name"] for p in json.loads(get(srv, "/api/home")[2])["projects"]]
+    for name, status, why in [("../escape", 400, "create.chars"), ("a/b", 400, "create.chars"),
+                              ("-dash", 400, "create.chars"), ("", 400, "create.empty"), (None, 400, "create.empty"),
+                              ("x" * 65, 400, "create.long"), ("nul", 400, "create.reserved"),
+                              ("DEMO", 409, "create.taken"), ("harbor_2", 409, "create.taken")]:
+        code, body = post(srv, "/api/projects", {"name": name})
+        assert (code, body["code"]) == (status, why), name
+        assert body["error"] == W.S.say(why, name=name or "")["text"]
+    assert sorted(p.name for p in (ws / "projects").iterdir()) == ["demo", "harbor_2"]
+    assert not (ws / "escape").exists()
+
+
+def test_a_new_film_needs_the_token_and_this_origin(ws_served):
+    srv, ws = ws_served
+    assert post(srv, "/api/projects", {"name": "a1"}, token=False)[0] == 403
+    assert post(srv, "/api/projects", {"name": "a2"}, headers={W.TOKEN_HEADER: "not-the-token"})[0] == 403
+    assert post(srv, "/api/projects", {"name": "a3"}, origin=False)[0] == 403
+    assert post(srv, "/api/projects", {"name": "a4"}, headers={"Origin": "http://evil.example"})[0] == 403
+    assert post(srv, "/api/projects", {"name": "a5"}, headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert post(srv, "/api/projects", b"not json")[0] == 400
+    assert sorted(p.name for p in (ws / "projects").iterdir()) == ["demo"]
+    assert json.loads(get(srv, "/api/session")[2])["token"] == srv.token
+
+
+def test_the_home_hears_of_a_new_project(ws_served):
+    srv, ws = ws_served
+    conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=20)
+    conn.request("GET", "/api/home/events")
+    r = conn.getresponse()
+    assert r.status == 200 and r.getheader("Content-Type").startswith("text/event-stream")
+    threading.Timer(1.2, lambda: tools.new_project(str(ws / "projects" / "outside_the_window"))).start()
+    assert json.loads(_event(r, ("projects",)))["seq"] >= 1
+    assert "outside_the_window" in [p["name"] for p in json.loads(get(srv, "/api/home")[2])["projects"]]
+    conn.close()
+
+
+def test_listing_the_home_makes_no_site(ws_served, demo, monkeypatch):
+    srv, ws = ws_served
+    assert tools.new_project(str(ws / "projects" / "fresh")).ok
+    probed = []
+    real = W.render_busy
+    monkeypatch.setattr(W, "render_busy", lambda root: probed.append(root) or real(root))
+    rows = json.loads(get(srv, "/api/home")[2])["projects"]
+    assert {r["name"] for r in rows} == {"demo", "fresh"} and srv.sites == {}
+    probed.clear()
+    srv.home_signature(), srv.home_signature(scan=False)
+    assert probed == [] and srv.sites == {}
+    # a picture alone makes a site that is not polled and has no chat; its page opens it
+    assert get(srv, "/p/demo/project/assets/photo.png")[0] == 200
+    site = srv.sites["demo"]
+    assert site.opened is False and site._chat is None
+    polled = []
+    monkeypatch.setattr(W.Site, "poll", lambda self: polled.append(self.root.name))
+    time.sleep(W.POLL_S * 3)
+    assert polled == []
+    assert get(srv, "/p/demo/api/state")[0] == 200
+    assert site.opened is True and site._chat is None
+    _wait_for(lambda: "demo" in polled, 5)
+    assert "fresh" not in srv.sites
+
+
+def test_the_home_hears_of_work_on_a_project_nobody_opened(ws_served, demo):
+    srv, _ = ws_served
+    before = srv.home_signature()
+    mark = P.Running(demo, "render").start()
+    try:
+        assert srv.home_signature(scan=False) == before          # between scans the last reading stands
+        assert srv.home_signature() != before
+        assert json.loads(get(srv, "/api/home")[2])["projects"][0]["working"]["tool"] == "render"
+    finally:
+        mark.end()
+    assert srv.home_signature() == before and srv.sites == {}
+
+
+def test_an_empty_film_has_no_poster():
+    st = {"canvas": {"width": 1080, "height": 1920}, "tracks": [], "valid": True, "error": None, "duration": 3.0,
+          "render": {"delivered": None}, "project": {"title": None}, "result": {"state": "none", "accepted": None},
+          "revision": "abc"}
+    facts = W.card_facts(st, "/p/x")
+    assert facts["empty"] is True and facts["poster"] is None
+
+
+def _another_process():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+def test_a_film_held_by_another_process_refuses_changes(demo):
+    srv = W.serve(demo)
+    other = _another_process()
+    record = demo / "build" / "watch" / "window.json"
+    try:
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"pid": other.pid, "url": "http://127.0.0.1:9/"}), encoding="utf-8")
+        held = {"code": "owner.elsewhere", "params": {"url": "http://127.0.0.1:9/", "pid": other.pid},
+                "error": S.say("owner.elsewhere", url="http://127.0.0.1:9/")["text"]}
+        assert post(srv, "/api/chat", {"message": "Shorten the opening."}) == (409, held)
+        assert post(srv, "/api/action", {"action": "check"}) == (409, held)
+        assert post(srv, "/api/accept", {}) == (409, held)
+        code, body = post(srv, "/api/action", {"action": "stop"})       # its own turn can always be stopped
+        assert code == 200 and body["stopped"] is False
+        assert srv.sites[None]._chat is None
+        other.kill()
+        other.wait()
+        # nobody holds it now: the first change records this server, and stopping the server forgets it
+        assert post(srv, "/api/action", {"action": "check"})[0] == 202
+        assert json.loads(record.read_text(encoding="utf-8")) == {"pid": os.getpid(), "url": srv.url}
+        assert srv.sites[None].wait_action(30)
+    finally:
+        other.kill()
+        srv.stop()
+    assert not record.exists()
+
+
+def test_the_same_process_keeps_its_own_film(demo):
+    # the terminal session records the film for its process; its own server's page goes on working
+    P.record_window(demo, "http://127.0.0.1:1/p/demo/")
+    srv = W.serve(demo.parent.parent)
+    try:
+        assert post(srv, "/p/demo/api/action", {"action": "check"})[0] == 202
+        assert srv.sites["demo"].wait_action(30)
+        assert P.window_of(demo)["url"] == "http://127.0.0.1:1/p/demo/"      # not taken over
+    finally:
+        srv.stop()
+    assert P.window_of(demo) is not None                                   # the session forgets its own record
+    P.forget_window(demo)
+
+
+def test_a_film_made_in_the_window_opens_no_second_window(ws_served):
+    srv, ws = ws_served
+    assert post(srv, "/api/projects", {"name": "harbor_3"})[0] == 201
+    assert os.path.normcase(str((ws / "projects" / "harbor_3").resolve())) in P._DECIDED
+    P.skip_auto_open(ws / "projects" / "other")
+    assert os.path.normcase(str(ws / "projects" / "other")) in P._DECIDED
 
 
 def test_the_watch_command(monkeypatch, demo, capsys):
@@ -863,6 +1061,28 @@ def test_which_engine_is_the_default(chat_demo):
     (chat_demo.parent.parent / ".env").write_text("", encoding="utf-8")
     ok, why = C.can_run("api", Workspace.load(chat_demo.parent.parent))
     assert not ok and "OPENROUTER_API_KEY is missing" in why
+
+
+
+def test_every_engine_reason_is_a_code(chat_demo):
+    from reelsmith.workspace import Workspace
+    ws = Workspace.load(chat_demo.parent.parent)
+    got = C.reason("api", ws)
+    assert got["available"] and got["code"] == "engine.api_ready" and set(got["params"]) == {"provider", "model"}
+    assert got["why"] == C.REASONS["engine.api_ready"].format(**got["params"])
+    rows = C.engine_rows(ws)
+    assert [r["id"] for r in rows] == list(C.ENGINE_ORDER)
+    assert all(r["code"] in C.REASONS and r["why"] == C.REASONS[r["code"]].format(**r["params"]) for r in rows)
+    (chat_demo.parent.parent / ".env").write_text("", encoding="utf-8")
+    got = C.reason("api", Workspace.load(chat_demo.parent.parent))
+    assert not got["available"] and (got["code"], got["params"]) == ("engine.key_missing", {"key": "OPENROUTER_API_KEY"})
+    # a seam answering (available, why), and one that fails
+    row = C.engine_row("dsh", ws, only_api)
+    assert (row["available"], row["code"], row["params"]) == (False, "engine.other", {"why": "dsh is not here"})
+    row = C.engine_row("api", ws, lambda e, w: 1 / 0)
+    assert row["code"] == "engine.probe_failed" and "ZeroDivisionError" in row["params"]["error"]
+    chat = C.Chat(chat_demo, engines_fn=only_api)
+    assert {r["code"] for r in chat.status()["engines"]} == {"engine.other"}
 
 
 def post(srv, path, body, headers=None, token=True, origin=True):
@@ -1453,6 +1673,7 @@ def test_every_code_the_page_translates_has_its_parameters():
     page = {k: set(re.findall(r"\{(\w+)\}", v)) for k, v in re.findall(r'^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"', en,
                                                                        re.M)}
     sent = {code: set(re.findall(r"\{(\w+)\}", text)) for code, text in S.TEXTS.items()}
+    sent.update({code: set(re.findall(r"\{(\w+)\}", text)) for code, text in C.REASONS.items()})
     sent.update({code: set() for code, _ in S.STAGES.values()})
     sent.update({code: set() for _, code, _ in S.PRESETS.values()})
     sent.update({code: set() for code, _ in S.SHAPES.values()})

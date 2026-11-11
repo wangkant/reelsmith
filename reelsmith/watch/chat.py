@@ -64,41 +64,96 @@ def claude_signed_in() -> bool:
     return (home / ".credentials.json").is_file()
 
 
-def can_run(engine: str, ws) -> tuple[bool, str]:
-    """(available, why): what it runs on when it can, what is missing when it cannot."""
+# every reason an engine row gives: code -> English (the window and the terminal translate the code)
+REASONS = {
+    "engine.workspace": "{error}",
+    "engine.sdk_missing": 'the Claude Agent SDK is not installed: pip install "reelsmith[runner]"',
+    "engine.cli_missing": "the claude CLI was not found (neither bundled with the SDK nor on PATH)",
+    "engine.on_key": "{backend} {model}, on {key}",
+    "engine.key_missing": "{key} is missing: put it in the workspace .env",
+    "engine.on_sign_in": "{model}, on the claude CLI's sign-in",
+    "engine.not_signed_in": "no {key} and the claude CLI is not signed in: run claude once and sign in, or put {key} "
+                            "in the workspace .env",
+    "engine.codex_ready": "{model}, on the Codex sign-in",
+    "engine.codex_ready_default": "its default model, on the Codex sign-in",
+    "engine.codex_sign_in": "the Codex CLI is not signed in: run codex login once (it opens a browser)",
+    "engine.codex_missing": "the Codex CLI was not found: install it (npm install -g @openai/codex), then run codex "
+                            "login once",
+    "engine.dsh_missing": "DeepSeek Harness was not found: install Node.js (for npx {package})",
+    "engine.dsh_ready": "{model}",
+    "engine.dsh_ready_npx": "{model} (npx fetches dsh on first use)",
+    "engine.api_ready": "{provider} {model}",
+    "engine.probe_failed": "{error}",
+    "engine.other": "{why}",
+}
+
+
+def reason(engine: str, ws) -> dict:
+    """{"available", "why" (English), "code", "params"}: what it runs on when it can, what is missing when it cannot.
+    `code` is one of REASONS."""
+    def row(ok: bool, code: str, **params) -> dict:
+        return {"available": ok, "why": REASONS[code].format(**params), "code": code, "params": params}
     try:
         s = runner.settings_for(ws, engine=engine)
     except WorkspaceError as exc:
-        return False, str(exc)
+        return row(False, "engine.workspace", error=str(exc))
     if engine == "agent-sdk":
         if importlib.util.find_spec("claude_agent_sdk") is None:
-            return False, 'the Claude Agent SDK is not installed: pip install "reelsmith[runner]"'
+            return row(False, "engine.sdk_missing")
         if not claude_cli():
-            return False, "the claude CLI was not found (neither bundled with the SDK nor on PATH)"
+            return row(False, "engine.cli_missing")
         b = backends.get(s.backend)
         if runner.key_for(ws, b.key):
-            return True, f"{b.name} {s.model}, on {b.key}"
+            return row(True, "engine.on_key", backend=b.name, model=str(s.model), key=b.key)
         if b.base_url:
-            return False, f"{b.key} is missing: put it in the workspace .env"
+            return row(False, "engine.key_missing", key=b.key)
         if claude_signed_in():
-            return True, f"{s.model}, on the claude CLI's sign-in"
-        return False, (f"no {b.key} and the claude CLI is not signed in: run claude once and sign in, or put "
-                       f"{b.key} in the workspace .env")
+            return row(True, "engine.on_sign_in", model=str(s.model))
+        return row(False, "engine.not_signed_in", key=b.key)
     if engine == "codex":
         from ..doctor import check_codex, system
         found = check_codex(system())
-        return found.ok, (f"{s.model or 'its default model'}, on the Codex sign-in" if found.ok else found.detail)
+        if found.ok:
+            return row(True, "engine.codex_ready", model=str(s.model)) if s.model else row(True,
+                                                                                         "engine.codex_ready_default")
+        return row(False, "engine.codex_sign_in" if found.fix == "codex login" else "engine.codex_missing")
     if engine == "dsh":
         exe = cli_engines.find_dsh()
         if not exe:
-            return False, f"DeepSeek Harness was not found: install Node.js (for npx {cli_engines.DSH_PACKAGE})"
+            return row(False, "engine.dsh_missing", package=cli_engines.DSH_PACKAGE)
         if not runner.key_for(ws, "DEEPSEEK_API_KEY"):
-            return False, "DEEPSEEK_API_KEY is missing: put it in the workspace .env"
-        return True, f"{s.model}" + (" (npx fetches dsh on first use)" if len(exe) > 1 else "")
+            return row(False, "engine.key_missing", key="DEEPSEEK_API_KEY")
+        return row(True, "engine.dsh_ready_npx" if len(exe) > 1 else "engine.dsh_ready", model=str(s.model))
     prov = s.api
     if prov.key and not runner.key_for(ws, prov.key):
-        return False, f"{prov.key} is missing: put it in the workspace .env"
-    return True, f"{prov.name} {s.model}"
+        return row(False, "engine.key_missing", key=prov.key)
+    return row(True, "engine.api_ready", provider=prov.name, model=str(s.model))
+
+
+def can_run(engine: str, ws) -> tuple[bool, str]:
+    """(available, why) of reason()."""
+    got = reason(engine, ws)
+    return got["available"], got["why"]
+
+
+def engine_row(engine: str, ws, probe=None) -> dict:
+    """One row of the engine list: {"id", "label", "available", "why", "code", "params"}. `probe` is reason (the
+    default) or a seam returning a reason dict or an (available, why) pair, whose why is then code engine.other."""
+    try:
+        got = (probe or reason)(engine, ws)
+    except Exception as exc:  # noqa: BLE001 - one engine's probe failing leaves the others
+        got = {"available": False, "why": f"{type(exc).__name__}: {exc}", "code": "engine.probe_failed",
+               "params": {"error": f"{type(exc).__name__}: {exc}"}}
+    if not isinstance(got, dict):
+        ok, why = got
+        got = {"available": ok, "why": str(why), "code": "engine.other", "params": {"why": str(why)}}
+    return {"id": engine, "label": LABELS[engine], "available": bool(got["available"]), "why": str(got["why"]),
+            "code": got.get("code") or "engine.other", "params": dict(got.get("params") or {"why": str(got["why"])})}
+
+
+def engine_rows(ws, probe=None) -> list[dict]:
+    """engine_row for every engine, in ENGINE_ORDER."""
+    return [engine_row(eid, ws, probe) for eid in ENGINE_ORDER]
 
 
 def default_engine(rows: list[dict], ws) -> str | None:
@@ -157,7 +212,7 @@ class Chat:
         self.path = self.root / TRANSCRIPT
         self.notify = notify
         self.seams = {"query_fn": query_fn, "client_factory": client_factory, "tools_factory": tools_factory}
-        self.engines_fn = engines_fn or can_run
+        self.engines_fn = engines_fn or reason
         self._lock = threading.RLock()
         self.rows: list[dict] = self._load()
         self._next = max((int(r.get("id") or 0) for r in self.rows), default=0) + 1
@@ -225,14 +280,7 @@ class Chat:
     def engines(self) -> list[dict]:
         if self._engines and time.monotonic() - self._engines[0] < ENGINES_TTL_S:
             return self._engines[1]
-        ws = self._workspace()
-        rows = []
-        for eid in ENGINE_ORDER:
-            try:
-                ok, why = self.engines_fn(eid, ws)
-            except Exception as exc:  # noqa: BLE001 - one engine's probe failing leaves the others
-                ok, why = False, f"{type(exc).__name__}: {exc}"
-            rows.append({"id": eid, "label": LABELS[eid], "available": bool(ok), "why": why})
+        rows = engine_rows(self._workspace(), self.engines_fn)
         self._engines = (time.monotonic(), rows)
         return rows
 

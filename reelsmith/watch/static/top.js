@@ -1,5 +1,6 @@
-import { post } from "./api.js";
-import { LANGS, lang, setLang, t } from "./i18n.js";
+import { BASE, post } from "./api.js";
+import { setupLanguage, setupTheme } from "./chrome.js";
+import { t } from "./i18n.js";
 import { busy, bytes, clamp, clock, disable, h, icon, menuButton, note, pressable, storage, store, timecode, tip } from "./util.js";
 
 const $ = (id) => document.getElementById(id);
@@ -9,10 +10,11 @@ export function createTop(app) {
   // ---------------------------------------------------------------- title, canvas facts, the result
   function renderTop() {
     const s = app.state;
-    const title = s.project?.title || app.lastGood?.project?.title || t("top.untitled");
+    const title = s.project?.title || app.lastGood?.project?.title || s.project?.name || app.lastGood?.project?.name || t("top.untitled");
     $("filmTitle").textContent = title;
     tip($("filmTitle"), t("top.projTip", { title, path: s.project?.path || "" }));
     document.title = `${title} · reelsmith watch`;
+    renderWorkspace();
     const c = s.canvas || app.lastGood?.canvas;
     const info = $("canvasInfo");
     if (c?.width) {
@@ -51,6 +53,58 @@ export function createTop(app) {
     renderActions();
   }
 
+  // ---------------------------------------------------------------- the workspace: home, and the other films
+  const here = BASE ? decodeURIComponent(BASE.slice(3)) : null;
+  const switchBtn = $("switchBtn"), switchMenu = $("switchMenu");
+  let switcher = null, films = null, filling = null;
+  function renderWorkspace() {
+    const name = (app.state?.project?.workspace || app.lastGood?.project?.workspace || "").split("/").filter(Boolean).pop();
+    if (!BASE || !name) return;
+    const link = $("wsLink");
+    if (link.hidden) {
+      link.hidden = $("wsSep").hidden = $("switchWrap").hidden = false;
+      switcher = menuButton(switchBtn, switchMenu, (list) => Math.max(0, list.findIndex((b) => b.dataset.name === here)));
+      switchBtn.addEventListener("click", () => { if (!switchMenu.hidden) fillSwitch(); });
+      pressable(link, (e) => { e.preventDefault(); busy(link, true); location.href = "/"; });
+      tip(switchBtn, t("home.switch"));
+      fillSwitch();
+    }
+    if (link.dataset.name !== name) {
+      link.dataset.name = name;
+      link.replaceChildren(h("span", { class: "ws-name", text: name }), h("span", { class: "spin", "aria-hidden": "true" }));
+    }
+    tip(link, t("home.backTip", { workspace: name }));
+  }
+  function switchItems() {
+    if (!films) return [h("div", { class: "menu-title", text: t(filling ? "home.loading" : "home.loadFailedShort") })];
+    const rows = films.map((p) => h("button", { type: "button", class: "menu-item switch-item", role: "menuitemradio", tabindex: "-1", "aria-checked": String(p.name === here), "data-name": p.name, "data-url": p.url },
+      icon("i-tick"), h("span", { class: "switch-name" }, h("b", { text: p.title || p.name }), ...(p.title ? [h("small", { text: p.name })] : [])),
+      ...(p.working ? [h("i", { class: "switch-dot", "aria-hidden": "true" })] : []), h("span", { class: "spin", "aria-hidden": "true" })));
+    return [h("div", { class: "menu-title", text: t("home.switchTitle") }), ...rows, h("div", { class: "menu-sep", role: "separator" }),
+      h("button", { type: "button", class: "menu-item", role: "menuitem", tabindex: "-1", "data-url": "/" }, icon("i-grid", "is-shown"), h("span", { text: t("home.all") }))];
+  }
+  async function fillSwitch() {
+    const refocus = () => {
+      if (switchMenu.hidden || switchMenu.contains(document.activeElement) || document.activeElement !== document.body) return;
+      switchMenu.querySelector('[aria-checked="true"]')?.focus();
+    };
+    filling = fetch("/api/home", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))));
+    if (!films) switchMenu.replaceChildren(...switchItems());
+    try { films = (await filling).projects; } catch { /* the last list stands */ }
+    filling = null;
+    const focusedName = document.activeElement?.dataset?.name;
+    switchMenu.replaceChildren(...switchItems());
+    if (focusedName) switchMenu.querySelector(`[data-name="${CSS.escape(focusedName)}"]`)?.focus();
+    refocus();
+  }
+  switchMenu.addEventListener("click", (e) => {
+    const b = e.target.closest(".menu-item");
+    if (!b) return;
+    if (b.dataset.name === here) { switcher?.close(true); return; }
+    busy(b, true);
+    location.href = b.dataset.url;
+  });
+
   // ---------------------------------------------------------------- accept the film
   const accept = $("acceptBtn");
   let accepting = false;
@@ -77,6 +131,7 @@ export function createTop(app) {
       app.refresh();
     } catch (e) {
       note(accept, t("accept.failed", { why: e.code && t(e.code) !== e.code ? t(e.code, e.params || {}) : e.message }), "is-error");
+      if (e.code === "owner.elsewhere") app.emit("owner-elsewhere", e);
     } finally {
       clearTimeout(slow);
       busy(accept, false);
@@ -127,47 +182,12 @@ export function createTop(app) {
     app.emit("conn");
   }
 
-  // ---------------------------------------------------------------- language
-  const langBtn = $("langBtn"), langMenu = $("langMenu");
-  $("langName").textContent = LANGS.find(([c]) => c === lang)[1];
-  tip(langBtn, t("top.language"), null, `${t("top.language")}: ${LANGS.find(([c]) => c === lang)[1]}`);
-  langMenu.replaceChildren(h("div", { class: "menu-title", text: t("top.language") }), ...LANGS.map(([code, name]) => {
-    const b = h("button", { type: "button", class: "menu-item", role: "menuitemradio", "aria-checked": String(code === lang), lang: code, tabindex: "-1", "data-code": code },
-      h("span", { text: name }), icon("i-tick"));
-    return b;
-  }));
-  const langs = menuButton(langBtn, langMenu, (list) => Math.max(0, list.findIndex((b) => b.dataset.code === lang)));
-  app.closeMenus = () => langs.close(true);
-  langMenu.addEventListener("click", (e) => {
-    const b = e.target.closest(".menu-item");
-    if (!b) return;
-    if (b.dataset.code === lang) { langs.close(true); return; }
-    setLang(b.dataset.code);
+  // ---------------------------------------------------------------- language, theme
+  const langs = setupLanguage($("langBtn"), $("langMenu"), $("langName"), () => {
     try { sessionStorage.setItem("rs-watch:resume", JSON.stringify({ time: app.time, beat: app.beat })); } catch { /* private window */ }
-    location.reload();
   });
-
-  // ---------------------------------------------------------------- theme: light, dark, system
-  const seg = $("themeSeg"), dark = matchMedia("(prefers-color-scheme: dark)");
-  function applyTheme(pick, said) {
-    const root = document.documentElement;
-    root.dataset.themePick = pick;
-    root.dataset.theme = pick === "system" ? (dark.matches ? "dark" : "light") : pick;
-    for (const b of seg.children) {
-      b.setAttribute("aria-pressed", String(b.dataset.pick === pick));
-      tip(b, t(`theme.${b.dataset.pick}`));
-    }
-    app.emit("theme");
-    nativeTheme();
-    if (said) note(seg, t("theme.set", { name: t(`theme.${pick}`) }));
-  }
-  // the desktop window's own title bar follows the page (a browser tab has none to set)
-  const nativeTheme = () => { try { window.pywebview?.api?.set_theme?.(document.documentElement.dataset.theme); } catch { /* a browser */ } };
-  addEventListener("pywebviewready", nativeTheme);
-  seg.setAttribute("aria-label", t("theme.label"));
-  for (const b of seg.children) pressable(b, () => { store("theme", b.dataset.pick); applyTheme(b.dataset.pick, true); });
-  dark.addEventListener("change", () => { if (document.documentElement.dataset.themePick === "system") applyTheme("system"); });
-  applyTheme(storage("theme", "system"));
+  app.closeMenus = () => langs.close(true);
+  setupTheme($("themeSeg"), () => app.emit("theme"));
 
   // ---------------------------------------------------------------- the divider between the session and the stage
   const split = $("colSplit");

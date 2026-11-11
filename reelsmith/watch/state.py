@@ -315,6 +315,14 @@ TEXTS = {
     "action.undo.failed": "Nothing was undone",
     "action.redo.ok": "The undone change was restored",
     "action.redo.failed": "Nothing was restored",
+    "create.empty": "Enter a name for the film",
+    "create.long": "A name can be at most 64 characters long",
+    "create.chars": "A name can use only the letters A–Z, digits, hyphens and underscores, and cannot begin with a hyphen",
+    "create.reserved": "\"{name}\" is reserved by the operating system",
+    "create.taken": "A film named \"{name}\" already exists in this workspace",
+    "create.failed": "The film could not be created: {error}",
+    "owner.elsewhere": "This film is open in another window ({url}). Requests and actions are available only there "
+                       "until that window is closed.",
 }
 STAGES = {"check": ("stage.check", "checking the project"), "layout": ("stage.layout", "measuring layout"),
           "film": ("stage.film", "rendering frames"), "master": ("stage.master", "mastering loudness"),

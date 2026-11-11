@@ -1,6 +1,6 @@
 import { BASE, post as act } from "./api.js";
 import { kindName } from "./beats.js";
-import { t } from "./i18n.js";
+import { has, t } from "./i18n.js";
 import { busy, clamp, clock, disable, elapsed, h, icon, isOff, lowerFirst, note, pressable, storage, store, timecode, tip } from "./util.js";
 import { disclosure, emptyState, money, rove, toolName } from "./panel.js";
 
@@ -8,6 +8,8 @@ const MAX_MESSAGE = 8000;
 const KEPT_ROWS = 600;                  // chat rows the thread keeps in the page; older ones scroll out of memory
 const SUGGESTIONS = ["chat.try1", "chat.try2", "chat.try3"];
 const RENDER_STAGES = ["check", "layout", "film", "master", "film check"];
+// An engine's reason in the person's language; the server's English when the code is not known here.
+export const engineWhy = (e) => (e?.code && has(e.code) ? t(e.code, e.params || {}) : e?.why || "");
 
 // Light Markdown for the agent's replies: paragraphs, lists, fenced code, inline code, bold and italics.
 function inline(text) {
@@ -344,7 +346,7 @@ export function createChat(app, panel) {
   function renderEmpty() {
     if (S.loaded && !S.engines.some((e) => e.available)) {
       return emptyState("i-alert", t("chat.noEngineTitle"), t("chat.noEngineBody"),
-        h("ul", { class: "engine-why" }, ...S.engines.map((e) => h("li", {}, h("strong", { text: e.label }), h("span", { text: e.why })))));
+        h("ul", { class: "engine-why" }, ...S.engines.map((e) => h("li", {}, h("strong", { text: e.label }), h("span", { text: engineWhy(e) })))));
     }
     const chips = SUGGESTIONS.map((k) => {
       const b = h("button", { type: "button", class: "suggest" }, icon("i-chat"), h("span", { text: t(k) }));
@@ -424,7 +426,7 @@ export function createChat(app, panel) {
     $("engineText").textContent = e ? e.label : S.loaded ? t("chat.noEngineShort") : "…";
     engineBtn.classList.toggle("is-none", !e);
     disable(engineBtn, S.busy ? t("chat.engineBusy") : !S.engines.length ? t("chat.loading") : null,
-      e ? t("chat.engineTip", { label: e.label, why: e.why }) : t("chat.engineNone"));
+      e ? t("chat.engineTip", { label: e.label, why: engineWhy(e) }) : t("chat.engineNone"));
     renderSpend();
     renderContext();
     renderBlock();
@@ -458,13 +460,21 @@ export function createChat(app, panel) {
     const key = none ? JSON.stringify(S.engines) : "";
     if (!none || key === blockKey) return;
     blockKey = key;
-    const list = h("ul", { class: "engine-why" }, ...S.engines.map((x) => h("li", {}, h("strong", { text: x.label }), h("span", { text: x.why }))));
+    const list = h("ul", { class: "engine-why" }, ...S.engines.map((x) => h("li", {}, h("strong", { text: x.label }), h("span", { text: engineWhy(x) }))));
     el.replaceChildren(h("strong", {}, icon("i-alert"), t("chat.noEngineTitle")), disclosure(t("chat.why"), list, false), list);
   }
 
   function showErr(text) { errLine.hidden = false; errLine.textContent = text; }
   function hideErr() { errLine.hidden = true; }
-  const whyText = (w) => (w?.code && t(w.code, w.params || {}) !== w.code ? t(w.code, w.params || {}) : w?.text || "");
+  // a film held by another window: said in the session, whichever control was refused
+  app.on("owner-elsewhere", (w) => showErr(whyText(w)));
+  const whyText = (w) => {
+    if (w?.code === "chat.engine_unavailable") {         // the engine's own reason, translated too
+      const e = S.engines.find((x) => x.id === w.params?.engine);
+      return t(w.code, { ...w.params, why: e ? engineWhy(e) : w.params?.why || "" });
+    }
+    return w?.code && t(w.code, w.params || {}) !== w.code ? t(w.code, w.params || {}) : w?.text || w?.error || "";
+  };
 
   async function submit() {
     if (S.sending) return;
@@ -560,6 +570,7 @@ export function createChat(app, panel) {
         note(b, t(`q.${a}Started`));
       } catch (e) {
         note(b, e.code ? whyText(e) : t("q.failed", { why: e.message }), "is-error");
+        if (e.code === "owner.elsewhere") showErr(whyText(e));
       } finally {
         asked.delete(a);
         renderQuick();
@@ -649,7 +660,7 @@ export function createChat(app, panel) {
       h("span", { class: "engine-opt-head" }, h("span", { class: `engine-dot${e.available ? "" : " is-off"}` }), h("span", { text: e.label }),
         S.session === e.id ? h("span", { class: "chip", text: t("chat.thisConversation") }) : null,
         cur?.id === e.id ? icon("i-tick", "engine-tick") : null),
-      h("span", { class: "engine-why", text: e.available ? e.why : t("chat.cannot", { why: e.why }) }));
+      h("span", { class: "engine-why", text: e.available ? engineWhy(e) : t("chat.cannot", { why: engineWhy(e) }) }));
       li.addEventListener("click", () => choose(i));
       li.addEventListener("pointermove", () => focusOpt(i));
       return li;
@@ -680,7 +691,7 @@ export function createChat(app, panel) {
   function choose(i) {
     const e = S.engines[i];
     if (!e) return;
-    if (!e.available) { note(options()[i], t("chat.cannot", { why: e.why }), "is-error"); return; }
+    if (!e.available) { note(options()[i], t("chat.cannot", { why: engineWhy(e) }), "is-error"); return; }
     picked = e.id;
     store("engine", e.id);
     closeMenu();

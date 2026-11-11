@@ -23,12 +23,34 @@ It opens the window and prints its local address (a free port on 127.0.0.1); clo
 `--browser` opens a browser tab instead, `--no-open` only serves and prints the address (Ctrl+C stops those),
 `--port 8765` picks the port.
 
-Give it a workspace folder instead (the one holding `workspace.json`) and the first page lists its projects; each
-opens in the same window at `/p/<name>/`.
+Give it a workspace folder instead (the one holding `workspace.json`) and the first page is the workspace's home;
+each project opens in the same window at `/p/<name>/`.
 
 ```
 reelsmith watch path/to/workspace --no-open
 ```
+
+### The home
+
+The home shows every project of the workspace as a card, the most recently changed first: a frame of the film (the
+delivered film's while it matches the cut, else the cut's, rendered by the engine; none while the project has no
+clip yet), the title and folder name (a film without a title goes by its folder name), the length, the state of the delivered film in the words the project page uses
+(nothing delivered, delivered, out of date, refused, accepted), the time of the last change, and a quiet tag while an
+agent, a chat turn or a render works on it. The list follows the folder without a reload: a project created
+elsewhere, an edit, a finished render or a call that starts or ends shows within about a second. Past eight films a
+search field filters them by title and folder name (`/` focuses it).
+
+Listing the films reads each project's state once per change and keeps only what its card shows; a project is
+watched closely (every half second, with its chat) only once a page or the terminal opened it. Projects no page has
+opened are looked at every two seconds, and only while a home is open.
+
+**New film** (or `N`) asks for a folder name and checks it as it is typed: letters A–Z, digits, hyphens and
+underscores, at most 64 characters, not beginning with a hyphen, not a name the operating system reserves, and not
+one the workspace already uses (case is ignored). The server checks again, creates the project with `new_project`
+in the workspace's `projects` folder on the workspace's profile, and the window opens it; a refusal says why.
+
+On a project page served from a workspace, the workspace name in the top bar leads back to the home, and the chevron
+beside the title lists the other films.
 
 Leave it running while the agent works: every tool call on the project (edit, undo, check, preview, render, speak,
 draw ...) shows up within about half a second, and so does a slow call while it still runs.
@@ -37,6 +59,12 @@ There is one window per project. While it is open it records itself in `<project
 (`{"pid", "url"}`, removed when it closes; a file whose process is gone counts as no window), and
 `reelsmith watch` on the same project then says where that window is and exits instead of opening a second one.
 `--browser` and `--no-open` serve as asked all the same. On Windows the window has its own taskbar entry and icon.
+
+The record also guards changes. A request, an action (render, check, undo, redo) or an acceptance on a project whose
+record names another live process is refused with 409 `owner.elsewhere` (`{"url", "pid"}` of that window), and the
+page says so in the session; stopping this server's own request is never refused. When nobody holds the project, the
+first change through a server records that server (`reelsmith watch --browser`, a workspace server) until it stops.
+Everything in the same process, such as the terminal session and the server it runs, counts as one holder.
 
 ## Opening by itself
 
@@ -171,6 +199,9 @@ the window can say it in the person's language; the engine's own free-text messa
 | `chat.end`, `chat.stopped`, `chat.aborted`, `chat.error`, `chat.budget` | a chat note's `code` and `params` |
 | `chat.empty`, `chat.too_long`, `chat.no_engine`, `chat.unknown_engine`, `chat.engine_unavailable`, `chat.workspace_hidden`, `chat.bad_context`, `busy.chat` | a refused `POST /api/chat` |
 | `accept.not_current`, `reveal.no_film`, `frame.failed` | other refusals |
+| `owner.elsewhere` (`{"url", "pid"}`) | a change refused because another process's window holds the project |
+| `engine.workspace` (`{"error"}`), `engine.sdk_missing`, `engine.cli_missing`, `engine.on_key` (`{"backend", "model", "key"}`), `engine.key_missing` (`{"key"}`), `engine.on_sign_in` (`{"model"}`), `engine.not_signed_in` (`{"key"}`), `engine.codex_ready` (`{"model"}`), `engine.codex_ready_default`, `engine.codex_sign_in`, `engine.codex_missing`, `engine.dsh_missing` (`{"package"}`), `engine.dsh_ready` and `engine.dsh_ready_npx` (`{"model"}`), `engine.api_ready` (`{"provider", "model"}`), `engine.probe_failed` (`{"error"}`), `engine.other` (`{"why"}`) | an engine row's `code` and `params` in `/api/chat` |
+| `create.empty`, `create.long`, `create.chars`, `create.reserved`, `create.taken` (each `{"name"}`), `create.failed` (`{"error"}`) | a refused `POST /api/projects` |
 
 An error answer with a code is `{"error" (English), "code", "params"}`.
 
@@ -248,19 +279,28 @@ changes (a tool call that finished) is written again with the same `id`; the las
 ## Routes
 
 Everything is JSON in UTF-8 unless said otherwise; times are film seconds. In a workspace, each project's routes sit
-under `/p/<name>/`, and `/api/projects` lists them.
+under `/p/<name>/`, beside the workspace's own:
 
-| Route | Gives |
+| Workspace route | Gives |
+|---|---|
+| `/` | the home |
+| `/api/home` | `{"workspace": {"name", "path"}, "projects": [...], "names": {"pattern", "max", "reserved"}}`; a project is `{"name", "path", "url", "title", "duration", "valid", "empty", "canvas", "result": {"state", "accepted"}, "modified", "working", "poster", "revision"}`, the most recently changed first; `working` is `null` or `{"by", "tool", "code", "percent", "text"}`; `poster` is a `/p/<name>/api/frame` URL, or `null` for a film that is empty or does not load |
+| `/api/projects` | the `projects` list alone |
+| `/api/home/events` | server-sent events: `projects` with `{"seq"}` whenever the list would read differently |
+| `/api/session` | `{"token"}`, as for a project |
+| `POST /api/projects` | body `{"name"}`: 201 `{"name", "url", "path"}`; 400 or 409 with a `create.*` code when the name cannot be used |
+
+| Project route | Gives |
 |---|---|
 | `/` | the window (`/static/...` its files; `/favicon.ico` its icon, also `/static/favicon.svg`) |
 | `/api/state` | the whole state: canvas, duration, voice, tracks, beats, markers, chapters, assets, issues, render, result, spend, activity, history, running, can, action, summary, and a `revision` (which `running`, `can` and `action` do not move) |
 | `/api/events` | server-sent events: `change` with `{"revision", "running"}` whenever the state changes; `running` with the running call (or `null`) when one starts, changes stage or ends, and as its progress moves (at most once a second); `chat` with `{"rows", "busy", "turn", "stopping"}` (the new or changed transcript rows) as a turn proceeds, or `{"resync": true}` when the stream fell behind and the page should fetch `/api/chat`; `frames` when queued frames are ready; `action` when an action starts and ends |
 | `/api/session` | `{"token"}`: the server's random token, which every POST sends back as `X-Reelsmith-Token` |
-| `/api/chat` | `{"busy", "turn", "stopping", "engine", "session_engine", "engines": [{"id", "label", "available", "why"}], "spent_usd", "budget_usd", "messages"}`; `messages` are the last 200 rows; `engine` is the default (or the running turn's) |
-| `POST /api/chat` | body `{"message", "engine"?, "context"?: {"clip", "start", "end", "playhead"}}`: 202 `{"turn"}`; 409 while a turn runs; 400 for an empty message, one over 8000 characters, or an engine that cannot run here (the reason in `error`) |
+| `/api/chat` | `{"busy", "turn", "stopping", "engine", "session_engine", "engines": [{"id", "label", "available", "why", "code", "params"}], "spent_usd", "budget_usd", "messages"}`; `messages` are the last 200 rows; `engine` is the default (or the running turn's) |
+| `POST /api/chat` | body `{"message", "engine"?, "context"?: {"clip", "start", "end", "playhead"}}`: 202 `{"turn"}`; 409 while a turn runs or another window holds the project (`owner.elsewhere`); 400 for an empty message, one over 8000 characters, or an engine that cannot run here (the reason in `error`) |
 | `POST /api/chat/stop` | `{"stopped"}`: whether a turn was running and is being stopped |
 | `POST /api/action` | body `{"action"}`: runs render, check, undo or redo (202), or stops a chat turn; see [Actions](#actions) |
-| `POST /api/accept` | `{"accepted": {"at"}}`: records the current delivered film as accepted in `out/accepted.json`; 409 unless the result is `current` |
+| `POST /api/accept` | `{"accepted": {"at"}}`: records the current delivered film as accepted in `out/accepted.json`; 409 unless the result is `current`, or `owner.elsewhere` |
 | `POST /api/reveal` | `{"revealed": true, "folder": "out"}`: opens the folder of `out/film.mp4` in the file manager; 404 without a film |
 | `/api/history/<n>` | the timeline right after edit batch `n` (`0`: before the first recorded batch) |
 | `/api/resolved` | the resolved film the renderer plays |

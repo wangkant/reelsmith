@@ -135,6 +135,17 @@ def _progress(stage: str, progress: float | None = None) -> None:
         mark.update(stage, progress)
 
 
+def _progress_of_call():
+    """_progress bound to this call now: render.mjs's lines are heard on a reader thread, which does not see the
+    call's context."""
+    mark = _CALL.get()
+
+    def heard(stage: str, progress: float | None = None) -> None:
+        if mark is not None:
+            mark.update(stage, progress)
+    return heard
+
+
 def _sources(call, args, kwargs, root: Path | None) -> list[str]:
     """The picture an animated clip starts from (its result names only the clip)."""
     try:
@@ -581,7 +592,7 @@ def preview(project: str, times: list[float | str] | float | str = [],  # noqa: 
         times = []
     if not isinstance(times, list):
         times = [times]                     # one Time on its own
-    res = R.preview(root, times, sweep=bool(sweep), progress=_progress)
+    res = R.preview(root, times, sweep=bool(sweep), progress=_progress_of_call())
     if not res.get("ok"):
         if res.get("stage") == "component":         # leads with "component X crashed at File.tsx:N"
             return _fail(_lines([str(res.get("error"))], 120))
@@ -678,10 +689,10 @@ def render(project: str, draft: bool = False, start: float | str = "", end: floa
     for a part of the film."""
     root = _project(project)
     if draft:
-        return _draft_text(R.draft(root, start, end, scale, progress=_progress))
+        return _draft_text(R.draft(root, start, end, scale, progress=_progress_of_call()))
     if start not in ("", None) or end not in ("", None):
         raise ToolInputError("start and end are for a draft (draft=true): a delivered film is always the whole film")
-    return _render_text(R.render(root, progress=_progress))
+    return _render_text(R.render(root, progress=_progress_of_call()))
 
 
 def _runs(frames: list[dict], key) -> list[tuple[float, float, object, int]]:

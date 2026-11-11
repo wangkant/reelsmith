@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>reelsmith watch</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script>
+  // The theme and language are settled before the first paint, so neither flashes.
+  (function () {
+    var d = document.documentElement, pick = "system";
+    try { pick = JSON.parse(localStorage.getItem("rs-watch:theme")) || "system"; } catch (e) {}
+    d.dataset.themePick = pick;
+    d.dataset.theme = pick === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : pick;
+    try { var l = JSON.parse(localStorage.getItem("rs-watch:lang")); if (l) d.lang = l; } catch (e) {}
+  })();
+</script>
+<link rel="preload" href="/static/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/home.css">
+<script type="module" src="/static/home.js"></script>
+</head>
+<body class="home-page">
+<svg class="sprite" width="0" height="0" aria-hidden="true"><symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></symbol><symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></symbol><symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" /></symbol><symbol id="i-tick" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14" /><path d="M12 5v14" /></symbol><symbol id="i-film" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 3v18" /><path d="M3 7.5h4" /><path d="M3 12h18" /><path d="M3 16.5h4" /><path d="M17 3v18" /><path d="M17 7.5h4" /><path d="M17 16.5h4" /></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></symbol><symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></symbol><symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><line x1="12" x2="12" y1="8" y2="12" /><line x1="12" x2="12.01" y1="16" y2="16" /></symbol><symbol id="i-replay" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></symbol></svg>
+
+<div class="home">
+  <header class="top">
+    <span class="mark" aria-hidden="true"><i></i></span>
+    <div class="crumb">
+      <h1 id="wsName">&nbsp;</h1>
+      <span class="facts num" id="wsCount"></span>
+    </div>
+    <span class="grow"></span>
+    <span class="conn" id="conn" data-state="connecting" role="status"><span class="dot"></span><span id="connText"></span></span>
+    <div class="menu-wrap">
+      <button class="btn sm lang-btn" id="langBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="langMenu"><svg><use href="#i-globe"/></svg><span class="lang-name" id="langName"></span><svg class="chev"><use href="#i-chev"/></svg></button>
+      <div class="menu lang-menu" id="langMenu" role="menu" aria-labelledby="langBtn" hidden></div>
+    </div>
+    <div class="seg theme" role="group" id="themeSeg">
+      <button type="button" data-pick="light"><svg><use href="#i-sun"/></svg></button>
+      <button type="button" data-pick="dark"><svg><use href="#i-moon"/></svg></button>
+      <button type="button" data-pick="system"><svg><use href="#i-monitor"/></svg></button>
+    </div>
+    <button class="btn primary" id="newBtn" type="button"><svg><use href="#i-plus"/></svg><span data-i18n="home.new">New film</span></button>
+  </header>
+
+  <main class="shelf" id="shelf">
+    <div class="shelf-in">
+      <div class="shelf-head">
+        <h2 data-i18n="home.title">Films</h2>
+        <span class="grow"></span>
+        <label class="search" id="searchBox" hidden>
+          <svg aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="search" type="search" autocomplete="off" spellcheck="false">
+          <button class="icon-btn sm" id="searchClear" type="button" hidden><svg><use href="#i-close"/></svg></button>
+        </label>
+      </div>
+      <div class="load-err" id="loadErr" role="alert" hidden>
+        <svg aria-hidden="true"><use href="#i-alert"/></svg>
+        <span id="loadErrText"></span>
+        <button class="text-btn accent" id="retryBtn" type="button"><svg><use href="#i-replay"/></svg><span data-i18n="home.retry">Try again</span><span class="spin" aria-hidden="true"></span></button>
+      </div>
+      <div class="grid" id="grid" aria-busy="true"></div>
+      <p class="no-match" id="noMatch" role="status" hidden></p>
+      <section class="home-empty" id="empty" aria-labelledby="emptyTitle" hidden>
+        <svg class="empty-art" viewBox="0 0 120 72" aria-hidden="true">
+          <rect x="6" y="8" width="50" height="28" rx="4"/><rect x="64" y="8" width="50" height="28" rx="4"/>
+          <rect x="6" y="44" width="50" height="6" rx="2"/><rect x="64" y="44" width="34" height="6" rx="2"/>
+          <rect x="6" y="56" width="30" height="5" rx="2"/><rect x="64" y="56" width="22" height="5" rx="2"/>
+        </svg>
+        <h3 id="emptyTitle" data-i18n="home.emptyTitle">No films yet</h3>
+        <p data-i18n="home.emptyBody"></p>
+        <button class="btn primary" id="emptyNew" type="button"><svg><use href="#i-plus"/></svg><span data-i18n="home.new">New film</span></button>
+      </section>
+    </div>
+  </main>
+</div>
+
+<dialog class="new-film" id="newDlg" aria-labelledby="newTitle" aria-describedby="newBody">
+  <form id="newForm" method="dialog" autocomplete="off" novalidate>
+    <h2 id="newTitle" data-i18n="new.title">New film</h2>
+    <p class="new-about" id="newBody" data-i18n="new.body"></p>
+    <label class="field-label" for="newName" data-i18n="new.label">Folder name</label>
+    <div class="field" id="newField">
+      <input id="newName" name="name" type="text" maxlength="80" spellcheck="false" autocapitalize="off" aria-describedby="newMsg" aria-invalid="false">
+    </div>
+    <p class="field-msg" id="newMsg" aria-live="polite"></p>
+    <p class="field-err" id="newErr" role="alert" hidden></p>
+    <div class="new-foot">
+      <button class="btn" id="newCancel" type="button" data-i18n="new.cancel">Cancel</button>
+      <button class="btn primary" id="newCreate" type="submit"><svg><use href="#i-plus"/></svg><span data-i18n="new.create">Create the film</span><span class="spin" aria-hidden="true"></span></button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
