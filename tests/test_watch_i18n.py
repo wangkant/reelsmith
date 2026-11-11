@@ -15,8 +15,8 @@ HOLE = re.compile(r"\{(\w+)\}")
 SAME_EVERYWHERE = {"reelsmith watch", "{n} fps", "{n} s", "s"}
 # Words a language shares with English by its own right (French and German editors say "clip" and "timeline").
 SAME_IN = {
-    "fr": {"Agent", "Animation", "Clip", "Pause", "Session", "Timeline", "Transcription", "Type", "Volume",
-           "{n} clips"},
+    "fr": {"Agent", "Animation", "Clip", "Films", "Pause", "Session", "Timeline", "Transcription", "Type", "Volume",
+           "{n} clips", "{n} films"},
     "de": {"Agent", "Animation", "Clip", "Import", "Layout", "Pause", "Text", "Video"},
     "es": {"Clip", "Error", "Video", "video", "{n} clips", "1 clip", "1 error"},
 }
@@ -151,7 +151,7 @@ def test_french_spaces_before_high_punctuation():
 
 
 def test_every_key_the_page_names_exists():
-    src = "".join(p.read_text(encoding="utf-8") for p in [*STATIC.glob("*.js"), STATIC / "index.html"]
+    src = "".join(p.read_text(encoding="utf-8") for p in [*STATIC.glob("*.js"), STATIC / "index.html", STATIC / "home.html"]
                   if not p.name.startswith("i18n"))
     named = set(re.findall(r"""\bt\(\s*["']([\w.]+)["']""", src))
     named |= set(re.findall(r'data-i18n(?:-title)?="([\w.]+)"', src))

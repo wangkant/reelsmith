@@ -68,6 +68,14 @@ TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css"
          ".map": "application/json"}
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
+# names Windows will not give a folder, whatever the case
+RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+POSTER_H = 360
+PASSIVE = ("/api/frame", "/api/still", "/api/thumb", "/api/wave", "/favicon.ico")
+HOME_SCAN_S = 2.0                   # projects no page has opened are looked at this often, while a home is open
+# a project's last change: the latest of these files' times
+LAST_CHANGE = ("project.json", ".history/activity.jsonl", ".history/log.jsonl", "out/film.mp4", "build/report.json",
+               "voice/voice.json", "build/chat_state.json")
 
 
 class HTTPError(Exception):
@@ -111,6 +119,13 @@ def fenced(root: Path, rel: str) -> Path | None:
     return full
 
 
+def _stamp_s(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def render_busy(root: Path) -> bool:
     """A render, preview or draft of this project holds its lock (render.project_lock) in some process. Probing
     takes the lock for an instant only when nobody holds it."""
@@ -132,6 +147,29 @@ def _prune(folder: Path, keep: int = KEEP_CACHED) -> None:
     files = sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in files[keep:]:
         old.unlink(missing_ok=True)
+
+
+def card_facts(st: dict, base: str) -> dict:
+    """What a home card shows of a project's state."""
+    poster = None
+    canvas = st["canvas"] or {}
+    # a project with nothing on it yet has no length: a film waiting for its first clip, not a broken one
+    empty = not st["tracks"] and (st["valid"] or "has no length" in (st["error"] or ""))
+    if st["valid"] and st["duration"] and not empty:
+        delivered = st["render"]["delivered"] or {}
+        length = delivered.get("duration") if delivered.get("matches_cut") else None
+        t = round((length or st["duration"]) * 0.3, 2)     # past the opening fade, inside the first beat or two
+        poster = f"{base}/api/frame?t={t}&h={POSTER_H}&v={st['revision'][:12]}"
+    return {"title": st["project"]["title"], "duration": st["duration"], "valid": st["valid"], "empty": empty,
+            "canvas": {"width": canvas.get("width"), "height": canvas.get("height")} if canvas else None,
+            "result": {"state": st["result"]["state"], "accepted": st["result"]["accepted"]}, "poster": poster,
+            "revision": st["revision"]}
+
+
+def opens(path: str) -> bool:
+    """A request that means someone looks at the project (its page, state, events, chat); a poster, a still, a
+    media file or a static file does not."""
+    return not (path in PASSIVE or path.startswith(("/project/", "/player/", "/static/")))
 
 
 def _ffmpeg(args: list[str], timeout: float = 120) -> subprocess.CompletedProcess:
@@ -232,8 +270,15 @@ class Player:
 
 # ------------------------------------------------------------------ one project
 class Site:
-    def __init__(self, root: Path, base: str, player: Player, chat_options: dict | None = None):
+    """One project the server shows. `opened`: a page or the terminal opened it (only those are polled); a site
+    made for a poster alone is not. Its chat is made on first use."""
+
+    def __init__(self, root: Path, base: str, player: Player, chat_options: dict | None = None, url: str = "",
+                 opened: bool = True):
         self.root, self.base, self.player = root, base, player
+        self.url = url                              # where this server shows the project, for presence
+        self.opened = opened
+        self._owned = False                         # this server recorded itself as the project's window
         self.cache = S.StateCache(root, base)
         self.changed = threading.Condition()
         self.revision: str | None = None
@@ -243,7 +288,9 @@ class Site:
         self._running_at = 0.0
         self.chat_seq = 0                           # moves with every chat payload
         self.chat_events: deque = deque(maxlen=CHAT_EVENTS)
-        self.chat = C.Chat(root, self.chat_changed, **(chat_options or {}))
+        self._chat_options = chat_options or {}
+        self._chat: C.Chat | None = None
+        self._chat_lock = threading.Lock()
         self._still = threading.Lock()
         self._media = threading.BoundedSemaphore(2)
         self._resolved: tuple[tuple, bytes, str] | None = None
@@ -259,6 +306,36 @@ class Site:
         self._action_lock = threading.Lock()
         self.action: dict | None = None             # the window's action at work: {"action", "since"}
         self.last_action: dict | None = None
+
+    @property
+    def chat(self) -> C.Chat:
+        with self._chat_lock:
+            if self._chat is None:
+                self._chat = C.Chat(self.root, self.chat_changed, **self._chat_options)
+            return self._chat
+
+    @property
+    def chat_busy(self) -> int | None:
+        """The running chat turn, without making a chat for a project nobody talked to."""
+        chat = self._chat
+        return chat.busy if chat is not None else None
+
+    # ---- one window per project, across processes
+    def claim(self) -> None:
+        """Refuse a change while another process's window holds the project; nobody holding it, this server does
+        from now on (until it stops)."""
+        other, recorded = P.claim_window(self.root, self.url or f"{self.base}/")
+        if other is not None:
+            raise refused(409, "owner.elsewhere", url=str(other.get("url") or ""), pid=other.get("pid"))
+        self._owned = self._owned or recorded
+
+    def release(self) -> None:
+        if self._owned:
+            try:
+                P.forget_window(self.root)
+            except OSError:
+                pass
+            self._owned = False
 
     def poll(self) -> None:
         self.poll_running()
@@ -320,7 +397,7 @@ class Site:
                 "last_action": self.last_action}
 
     def running_by(self) -> str:
-        return "window" if self.action else "chat" if self.chat.busy is not None else "agent"
+        return "window" if self.action else "chat" if self.chat_busy is not None else "agent"
 
     def rendering(self) -> bool:
         return render_busy(self.root) or bool(self.action and self.action["action"] == "render")
@@ -328,7 +405,7 @@ class Site:
     def can(self, st: dict) -> dict:
         """{"render", "check", "undo", "redo", "stop": bool, "why": {name: {"code", "params", "text"}}}: the
         actions the window offers, and the reason of each one that cannot run now."""
-        busy = "busy.action" if self.action else "busy.chat" if self.chat.busy is not None else None
+        busy = "busy.action" if self.action else "busy.chat" if self.chat_busy is not None else None
         reasons = {
             "render": busy or ("busy.render" if self.rendering() else None)
             or ("project.invalid" if not st["valid"] else None)
@@ -336,7 +413,7 @@ class Site:
             "check": busy,
             "undo": busy or (None if st["can_undo"] else "undo.empty"),
             "redo": busy or (None if st["can_redo"] else "redo.empty"),
-            "stop": ("stop.pending" if self.chat.stopping else None) if self.chat.busy is not None else (
+            "stop": ("stop.pending" if self.chat.stopping else None) if self.chat_busy is not None else (
                 "stop.unsupported" if self.action else "stop.idle"),
         }
         out: dict = {name: why is None for name, why in reasons.items()}
@@ -348,6 +425,7 @@ class Site:
         with self._action_lock:
             if self.action:
                 raise refused(409, "busy.action")
+            self.claim()
             try:
                 return self.chat.send(message, engine, context)
             except C.ChatError as exc:
@@ -355,14 +433,15 @@ class Site:
 
     # ---- actions without typing
     def act(self, name) -> tuple[int, dict]:
-        if name == "stop":
-            if self.chat.stop():
+        if name == "stop":                      # stopping this server's own turn is never refused
+            if self._chat is not None and self._chat.stop():
                 return 200, {"stopped": True, "what": "chat"}
             why = "stop.unsupported" if self.action else "stop.idle"
             return 200, {"stopped": False, "code": why, "params": {}, "error": S.TEXTS[why]}
         if name not in ACTIONS:
             raise refused(400, "action.unknown", action=str(name)[:40])
         with self._action_lock:
+            self.claim()
             why = self.can(self.cache.get())["why"].get(name)
             if why is not None:
                 raise refused(409, why["code"])
@@ -397,6 +476,7 @@ class Site:
         return self.action is None
 
     def accept(self) -> dict:
+        self.claim()
         st = self.cache.get()
         if st["result"]["state"] != "current":
             raise refused(409, "accept.not_current")
@@ -751,16 +831,20 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, path: str) -> None:
         srv = self.server
         if srv.workspace is not None:
-            if path == "/api/projects":
+            if path in ("/api/projects", "/api/home", "/api/home/events", "/api/session"):
                 self.refuse_cross_site()
-                return self.send_json(srv.projects())
+                if path == "/api/session":
+                    return self.send_json({"token": srv.token})
+                if path == "/api/home/events":
+                    return self.home_events()
+                return self.send_json(srv.home() if path == "/api/home" else srv.projects())
             m = re.match(r"^/p/([^/]+)(/.*)?$", path)
             if m:
                 if m.group(2) is None:
                     return self.redirect(f"/p/{m.group(1)}/")
-                return self.site_route(srv.site(unquote(m.group(1))), m.group(2))
-            if path == "/":
-                return self.send_bytes(srv.index_page(), "text/html; charset=utf-8")
+                return self.site_route(srv.site(unquote(m.group(1)), opens(m.group(2))), m.group(2))
+            if path in ("/", "/index.html"):
+                return self.static("home.html")
             if path.startswith("/static/"):
                 return self.static(path[len("/static/"):])
             # a project page asking by absolute path ("/api/state"): its Referer says which project
@@ -768,7 +852,7 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 if path.startswith("/player/"):
                     return self.redirect(f"/p/{m.group(1)}{path}")      # its own fetches then carry the project
-                return self.site_route(srv.site(unquote(m.group(1))), path)
+                return self.site_route(srv.site(unquote(m.group(1)), opens(path)), path)
             raise HTTPError(404, {"error": "not found"})
         return self.site_route(srv.site(None), path)
 
@@ -829,6 +913,9 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), self.server.token.encode()):
             raise HTTPError(403, {"error": f"refused: the {TOKEN_HEADER} header is missing or wrong (GET api/session "
                                            "gives it)"})
+        if self.server.workspace is not None and url.path == "/api/projects":
+            name = self.json_body(body, '{"name": "..."}').get("name")
+            return self.send_json(self.server.create_project(name), 201)
         site, path = self.post_site(url.path)
         if path == "/api/chat":
             data = self.json_body(body, '{"message": "..."}')
@@ -838,7 +925,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"turn": site.send_chat(data.get("message"), engine or None, data.get("context"))},
                                   202)
         if path == "/api/chat/stop":
-            return self.send_json({"stopped": site.chat.stop()})
+            return self.send_json({"stopped": site._chat is not None and site._chat.stop()})
         if path == "/api/action":
             code, answer = site.act(self.json_body(body, '{"action": "render"}').get("action"))
             return self.send_json(answer, code)
@@ -1016,6 +1103,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
 
+    def home_events(self) -> None:
+        """A "projects" event whenever the list would read differently: a project added, a change, work starting or
+        ending. The page refetches api/home."""
+        srv = self.server
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.close_connection = True
+        with srv.home_changed:
+            srv.home_watchers += 1
+            seq = srv.home_seq
+        try:
+            while not srv.stopping.is_set():
+                with srv.home_changed:
+                    if srv.home_seq == seq:
+                        srv.home_changed.wait(timeout=KEEPALIVE_S)
+                    now = srv.home_seq
+                if srv.stopping.is_set():
+                    break
+                if now != seq:
+                    seq = now
+                    self.wfile.write(f"event: projects\ndata: {json.dumps({'seq': seq})}\n\n".encode())
+                else:
+                    self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        finally:
+            with srv.home_changed:
+                srv.home_watchers -= 1
+
 
 class WatchServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -1044,6 +1162,13 @@ class WatchServer(ThreadingHTTPServer):
         self.sites: dict[str | None, Site] = {}
         self._sites_lock = threading.Lock()
         self.stopping = threading.Event()
+        self._create_lock = threading.Lock()
+        self.home_changed = threading.Condition()
+        self.home_seq = 0                           # moves whenever the home's list would read differently
+        self.home_watchers = 0                      # open home event streams; the list is watched only for them
+        self._home_lock = threading.Lock()
+        self._home_facts: dict[str, tuple] = {}     # project -> (signature, card facts) for projects without a Site
+        self._home_scan: dict[str, tuple] = {}      # project -> its last cheap reading for the home signature
         super().__init__((HOST, port), Handler)
         self.port = self.server_address[1]
         self._poller = threading.Thread(target=self._poll, daemon=True)
@@ -1064,16 +1189,19 @@ class WatchServer(ThreadingHTTPServer):
         if not isinstance(sys.exc_info()[1], ConnectionError):        # a browser dropping a video read is normal
             super().handle_error(request, client_address)
 
-    def site(self, name: str | None) -> Site:
+    def site(self, name: str | None, opened: bool = True) -> Site:
+        """The project's Site, made on first use; `opened` False for a request that only fetches a picture."""
         with self._sites_lock:
-            if name in self.sites:
-                return self.sites[name]
-            if name is None:
-                site = Site(self.target, "", self.player, self.chat_options)
-            else:
-                root = self.project_dir(name)
-                site = Site(root, f"/p/{name}", self.player, self.chat_options)
-            self.sites[name] = site
+            site = self.sites.get(name)
+            if site is None:
+                if name is None:
+                    site = Site(self.target, "", self.player, self.chat_options, self.url, opened)
+                else:
+                    root = self.project_dir(name)
+                    site = Site(root, f"/p/{name}", self.player, self.chat_options, f"{self.url}p/{name}/", opened)
+                self.sites[name] = site
+            elif opened and not site.opened:
+                site.opened = True
             return site
 
     def project_dir(self, name: str) -> Path:
@@ -1083,64 +1211,176 @@ class WatchServer(ThreadingHTTPServer):
             raise HTTPError(404, {"error": f"no project {name!r} in {base}"})
         return root
 
-    def projects(self) -> list[dict]:
+    def project_dirs(self) -> list[Path]:
         base = self.workspace.projects_dir
-        rows = []
-        for p in sorted(base.iterdir()) if base.is_dir() else []:
-            pj = p / PROJECT_FILE
-            if not (p.is_dir() and pj.is_file() and _ID.match(p.name)):
-                continue
-            raw = S._read_json(pj)
-            meta = raw.get("meta") if isinstance(raw, dict) else None
-            try:
-                duration = S.Film(p.resolve(), raw).duration
-            except Exception:  # noqa: BLE001 - a broken project still lists
-                duration = None
-            rows.append({"name": p.name, "path": p.resolve().as_posix(),
-                         "title": meta.get("title") if isinstance(meta, dict) else None, "duration": duration,
-                         "modified": S._iso(pj.stat().st_mtime)})
-        return rows
+        return [p for p in (sorted(base.iterdir()) if base.is_dir() else [])
+                if p.is_dir() and _ID.match(p.name) and (p / PROJECT_FILE).is_file()]
 
-    def index_page(self) -> bytes:
-        rows = ""
-        for p in self.projects():
-            length = "" if p["duration"] is None else f" · {p['duration']:.1f} s"
-            rows += (f'<li><a href="p/{p["name"]}/">{_esc(p["title"] or p["name"])}</a> '
-                     f'<small>{_esc(p["name"])}{length}</small></li>')
-        return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-                "<title>reelsmith watch</title><style>body{font:15px system-ui,sans-serif;margin:2rem;"
-                "background:#fff;color:#222}a{color:inherit}li{margin:.4rem 0}small{color:#777}</style>"
-                f"<h1>{_esc(self.workspace.root.name)}</h1><ul>{rows or '<li>no projects yet</li>'}</ul>").encode()
+    def projects(self) -> list[dict]:
+        """One row per project, the most recently changed first: what the home's cards show. Listing makes no Site:
+        a project without one is read through a small cache of its card's facts."""
+        rows, dirs = [], self.project_dirs()
+        with self._home_lock:
+            for gone in set(self._home_facts) - {p.name for p in dirs}:
+                del self._home_facts[gone]
+        for p in dirs:
+            try:
+                rows.append(self.project_row(p))
+            except Exception:  # noqa: BLE001, S112 - a project removed while it was read: the next list drops it
+                continue
+        return sorted(rows, key=lambda r: r["modified"] or "", reverse=True)
+
+    def _facts(self, root: Path, base: str) -> dict:
+        """The part of a project's state its card shows, rebuilt only when a watched file changed."""
+        site = self.sites.get(root.name)
+        if site is not None:
+            return card_facts(site.cache.get(), base)
+        sig = S.signature(root)
+        with self._home_lock:
+            known = self._home_facts.get(root.name)
+        if known is not None and known[0] == sig:
+            return known[1]
+        facts = card_facts(S.build_state(root, base), base)
+        with self._home_lock:
+            self._home_facts[root.name] = (sig, facts)
+        return facts
+
+    def project_row(self, root: Path) -> dict:
+        root = root.resolve()
+        name = root.name
+        base = f"/p/{name}"
+        site = self.sites.get(name)
+        facts = self._facts(root, base)
+        stamps = [_stamp_s(root / rel) for rel in LAST_CHANGE]
+        working = None
+        view = S.running_view(P.running(root), site.running_by() if site else "agent")
+        if view is not None:
+            working = {"by": view["by"], "tool": view["tool"], "code": view["code"], "percent": view["percent"],
+                       "text": view["text"]}
+        elif site is not None and site.chat_busy is not None:
+            working = {"by": "chat", "tool": None, "code": "busy.chat", "percent": None, "text": S.TEXTS["busy.chat"]}
+        elif site.rendering() if site is not None else render_busy(root):
+            working = {"by": "agent", "tool": "render", "code": "busy.render", "percent": None,
+                       "text": S.TEXTS["busy.render"]}
+        return {"name": name, "path": root.as_posix(), "url": f"{base}/", **facts,
+                "modified": S._iso(max(stamps)) if any(stamps) else None, "working": working}
+
+    def home(self) -> dict:
+        return {"workspace": {"name": self.workspace.root.name, "path": self.workspace.root.as_posix()},
+                "projects": self.projects(),
+                "names": {"pattern": _ID.pattern, "max": 64, "reserved": sorted(RESERVED)}}
+
+    def name_problem(self, name) -> tuple[int, str] | None:
+        """(status, code) of why a new project cannot take this folder name; None when it can."""
+        if not isinstance(name, str) or not name:
+            return 400, "create.empty"
+        if len(name) > 64:
+            return 400, "create.long"
+        if not _ID.match(name):
+            return 400, "create.chars"
+        if name.lower() in RESERVED:
+            return 400, "create.reserved"
+        base = self.workspace.projects_dir
+        # case-blind: on Windows and macOS "Sea" is the folder "sea"
+        if base.is_dir() and any(p.name.lower() == name.lower() for p in base.iterdir()):
+            return 409, "create.taken"
+        return None
+
+    def create_project(self, name) -> dict:
+        """A new project in the workspace's projects folder, on the workspace's profile."""
+        with self._create_lock:
+            problem = self.name_problem(name)
+            if problem is not None:
+                raise refused(problem[0], problem[1], name=str(name)[:64] if isinstance(name, str) else "")
+            base = self.workspace.projects_dir.resolve()
+            root = (base / name).resolve()
+            if root.parent != base:
+                raise refused(400, "create.chars", name=name)
+            # the window that asked is open already: the tool must not start another on the new project
+            P.skip_auto_open(root)
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+                result = TL.new_project(str(root))
+                ok, text = bool(getattr(result, "ok", True)), str(result)
+            except Exception as exc:  # noqa: BLE001 - the page says why instead of a bare 500
+                ok, text = False, f"{type(exc).__name__}: {exc}"
+            if not ok or not (root / PROJECT_FILE).is_file():
+                raise refused(500, "create.failed", error=S.tidier(base)(text).split("\n", 1)[0][:300])
+        self.bump_home()
+        return {"name": name, "url": f"/p/{name}/", "path": root.as_posix()}
+
+    def bump_home(self) -> None:
+        with self.home_changed:
+            self.home_seq += 1
+            self.home_changed.notify_all()
+
+    def home_signature(self, scan: bool = True) -> tuple:
+        """What the home's list depends on. An opened site answers from what its poll already knows; any other
+        project from a few file times and its running.json, re-read only when `scan` (else the last reading)."""
+        rows = []
+        for p in self.project_dirs():
+            site = self.sites.get(p.name)
+            if site is not None and site.opened:
+                run = site.running
+                rows.append((p.name, site.revision, run and (run["tool"], run["since"], run["stage"]),
+                             site.chat_busy, bool(site.action)))
+                continue
+            if scan or p.name not in self._home_scan:
+                run = P.running(p)
+                self._home_scan[p.name] = (tuple(_stamp_s(p / rel) for rel in LAST_CHANGE),
+                                           run and (run["tool"], run["since"], run["stage"]))
+            rows.append((p.name, *self._home_scan[p.name]))
+        return tuple(rows)
 
     def _poll(self) -> None:
+        home_sig, scanned = None, 0.0
         while not self.stopping.wait(POLL_S):
-            for site in list(self.sites.values()):
+            for site in [s for s in list(self.sites.values()) if s.opened]:
                 try:
                     site.poll()
                 except Exception:  # noqa: BLE001, S112 - a half-written file: the next poll reads it whole
                     continue
+            if self.workspace is None or not self.home_watchers:
+                home_sig = None
+                continue
+            scan = time.monotonic() - scanned >= HOME_SCAN_S
+            try:
+                sig = self.home_signature(scan)
+            except Exception:  # noqa: BLE001, S112 - a folder that moved mid-listing: the next poll reads it
+                continue
+            if scan:
+                scanned = time.monotonic()
+            if home_sig is not None and sig != home_sig:
+                self.bump_home()
+            home_sig = sig
 
     def stop_chats(self, wait_s: float = 15) -> None:
         """A closing window takes its chat's agent along (a CLI child would outlive it otherwise)."""
         sites = list(self.sites.values())
         for site in sites:
-            site.chat.stop()
+            if site._chat is not None:
+                site._chat.stop()
         for site in sites:
-            site.chat.wait(wait_s)
+            if site._chat is not None:
+                site._chat.wait(wait_s)
             site.wait_action(wait_s)
+
+    def release(self) -> None:
+        """Drop this server's claims on its projects (presence)."""
+        for site in list(self.sites.values()):
+            site.release()
 
     def stop(self) -> None:
         self.stopping.set()
         self.stop_chats()
+        self.release()
         for site in list(self.sites.values()):
             with site.changed:
                 site.changed.notify_all()
+        with self.home_changed:
+            self.home_changed.notify_all()
         self.shutdown()
         self.server_close()
-
-
-def _esc(text: str) -> str:
-    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def serve(target: str | Path, port: int = 0, chat_options: dict | None = None) -> WatchServer:
@@ -1211,5 +1451,6 @@ def main(argv: list[str] | None = None) -> int:
             P.forget_window(srv.target)
         srv.stopping.set()
         srv.stop_chats()
+        srv.release()
         srv.server_close()
     return 0

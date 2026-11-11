@@ -111,10 +111,18 @@ export function busy(el, on) {
   el.setAttribute("aria-busy", String(!!on));
 }
 
+// An open modal dialog sits in the top layer: a tip or note must live inside it to be seen.
+const layer = (el) => {
+  const host = document.querySelector("dialog[open]") || document.body;
+  if (el.parentElement !== host) host.append(el);
+  return el;
+};
+
 // A short note that appears next to a control and fades: the visible result of a click.
 let noteEl = null, noteTimer = 0;
 export function note(anchor, text, kind = "") {
-  noteEl ||= document.body.appendChild(h("div", { class: "ui-note", role: "status", "aria-live": "polite" }));
+  noteEl ||= h("div", { class: "ui-note", role: "status", "aria-live": "polite" });
+  layer(noteEl);
   noteEl.textContent = text;
   noteEl.className = `ui-note ${kind}`;
   hideTip();
@@ -144,7 +152,8 @@ function adopt(el) {
   return el.dataset.tip ? el : null;
 }
 function showTip(el) {
-  tipEl ||= document.body.appendChild(h("div", { class: "ui-tip", role: "tooltip", hidden: true }));
+  tipEl ||= h("div", { class: "ui-tip", role: "tooltip", hidden: true });
+  layer(tipEl);
   const text = el.dataset.tip;
   if (!text || !el.isConnected) return hideTip();
   tipEl.replaceChildren(h("span", { text }), ...(el.dataset.key ? [h("kbd", { text: el.dataset.key })] : []));

@@ -9,7 +9,7 @@ from pathlib import Path
 SIZE = (1440, 900)
 MIN_SIZE = (1100, 680)
 # the window's own ground (the page's --bg in each theme), so it never flashes another colour while the page loads
-GROUND = {"dark": "#121211", "light": "#f4f3f0"}
+GROUND = {"dark": "#121212", "light": "#f7f7f7"}
 ICON = Path(__file__).resolve().parent / "static" / "icon.ico"
 APP_ID = "reelsmith.watch"
 # Microsoft Edge WebView2 Runtime, then its Beta, Dev and Canary channels (the keys pywebview looks at)
