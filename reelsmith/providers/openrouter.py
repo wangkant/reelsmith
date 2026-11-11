@@ -137,10 +137,22 @@ class OpenRouter:
 
 # ------------------------------------------------------------------ speech
 DEFAULT_MODEL = "qwen/qwen-audio-3.0-tts-plus"
-ZH_VOICE = "longanlufeng"       # the default model's voice for Chinese and English locales (it speaks both)
+ZH_VOICE = "longanlufeng"       # the default model's voice for Chinese; it reads English with a Chinese accent
+EN_MODEL = "elevenlabs/eleven-multilingual-v2"
+EN_VOICE = "brian"              # a native English narrator
+PACE_NORMAL = 1.25              # speak's normal pace, calibrated on Qwen's brisk reading
+# models whose own normal speed is 1.0, and the range they accept (outside it the request is refused)
+NUMERIC_SPEED = (("elevenlabs/", 0.7, 1.2),)
+# published prices per 1,000 characters above the default estimate: OpenRouter reports no cost for speech
+LIST_USD_PER_1K = (("elevenlabs/", 0.08),)
 # Qwen TTS rejects a numeric `speed` (HTTP 400): its pace is steered by words instead.
 QWEN_SLOW_BELOW = 1.18
 QWEN_FAST_FROM = 1.30
+
+
+def list_rate(model: str) -> float:
+    """The model's published price per 1,000 characters where it is known, else 0."""
+    return next((rate for prefix, rate in LIST_USD_PER_1K if model.startswith(prefix)), 0.0)
 
 
 def qwen_pace(speed: float, zh: bool = True) -> str:
@@ -164,8 +176,13 @@ def speech_body(text: str, cfg: dict, speed: float, emotion: str = "") -> dict:
         if abs(sp - 1.0) > 0.01:
             instructions = (instructions + sep + qwen_pace(sp, zh)).strip(sep)
     else:
-        # speed_scale maps the Qwen-calibrated pace onto a voice that takes a numeric speed
-        scaled = round(min(2.0, sp * float(cfg.get("speed_scale") or 1.0)), 3)
+        scale = float(cfg.get("speed_scale") or 1.0)
+        held = next((r for r in NUMERIC_SPEED if body["model"].startswith(r[0])), None)
+        if held:
+            scaled = round(min(held[2], max(held[1], sp / PACE_NORMAL * scale)), 3)
+        else:
+            # speed_scale maps the Qwen-calibrated pace onto a voice that takes a numeric speed
+            scaled = round(min(2.0, sp * scale), 3)
         if abs(scaled - 1.0) > 0.01:
             body["speed"] = scaled
     if emotion:

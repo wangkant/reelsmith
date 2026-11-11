@@ -2,7 +2,7 @@
   "profile": "landscape",
   "locale": "en",
   "providers": {
-    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus"},
+    "tts": {"provider": "openrouter"},
     "image": {"provider": "codex"},
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"},
     "transcribe": {"provider": "openai", "model": "whisper-1"}

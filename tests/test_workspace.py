@@ -153,7 +153,7 @@ def test_example_workspace_matches_spec():
     # the starter is neutral: the default canvas and language, no owner rules, the voice chosen by the locale
     ws = W.Workspace.load(EXAMPLE)
     assert (ws.config["profile"], ws.locale) == ("landscape", "en")
-    assert ws.config["providers"]["tts"] == {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus"}
+    assert ws.config["providers"]["tts"] == {"provider": "openrouter"}     # model and voice follow the locale
     assert ws.config["providers"]["image"]["provider"] == "codex"
     assert ws.config["providers"]["video"] == {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro",
                                                "resolution": "720p"}

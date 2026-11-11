@@ -65,7 +65,7 @@ looked up in the process environment.
   "fonts": {"Brand Sans": "library/fonts/brand-sans.woff2"},
   "theme": {"name": "paper", "accent": "#C8372D"},
   "providers": {
-    "tts": {"provider": "openrouter", "model": "qwen/qwen-audio-3.0-tts-plus", "voice": "<voice id>"},
+    "tts": {"provider": "openrouter", "model": "<model id>", "voice": "<voice id>"},
     "image": {"provider": "codex"},
     "video": {"provider": "openrouter", "model": "bytedance/seedance-1-5-pro", "resolution": "720p"},
     "transcribe": {"provider": "openai", "base_url": "https://api.openai.com/v1", "model": "whisper-1"}
@@ -571,16 +571,17 @@ characters) is passed to the voice as an instruction.
 | key | default | meaning |
 |---|---|---|
 | `provider` | `openrouter` | `openrouter`: OpenRouter's `/audio/speech`; `openai`: any OpenAI-compatible `/audio/speech` (below) |
-| `model` | the provider's | `qwen/qwen-audio-3.0-tts-plus` on OpenRouter, `gpt-4o-mini-tts` on `openai` |
-| `voice` | by the locale | OpenRouter: `longanlufeng` for a Chinese or an English locale (the default model's two voices, `longanlufeng` and `longanlingxin`, speak Mandarin and English in Alibaba Cloud's Qwen-Audio TTS voice list; OpenRouter's model page lists a model's voices); any other locale must name a voice of its model that speaks it, and `speak` says so instead of reading the script in the wrong language. `openai`: `alloy` (OpenAI's voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; `tts-1` has the first nine bar `ballad`) |
+| `model` | by the locale | OpenRouter: `qwen/qwen-audio-3.0-tts-plus` for a Chinese locale, `elevenlabs/eleven-multilingual-v2` otherwise; `openai`: `gpt-4o-mini-tts` |
+| `voice` | by the locale | OpenRouter: `longanlufeng` for a Chinese locale and `brian` (a native English narrator) for an English one. Qwen's two voices, `longanlufeng` and `longanlingxin`, also read English, with a Chinese accent; `speak` says so when an English film names a Qwen model. OpenRouter's model list gives each speech model's voices (`supported_voices`); any other locale must name a voice of its model that speaks it, and `speak` says so instead of reading the script in the wrong language. `openai`: `alloy` (OpenAI's voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; `tts-1` has the first nine bar `ballad`) |
 | `instructions` | `""` | a standing style instruction |
 | `speed_scale` | 1.0 | multiplies the speed a voice that takes a number gets |
-| `usd_per_1k_chars` | 0.02 | the estimate when the provider reports no cost (OpenAI's `tts-1` is $0.015, `tts-1-hd` $0.03) |
+| `usd_per_1k_chars` | 0.02 | the estimate when the provider reports no cost (OpenAI's `tts-1` is $0.015, `tts-1-hd` $0.03); on OpenRouter never below the model's published price (ElevenLabs $0.08) |
 | `line_lufs` | -12 | each line's loudness before the join |
 | `base_url`, `key_env`, `timeout_s` | `https://api.openai.com/v1`, `OPENAI_API_KEY`, 120 | `openai` only: the endpoint (OpenAI, or a local server), the name of its key in `.env` or the environment (`null` sends none) and the timeout per request |
 
 On OpenRouter the words `speak` adds for pace and emotion are Chinese for a Chinese locale and English otherwise (a
-non-Chinese locale is part of the line cache key, so they do not mix); Qwen takes its pace as words. The `openai`
+non-Chinese locale is part of the line cache key, so they do not mix); Qwen takes its pace as words, ElevenLabs as a
+number from 0.7 to 1.2 (1.0 is its normal reading). The `openai`
 provider posts `{model, input, voice, response_format: "mp3"}` with `speed` (the line's pace relative to normal,
 times `speed_scale`, 0.25-4) when it is not 1 and `instructions` (the standing ones and the emotion, in English) to
 models other than `tts-1` and `tts-1-hd`; a request is retried on 408, 409, 425, 429, 5xx and dropped connections.

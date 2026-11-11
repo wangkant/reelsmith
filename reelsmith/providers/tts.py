@@ -29,9 +29,10 @@ from .. import locales
 from .config import (Context, ProviderError, VOICE_JSON, context, exe, number, patient, project_locale, redact, rel,
                      run_tree, safe_tool, set_voice_if_unset, tail, write_json)
 from .ledger import _os_lock
-from .openrouter import DEFAULT_MODEL, KEY_NAME, MIN_AUDIO_BYTES, ZH_VOICE, OpenRouter, synthesize
+from .openrouter import (DEFAULT_MODEL, EN_MODEL, EN_VOICE, KEY_NAME, MIN_AUDIO_BYTES, PACE_NORMAL, ZH_VOICE,
+                         OpenRouter, list_rate, synthesize)
 
-PACE = {"slower": 1.10, "normal": 1.25, "faster": 1.35}
+PACE = {"slower": 1.10, "normal": PACE_NORMAL, "faster": 1.35}
 PACE_FACTOR = (0.5, 2.0)
 DEFAULT_GAP_S = 0.22
 MAX_GAP_S = 1.5
@@ -190,11 +191,13 @@ def _openai(ctx: Context, cfg: dict) -> OpenAITTS:
 ENGINES = {"openrouter": lambda ctx, cfg: OpenRouterTTS(cfg, ctx.key(KEY_NAME)), "openai": _openai}
 
 
-def default_model(cfg: dict) -> str:
-    """providers.tts.model, else the provider's default."""
+def default_model(cfg: dict, locale: str = "zh-CN") -> str:
+    """providers.tts.model, else the provider's default: on OpenRouter Qwen for Chinese, ElevenLabs otherwise."""
     if cfg.get("model"):
         return str(cfg["model"])
-    return OPENAI_MODEL if cfg.get("provider") == "openai" else DEFAULT_MODEL
+    if cfg.get("provider") == "openai":
+        return OPENAI_MODEL
+    return DEFAULT_MODEL if locales.is_chinese(locale) else EN_MODEL
 
 
 def default_voice(cfg: dict, locale: str) -> str:
@@ -203,12 +206,24 @@ def default_voice(cfg: dict, locale: str) -> str:
         return str(cfg["voice"])
     if cfg.get("provider") == "openai":
         return OPENAI_VOICE                     # its voices read whatever language the model speaks
-    # the default model's voices speak Mandarin and English (Alibaba Cloud's Qwen-Audio TTS voice list)
-    if locales.is_chinese(locale) or locales.language(locale) == "en":
+    model = str(cfg.get("model") or "")
+    if model.startswith("elevenlabs/") and locales.language(locale) == "en":
+        return EN_VOICE
+    # Qwen's voices speak Mandarin and English (Alibaba Cloud's Qwen-Audio TTS voice list); English with an accent
+    if model.startswith("qwen/") and (locales.is_chinese(locale) or locales.language(locale) == "en"):
         return ZH_VOICE
-    raise ProviderError(f"no voice for locale {locale}: the default voice ({ZH_VOICE}) speaks Mandarin and English. "
-                        f"Set providers.tts.voice in workspace.json to a voice of {cfg.get('model')} that speaks "
-                        f"{locale}, or use the openai provider (any OpenAI-compatible /audio/speech endpoint)")
+    raise ProviderError(f"no voice for locale {locale}: the default voices are {ZH_VOICE} ({DEFAULT_MODEL}) for "
+                        f"Chinese and {EN_VOICE} ({EN_MODEL}) for English. Set providers.tts.voice in workspace.json "
+                        f"to a voice of {model or 'the model'} that speaks {locale} (OpenRouter lists each speech "
+                        "model's voices), or use the openai provider (any OpenAI-compatible /audio/speech endpoint)")
+
+
+def accent_note(cfg: dict, locale: str) -> str:
+    """A word when a Chinese voice was chosen for an English film."""
+    if str(cfg.get("model") or "").startswith("qwen/") and locales.language(locale) == "en":
+        return (f" Note: {cfg.get('model')} reads English with a Chinese accent; leave providers.tts.model unset "
+                f"in workspace.json for the native English voice ({EN_VOICE}, {EN_MODEL}).")
+    return ""
 
 
 def make_engine(ctx: Context) -> TTSEngine:
@@ -370,6 +385,8 @@ def _processed(keys: list[str], cache: Path, target: float) -> list[Path]:
 def _estimate(cfg: dict, chars: int) -> float:
     rate = cfg.get("usd_per_1k_chars")
     rate = 0.0 if rate is None else number(rate, 0, 100, "providers.tts.usd_per_1k_chars")
+    if cfg.get("provider", "openrouter") == "openrouter":
+        rate = max(rate, list_rate(str(cfg.get("model") or "")))     # never below the published price
     return round(chars / 1000.0 * rate, 6)
 
 
@@ -380,9 +397,10 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
     Each line is a string or {"text", "pace"?, "emotion"?}:
     - pace: how fast the line is read, as a speed factor relative to the normal reading: a number 0.5-2.0 (1.0 =
       normal, 0.9 = 10% slower, 1.1 = 10% faster) or "slower" (0.88), "normal" (1.0, the default), "faster" (1.08).
-      A voice that takes a numeric speed gets the factor itself (times providers.tts.speed_scale). The default Qwen
-      voice takes words instead, so for it pace only picks one of three readings: below 0.944 slow and deliberate,
-      0.944 up to 1.04 brisk (the normal reading), 1.04 and up faster.
+      The default English voice (ElevenLabs) takes the factor itself, held to 0.7-1.2. The default Chinese voice
+      (Qwen) takes words instead, so for it pace only picks one of three readings: below 0.944 slow and deliberate,
+      0.944 up to 1.04 brisk (the normal reading), 1.04 and up faster. Other voices that take a number get it
+      calibrated on Qwen's reading (normal = 1.25), times providers.tts.speed_scale.
     - emotion: free words (at most 20 characters, e.g. "surprised", "serious", "laughing softly") passed to the TTS
       model as the line's style ("The mood of this line: ...", in Chinese for a Chinese locale on OpenRouter); models
       with an emotion field also get them there. There is no fixed list and no guarantee of effect: listen to the
@@ -397,9 +415,9 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
     gap = number(gap_s, 0, MAX_GAP_S, "gap_s")
     cfg = ctx.providers["tts"]
     target = number(cfg.get("line_lufs", -12.0), -30, -6, "providers.tts.line_lufs")
-    cfg["model"] = default_model(cfg)
+    locale = project_locale(ctx)
+    cfg["model"] = default_model(cfg, locale)
     if engine is None:
-        locale = project_locale(ctx)
         cfg.update(voice=default_voice(cfg, locale), locale=locale)
         engine = make_engine(ctx)
     cache = ctx.cache_dir / "tts"
@@ -424,7 +442,7 @@ def speak(project, lines, gap_s=DEFAULT_GAP_S, *, engine: TTSEngine | None = Non
         manifest = {"file": rel(ctx, out), "duration_s": duration, "lufs": lufs, "true_peak_db": peak,
                     "gap_s": round(gap, 3), "lines": timed}
         write_json(ctx.project / VOICE_JSON, manifest)
-        note = set_voice_if_unset(ctx)
+        note = set_voice_if_unset(ctx) + (accent_note(cfg, locale) if fresh else "")
     return _speak_text(manifest, len(fresh), len(set(keys)) - len(fresh), spent_note, note), False
 
 
