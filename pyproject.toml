@@ -10,7 +10,7 @@ readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
 requires-python = ">=3.10"
 authors = [{ name = "Qiankang Wang" }]
-dependencies = ["pydantic>=2.7", "mcp>=2.3,<3", "jsonschema>=4.20", "pillow>=11"]
+dependencies = ["pydantic>=2.7", "mcp>=2.3,<3", "jsonschema>=4.20", "pillow>=11", "rich>=13.7", "prompt_toolkit>=3.0.43"]
 
 [project.urls]
 Repository = "https://github.com/wangkant/reelsmith"
