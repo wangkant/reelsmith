@@ -30,7 +30,8 @@ from .. import render as R
 from .. import resolve as RS
 from .. import timeexpr as T
 from .. import tools as TL
-from ..workspace import PROJECT_FILE, WORKSPACE_FILE, WorkspaceError, find_workspace, project_file
+from ..workspace import PROJECT_FILE, WORKSPACE_FILE, Workspace, WorkspaceError, find_workspace, project_file
+from . import app as A
 from . import chat as C
 from . import presence as P
 from . import state as S
@@ -68,10 +69,13 @@ TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css"
          ".map": "application/json"}
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
-# names Windows will not give a folder, whatever the case
-RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 POSTER_H = 360
-PASSIVE = ("/api/frame", "/api/still", "/api/thumb", "/api/wave", "/favicon.ico")
+PASSIVE = ("/api/frame", "/api/still", "/api/thumb", "/api/wave", "/favicon.ico", "/api/upload")
+RENDER_TOOLS = ("render", "preview", "review")      # the tools that take the renderer (render._NODE_LOCK)
+APP_PUSH_S = 0.25                   # the application's films event at most this often
+APP_PAGES = {"/new": "new.html", "/library": "library.html", "/settings": "settings.html"}
+ENGINES_TTL_S = 15.0
+UPLOAD_CHUNK = 1024 * 1024
 HOME_SCAN_S = 2.0                   # projects no page has opened are looked at this often, while a home is open
 # a project's last change: the latest of these files' times
 LAST_CHANGE = ("project.json", ".history/activity.jsonl", ".history/log.jsonl", "out/film.mp4", "build/report.json",
@@ -143,6 +147,19 @@ def render_busy(root: Path) -> bool:
         return True
 
 
+def renderer_held() -> bool:
+    """Some thread of this process draws with the renderer now (one job at a time)."""
+    if R._NODE_LOCK.acquire(blocking=False):
+        R._NODE_LOCK.release()
+        return False
+    return True
+
+
+def waits_for_renderer(run: dict | None) -> bool:
+    """A renderer call with no stage yet while the renderer is held elsewhere: it waits its turn."""
+    return bool(run and run.get("tool") in RENDER_TOOLS and not run.get("stage") and renderer_held())
+
+
 def _prune(folder: Path, keep: int = KEEP_CACHED) -> None:
     files = sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in files[keep:]:
@@ -163,7 +180,7 @@ def card_facts(st: dict, base: str) -> dict:
     return {"title": st["project"]["title"], "duration": st["duration"], "valid": st["valid"], "empty": empty,
             "canvas": {"width": canvas.get("width"), "height": canvas.get("height")} if canvas else None,
             "result": {"state": st["result"]["state"], "accepted": st["result"]["accepted"]}, "poster": poster,
-            "revision": st["revision"]}
+            "revision": st["revision"], "errors": (st.get("summary") or {}).get("errors") or 0}
 
 
 def opens(path: str) -> bool:
@@ -278,6 +295,7 @@ class Site:
         self.root, self.base, self.player = root, base, player
         self.url = url                              # where this server shows the project, for presence
         self.opened = opened
+        self.gone = False                           # moved to the trash: its workers stop
         self._owned = False                         # this server recorded itself as the project's window
         self.cache = S.StateCache(root, base)
         self.changed = threading.Condition()
@@ -285,6 +303,7 @@ class Site:
         self._sig: tuple | None = None
         self.running: dict | None = None            # as last announced
         self.running_seq = 0                        # moves whenever the running call is announced
+        self.waiting = False                        # the running call waits for the renderer
         self._running_at = 0.0
         self.chat_seq = 0                           # moves with every chat payload
         self.chat_events: deque = deque(maxlen=CHAT_EVENTS)
@@ -306,6 +325,7 @@ class Site:
         self._action_lock = threading.Lock()
         self.action: dict | None = None             # the window's action at work: {"action", "since"}
         self.last_action: dict | None = None
+        self.on_chat = None                         # the workspace server hears every chat payload
 
     @property
     def chat(self) -> C.Chat:
@@ -353,12 +373,14 @@ class Site:
         """Announce a call that starts, moves to another stage or ends at once; its progress alone at most every
         RUNNING_PUSH_S."""
         now, was = P.running(self.root), self.running
+        waiting = waits_for_renderer(now)
         key = lambda r: r and (r["tool"], r["since"], r["stage"])  # noqa: E731
-        if key(now) == key(was) and (now is None or now["progress"] == was["progress"]
-                                     or time.monotonic() - self._running_at < RUNNING_PUSH_S):
+        if key(now) == key(was) and waiting == self.waiting and (
+                now is None or now["progress"] == was["progress"]
+                or time.monotonic() - self._running_at < RUNNING_PUSH_S):
             return
         with self.changed:
-            self.running, self._running_at = now, time.monotonic()
+            self.running, self._running_at, self.waiting = now, time.monotonic(), waiting
             self.running_seq += 1
             self.changed.notify_all()
 
@@ -367,6 +389,14 @@ class Site:
             self.chat_seq += 1
             self.chat_events.append((self.chat_seq, payload))
             self.changed.notify_all()
+        if self.on_chat is not None:
+            self.on_chat(self, payload)
+
+    @property
+    def queued(self) -> int | None:
+        """The chat turn's place in the workspace's queue while it waits for a free place."""
+        chat = self._chat
+        return chat.queued if chat is not None else None
 
     def chat_since(self, seq: int) -> tuple[list[dict], bool]:
         """(payloads after seq, whether some were already dropped); call with self.changed held."""
@@ -392,9 +422,12 @@ class Site:
             with self.changed:
                 self.revision = st["revision"]
                 self.changed.notify_all()
-        running = S.running_view(P.running(self.root), self.running_by())
+        run = P.running(self.root)
+        running = S.running_view(run, self.running_by(), waits_for_renderer(run))
+        pos = self.queued
+        queue = {"position": pos, **S.say("queue.waiting", position=pos)} if pos is not None else None
         return {**st, "running": running, "can": self.can(st), "action": self.action,
-                "last_action": self.last_action}
+                "last_action": self.last_action, "queue": queue}
 
     def running_by(self) -> str:
         return "window" if self.action else "chat" if self.chat_busy is not None else "agent"
@@ -555,7 +588,8 @@ class Site:
         holds the project; frames of a cut that has changed since are dropped (the page asks again)."""
         while True:
             with self._frames_lock:
-                if not self._frame_queue:
+                if not self._frame_queue or self.gone:
+                    self._frame_queue.clear()
                     self._frame_thread = None
                     return
             if self.rendering():
@@ -606,7 +640,7 @@ class Site:
         """The frames event for the batch; None, rendering nothing, when a render holds the project by now."""
         ready, failed, error = [], [], None
         with self._still:                       # one renderer at a time, /api/still included
-            if self.rendering():
+            if self.rendering() or self.gone or not self.root.is_dir():
                 return None
             work = self.watch_dir / "frames-work"
             try:
@@ -659,6 +693,8 @@ class Site:
         return path, row
 
     def _cached(self, sub: str, key: str) -> Path:
+        if self.gone or not self.root.is_dir():     # moved to the trash: never leave an empty folder behind
+            raise refused(404, "film.unknown", name=self.root.name)
         folder = self.watch_dir / sub
         folder.mkdir(parents=True, exist_ok=True)
         return folder / key
@@ -687,9 +723,10 @@ class Site:
         if out.is_file():
             return out
         if render_busy(self.root):
-            raise HTTPError(503, {"error": "a render of this project is running; stills wait for it", "busy": True})
+            raise HTTPError(202, {"error": "a render of this project is running; stills wait for it", "busy": True,
+                                  "pending": True})
         if not self._still.acquire(blocking=False):
-            raise HTTPError(503, {"error": "the renderer is busy with another still", "busy": True})
+            raise HTTPError(202, {"error": "the renderer is busy with another still", "busy": True, "pending": True})
         try:
             work = self.watch_dir / "still"
             shutil.rmtree(work, ignore_errors=True)
@@ -790,6 +827,10 @@ class Handler(BaseHTTPRequestHandler):
         self.head = False
         self.answer(self.post)
 
+    def do_PUT(self):
+        self.head = False
+        self.answer(self.put)
+
     def answer(self, handle) -> None:
         """Run one request; whatever goes wrong, the client gets a JSON answer unless the reply has begun."""
         self.started = False
@@ -802,6 +843,8 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
         except Exception as exc:  # noqa: BLE001 - a bad request must not drop the connection or print a traceback
+            if isinstance(exc, A.Refusal):
+                exc = refused(exc.status, exc.code, **exc.params)
             if isinstance(exc, HTTPError):
                 code, body = exc.code, exc.body
             elif isinstance(exc, ValueError):
@@ -831,6 +874,13 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, path: str) -> None:
         srv = self.server
         if srv.workspace is not None:
+            if path.startswith(("/api/app", "/api/films", "/api/formats", "/api/trash", "/api/library",
+                                "/api/settings")):
+                self.refuse_cross_site()
+                return self.app_get(path)
+            if path in APP_PAGES:
+                # a page not built yet: the films page, whose frame reaches every other page
+                return self.static(APP_PAGES[path] if (STATIC / APP_PAGES[path]).is_file() else "home.html")
             if path in ("/api/projects", "/api/home", "/api/home/events", "/api/session"):
                 self.refuse_cross_site()
                 if path == "/api/session":
@@ -842,7 +892,10 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 if m.group(2) is None:
                     return self.redirect(f"/p/{m.group(1)}/")
-                return self.site_route(srv.site(unquote(m.group(1)), opens(m.group(2))), m.group(2))
+                site = srv.site(unquote(m.group(1)), opens(m.group(2)))
+                if m.group(2) == "/api/state":
+                    srv.mark_seen(site.root.name)           # the film's own page has looked
+                return self.site_route(site, m.group(2))
             if path in ("/", "/index.html"):
                 return self.static("home.html")
             if path.startswith("/static/"):
@@ -852,7 +905,10 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 if path.startswith("/player/"):
                     return self.redirect(f"/p/{m.group(1)}{path}")      # its own fetches then carry the project
-                return self.site_route(srv.site(unquote(m.group(1)), opens(path)), path)
+                site = srv.site(unquote(m.group(1)), opens(path))
+                if path == "/api/state":
+                    srv.mark_seen(site.root.name)
+                return self.site_route(site, path)
             raise HTTPError(404, {"error": "not found"})
         return self.site_route(srv.site(None), path)
 
@@ -903,9 +959,89 @@ class Handler(BaseHTTPRequestHandler):
             return self.player(site.player, path[len("/player/"):])
         raise HTTPError(404, {"error": "not found"})
 
-    # ---- changes: the chat
-    def post(self, url) -> None:
-        body = self.body()
+    # ---- the application's pages ask
+    def app_get(self, path: str) -> None:
+        srv, q = self.server, self.query
+        if path == "/api/app":
+            return self.send_json(srv.app())
+        if path == "/api/app/events":
+            return self.app_events()
+        if path == "/api/films/suggest":
+            return self.send_json({"name": A.suggest(srv.ws_now(), str(q.get("text", ""))[:400])})
+        if path == "/api/formats":
+            return self.send_json(srv.formats())
+        if path == "/api/trash":
+            return self.send_json(A.trash_rows(srv.workspace))
+        if path == "/api/library":
+            return self.send_json(A.library(srv.ws_now()))
+        if path == "/api/library/preview":
+            got = srv.previews.get(q.get("name", ""), q.get("theme", "light"))
+            if got is None:
+                return self.send_json({"pending": True}, 202)
+            return self.send_file(got)
+        if path == "/api/settings":
+            return self.send_json(srv.settings())
+        raise HTTPError(404, {"error": "not found"})
+
+    def app_post(self, path: str, body: bytes) -> bool:
+        """The application's changes over the workspace; False for a path that is not one."""
+        srv = self.server
+        if path == "/api/projects":
+            name = self.json_body(body, '{"name": "..."}').get("name")
+            self.send_json(srv.create_project(name), 201)
+        elif path == "/api/films":
+            self.send_json(srv.create_film(self.json_body(body, '{"description": "...", "start": true}')), 201)
+        elif path == "/api/app/seen":
+            name = self.json_body(body, '{"name": "..."}').get("name")
+            srv.mark_seen(srv.project_dir(name).name)
+            self.send_json({"seen": True})
+        elif path == "/api/app/raise":
+            self.send_json(srv.raise_app())
+        elif path == "/api/settings":
+            self.send_json(srv.save_settings(self.json_body(body, '{"parallel": 3}')))
+        elif path == "/api/settings/key":
+            data = self.json_body(body, '{"name": "...", "value": "..."}')
+            A.write_key(srv.ws_now(), data.get("name"), data.get("value"))
+            srv.forget_engines()
+            self.send_json({"name": data["name"], "present": True})
+        elif path == "/api/settings/key/delete":
+            name = self.json_body(body, '{"name": "..."}').get("name")
+            A.delete_key(srv.ws_now(), name)
+            srv.forget_engines()
+            self.send_json({"name": name, "present": bool(os.environ.get(name))})
+        elif path == "/api/settings/checks":
+            self.send_json({"checks": srv.checks(fresh=True)})
+        elif path == "/api/reveal":
+            self.send_json(srv.reveal_place(self.json_body(body, '{"what": "workspace"}').get("what")))
+        else:
+            m = re.match(r"^/api/films/([^/]+)/(title|duplicate|trash|reveal)$", path)
+            t = re.match(r"^/api/trash/([^/]+)/(restore|delete)$", path)
+            if m:
+                name, op = unquote(m.group(1)), m.group(2)
+                data = self.json_body(body, "{}")
+                if op == "title":
+                    self.send_json(srv.retitle(name, data.get("title")))
+                elif op == "duplicate":
+                    self.send_json(srv.duplicate(name, data.get("name")), 201)
+                elif op == "trash":
+                    self.send_json(srv.trash_film(name))
+                else:
+                    self.send_json(srv.reveal_film(name, data.get("what")))
+            elif t:
+                tid = unquote(t.group(1))
+                if t.group(2) == "restore":
+                    self.send_json(srv.restore(tid))
+                else:
+                    A.delete_trashed(srv.workspace, tid)
+                    srv.bump_home()
+                    self.send_json({"deleted": True, "id": tid})
+            else:
+                return False
+        return True
+
+    # ---- changes
+    def check_change(self) -> None:
+        """A change comes from this server's own page: its Origin and its token."""
         origin = self.headers.get("Origin")
         if not origin or not self.server.own_origin(origin) or self.headers.get("Sec-Fetch-Site") in (
                 "cross-site", "same-site"):
@@ -913,10 +1049,51 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), self.server.token.encode()):
             raise HTTPError(403, {"error": f"refused: the {TOKEN_HEADER} header is missing or wrong (GET api/session "
                                            "gives it)"})
-        if self.server.workspace is not None and url.path == "/api/projects":
-            name = self.json_body(body, '{"name": "..."}').get("name")
-            return self.send_json(self.server.create_project(name), 201)
+
+    def put(self, url) -> None:
+        """PUT .../api/upload?name=<file name>: the file is the body, streamed to disk, then added as an asset."""
+        size = self.headers.get("Content-Length")
+        try:
+            self.check_change()
+            site, path = self.post_site(url.path)
+            if path != "/api/upload":
+                raise HTTPError(404, {"error": "not found"})
+            name = A.upload_name(self.query.get("name"))
+            if size is None or not size.isdigit() or int(size) > A.UPLOAD_MAX:
+                raise refused(413 if size and size.isdigit() else 411, "upload.size", max_gb=A.UPLOAD_MAX // 1024 ** 3)
+            site.claim()
+        except BaseException:
+            self.close_connection = True            # the unread body would be taken for the next request
+            raise
+        left = int(size)
+        folder = site.watch_dir / "uploads" / secrets.token_hex(8)
+        folder.mkdir(parents=True)
+        try:
+            with (folder / name).open("wb") as f:
+                while left > 0:
+                    chunk = self.rfile.read(min(UPLOAD_CHUNK, left))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    left -= len(chunk)
+            if left > 0:
+                self.close_connection = True
+                raise refused(400, "upload.incomplete")
+            got = A.import_files(site.root, [str(folder / name)])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.server.bump_home()
+        self.send_json(got)
+
+    def post(self, url) -> None:
+        body = self.body()
+        self.check_change()
+        if self.server.workspace is not None and self.app_post(url.path, body):
+            return
         site, path = self.post_site(url.path)
+        if path == "/api/import":
+            return self.send_json(self.server.import_into(site, self.json_body(body, '{"paths": ["..."]}').get(
+                "paths")))
         if path == "/api/chat":
             data = self.json_body(body, '{"message": "..."}')
             engine = data.get("engine")
@@ -976,7 +1153,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def asset_id(self) -> str:
         aid = self.query.get("asset", "")
-        if not _ID.match(aid):
+        if not _ID.fullmatch(aid):
             raise HTTPError(400, {"error": "asset must be an asset id"})
         return aid
 
@@ -1085,10 +1262,11 @@ class Handler(BaseHTTPRequestHandler):
                 break
             out = []
             if rev is not None and rev != sent:
-                out.append(("change", {"revision": rev, "running": S.running_view(running, site.running_by())}))
+                out.append(("change", {"revision": rev, "running": S.running_view(running, site.running_by(),
+                                                                                   site.waiting)}))
                 sent, seq = rev, now_seq
             elif now_seq != seq:
-                out.append(("running", S.running_view(running, site.running_by())))
+                out.append(("running", S.running_view(running, site.running_by(), site.waiting)))
                 seq = now_seq
             if lost:                    # this stream fell too far behind: the page refetches api/chat
                 last = chats[-1] if chats else {}
@@ -1102,6 +1280,46 @@ class Handler(BaseHTTPRequestHandler):
             for name, data in out:
                 self.wfile.write(f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
+
+    def app_events(self) -> None:
+        """Events: "films" when the list reads differently (at most every APP_PUSH_S), "ended" when a request ends."""
+        srv = self.server
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.close_connection = True
+        with srv.home_changed:
+            srv.home_watchers += 1
+            seq, ended_seq = srv.home_seq, srv.ended_seq
+        sent, quiet_since = None, time.monotonic()
+        try:
+            while not srv.stopping.is_set():
+                films = json.dumps(srv.app_films(), ensure_ascii=False)
+                with srv.home_changed:
+                    ended = [e for n, e in srv.ended if n > ended_seq]
+                    ended_seq = srv.ended_seq
+                out = [("films", films)] if films != sent else []
+                sent = films
+                out += [("ended", json.dumps(e, ensure_ascii=False)) for e in ended]
+                for name, data in out:
+                    self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode())
+                if out:
+                    quiet_since = time.monotonic()
+                elif time.monotonic() - quiet_since >= KEEPALIVE_S:
+                    self.wfile.write(b": keepalive\n\n")
+                    quiet_since = time.monotonic()
+                self.wfile.flush()
+                with srv.home_changed:
+                    if srv.home_seq == seq and srv.ended_seq == ended_seq:
+                        srv.home_changed.wait(timeout=KEEPALIVE_S)
+                    seq = srv.home_seq
+                if not srv.stopping.is_set():
+                    time.sleep(APP_PUSH_S)              # changes that come together go out together
+        finally:
+            with srv.home_changed:
+                srv.home_watchers -= 1
 
     def home_events(self) -> None:
         """A "projects" event whenever the list would read differently: a project added, a change, work starting or
@@ -1159,9 +1377,21 @@ class WatchServer(ThreadingHTTPServer):
         cache = ws.cache_dir / "watch" / "player" if ws else target / "build" / "watch" / "player"
         lib = ws.components_dir if ws and ws.components_dir.is_dir() else None
         self.player = Player(cache, lib)
+        self.desktop = False                        # a desktop window shows it (main sets this)
+        self.raise_window = None                    # brings that window forward (main sets this)
+        self.gate = A.Gate(A.parallel_of(ws.config if ws else {}), self.gate_moved)
+        self.chat_options = {**(chat_options or {}), "gate": self.gate}
+        self.marks = A.Marks(self.workspace) if self.workspace is not None else None
+        self.previews = A.Previews(self.workspace, self.player.version) if self.workspace is not None else None
+        self.ended: deque = deque(maxlen=PUSHED_EVENTS)     # (seq, "ended" payload) of requests that ended
+        self.ended_seq = 0
+        self._chat_facts: dict[str, tuple] = {}     # project -> (transcript stamp, app.chat_facts)
+        self._engines: tuple[float, list] | None = None
+        self._checks: list | None = None
         self.sites: dict[str | None, Site] = {}
         self._sites_lock = threading.Lock()
         self.stopping = threading.Event()
+        self.serving = False
         self._create_lock = threading.Lock()
         self.home_changed = threading.Condition()
         self.home_seq = 0                           # moves whenever the home's list would read differently
@@ -1199,6 +1429,7 @@ class WatchServer(ThreadingHTTPServer):
                 else:
                     root = self.project_dir(name)
                     site = Site(root, f"/p/{name}", self.player, self.chat_options, f"{self.url}p/{name}/", opened)
+                site.on_chat = self.chat_heard
                 self.sites[name] = site
             elif opened and not site.opened:
                 site.opened = True
@@ -1206,15 +1437,17 @@ class WatchServer(ThreadingHTTPServer):
 
     def project_dir(self, name: str) -> Path:
         base = self.workspace.projects_dir.resolve()
+        if not isinstance(name, str) or not _ID.fullmatch(name) or name.lower() in A.RESERVED:
+            raise refused(404, "film.unknown", name=str(name)[:64])
         root = (base / name).resolve()
-        if not _ID.match(name) or root.parent != base or not (root / PROJECT_FILE).is_file():
-            raise HTTPError(404, {"error": f"no project {name!r} in {base}"})
+        if root.parent != base or not (root / PROJECT_FILE).is_file():
+            raise refused(404, "film.unknown", name=name)
         return root
 
     def project_dirs(self) -> list[Path]:
         base = self.workspace.projects_dir
         return [p for p in (sorted(base.iterdir()) if base.is_dir() else [])
-                if p.is_dir() and _ID.match(p.name) and (p / PROJECT_FILE).is_file()]
+                if p.is_dir() and _ID.fullmatch(p.name) and (p / PROJECT_FILE).is_file()]
 
     def projects(self) -> list[dict]:
         """One row per project, the most recently changed first: what the home's cards show. Listing makes no Site:
@@ -1253,11 +1486,12 @@ class WatchServer(ThreadingHTTPServer):
         facts = self._facts(root, base)
         stamps = [_stamp_s(root / rel) for rel in LAST_CHANGE]
         working = None
-        view = S.running_view(P.running(root), site.running_by() if site else "agent")
+        run = P.running(root)
+        view = S.running_view(run, site.running_by() if site else "agent", waits_for_renderer(run))
         if view is not None:
             working = {"by": view["by"], "tool": view["tool"], "code": view["code"], "percent": view["percent"],
-                       "text": view["text"]}
-        elif site is not None and site.chat_busy is not None:
+                       "stage_code": view["stage_code"], "text": view["text"]}
+        elif site is not None and site.chat_busy is not None and site.queued is None:
             working = {"by": "chat", "tool": None, "code": "busy.chat", "percent": None, "text": S.TEXTS["busy.chat"]}
         elif site.rendering() if site is not None else render_busy(root):
             working = {"by": "agent", "tool": "render", "code": "busy.render", "percent": None,
@@ -1268,7 +1502,7 @@ class WatchServer(ThreadingHTTPServer):
     def home(self) -> dict:
         return {"workspace": {"name": self.workspace.root.name, "path": self.workspace.root.as_posix()},
                 "projects": self.projects(),
-                "names": {"pattern": _ID.pattern, "max": 64, "reserved": sorted(RESERVED)}}
+                "names": {"pattern": _ID.pattern, "max": 64, "reserved": sorted(A.RESERVED)}}
 
     def name_problem(self, name) -> tuple[int, str] | None:
         """(status, code) of why a new project cannot take this folder name; None when it can."""
@@ -1276,9 +1510,9 @@ class WatchServer(ThreadingHTTPServer):
             return 400, "create.empty"
         if len(name) > 64:
             return 400, "create.long"
-        if not _ID.match(name):
+        if not _ID.fullmatch(name):
             return 400, "create.chars"
-        if name.lower() in RESERVED:
+        if name.lower() in A.RESERVED:
             return 400, "create.reserved"
         base = self.workspace.projects_dir
         # case-blind: on Windows and macOS "Sea" is the folder "sea"
@@ -1286,8 +1520,8 @@ class WatchServer(ThreadingHTTPServer):
             return 409, "create.taken"
         return None
 
-    def create_project(self, name) -> dict:
-        """A new project in the workspace's projects folder, on the workspace's profile."""
+    def create_project(self, name, profile: str = "", locale: str = "") -> dict:
+        """A new project in the workspace's projects folder, on the workspace's profile unless one is named."""
         with self._create_lock:
             problem = self.name_problem(name)
             if problem is not None:
@@ -1300,7 +1534,7 @@ class WatchServer(ThreadingHTTPServer):
             P.skip_auto_open(root)
             try:
                 base.mkdir(parents=True, exist_ok=True)
-                result = TL.new_project(str(root))
+                result = TL.new_project(str(root), profile, "", "", locale)
                 ok, text = bool(getattr(result, "ok", True)), str(result)
             except Exception as exc:  # noqa: BLE001 - the page says why instead of a bare 500
                 ok, text = False, f"{type(exc).__name__}: {exc}"
@@ -1323,7 +1557,7 @@ class WatchServer(ThreadingHTTPServer):
             if site is not None and site.opened:
                 run = site.running
                 rows.append((p.name, site.revision, run and (run["tool"], run["since"], run["stage"]),
-                             site.chat_busy, bool(site.action)))
+                             site.chat_busy, bool(site.action), site.waiting))
                 continue
             if scan or p.name not in self._home_scan:
                 run = P.running(p)
@@ -1354,6 +1588,283 @@ class WatchServer(ThreadingHTTPServer):
                 self.bump_home()
             home_sig = sig
 
+    # ---- the application over the workspace
+    def ws_now(self):
+        """The workspace as its files say now (settings change while the application runs)."""
+        try:
+            return Workspace.load(self.workspace.root)
+        except WorkspaceError:
+            return self.workspace
+
+    def engine_rows(self, fresh: bool = False) -> list[dict]:
+        if fresh or self._engines is None or time.monotonic() - self._engines[0] > ENGINES_TTL_S:
+            self._engines = (time.monotonic(), C.engine_rows(self.ws_now(), self.chat_options.get("engines_fn")))
+        return self._engines[1]
+
+    def forget_engines(self) -> None:
+        self._engines = None
+        for site in list(self.sites.values()):
+            if site._chat is not None:
+                site._chat._engines = None
+
+    def chat_heard(self, site: Site, payload: dict) -> None:
+        """Every chat payload of every film: a request that ended marks the film unread and is announced."""
+        for row in payload.get("rows") or []:
+            if row.get("role") != "note" or row.get("kind") not in A.OUTCOMES:
+                continue
+            name = site.root.name
+            outcome = A.OUTCOMES[row["kind"]]
+            if self.marks is not None:
+                self.marks.ended(name, row.get("turn"), outcome)
+            with self.home_changed:
+                self.ended_seq += 1
+                self.ended.append((self.ended_seq, {"name": name, "turn": row.get("turn"), "outcome": outcome,
+                                                    "title": A.title_of(site.root)}))
+        self.bump_home()
+
+    def gate_moved(self) -> None:
+        """A turn entered, left or moved up the queue: every busy chat says its place again."""
+        for site in list(self.sites.values()):
+            chat = site._chat
+            if chat is not None and chat.busy is not None:
+                chat._tell([])
+        self.bump_home()
+
+    def mark_seen(self, name: str) -> None:
+        if self.marks is not None and self.marks.seen(name):
+            self.bump_home()
+
+    def chat_facts(self, root: Path) -> dict:
+        path = root / ".history" / "chat.jsonl"
+        stamp = S._stamp(path)
+        known = self._chat_facts.get(root.name)
+        if known is None or known[0] != stamp:
+            known = (stamp, A.chat_facts(A.last_rows(root)))
+            self._chat_facts[root.name] = known
+        return known[1]
+
+    def app_row(self, root: Path) -> dict:
+        row = self.project_row(root)
+        name = row["name"]
+        site = self.sites.get(name)
+        queue = site.queued if site is not None else None
+        unread = bool(self.marks.get(name).get("unread")) if self.marks is not None else False
+        chat = self.chat_facts(root.resolve())
+        attention = A.attention_of(row, chat, unread)
+        status = "working" if row["working"] else "queued" if queue is not None else (
+            "attention" if attention else "idle")
+        return {**row, "status": status, "queue": queue, "unread": unread, "attention": attention,
+                "last": chat["last"]}
+
+    def app_films(self) -> dict:
+        rows = []
+        dirs = self.project_dirs()
+        for gone in set(self._chat_facts) - {p.name for p in dirs}:
+            self._chat_facts.pop(gone, None)
+        for p in dirs:
+            try:
+                rows.append(self.app_row(p))
+            except Exception:  # noqa: BLE001, S112 - a film moved while it was read: the next list drops it
+                continue
+        rows.sort(key=lambda r: r["modified"] or "", reverse=True)
+        counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("working", "queued", "attention")}
+        return {"films": rows, "counts": counts, "parallel": self.gate.state()}
+
+    def app(self) -> dict:
+        rows = self.engine_rows()
+        ws = self.ws_now()
+        chosen = C.default_engine(rows, ws)
+        engine = next((r for r in rows if r["id"] == chosen), None)
+        if engine is None:
+            engine = {"id": None, "label": None, "available": False, "code": "chat.no_engine", "params": {}}
+        return {"workspace": {"name": self.workspace.root.name, "path": self.workspace.root.as_posix()},
+                "version": A.version_facts()["version"], "desktop": self.desktop, **self.app_films(),
+                "names": {"pattern": _ID.pattern, "max": 64, "reserved": sorted(A.RESERVED)},
+                "engine": {k: engine.get(k) for k in ("id", "label", "available", "code", "params")}}
+
+    def formats(self) -> dict:
+        from ..profiles import PLAYBOOKS, PROFILES
+        ws = self.ws_now()
+        try:
+            own = ws.profiles
+        except WorkspaceError:
+            own = {}
+        rows = [{"id": n, "width": p.width, "height": p.height, "fps": round(float(p.fps), 3),
+                 "platform": n in PLAYBOOKS, "origin": "workspace" if n in own else "built-in"}
+                for n, p in {**PROFILES, **own}.items()]
+        default = ws.config.get("profile") if isinstance(ws.config.get("profile"), str) else "landscape"
+        return {"default": default, "formats": rows}
+
+    def create_film(self, data: dict) -> dict:
+        from .. import locales
+        desc = data.get("description")
+        if desc is not None and not isinstance(desc, str):
+            raise refused(400, "create.description", max=C.MAX_MESSAGE)
+        desc = (desc or "").strip()
+        if len(desc) > C.MAX_MESSAGE:
+            raise refused(400, "create.description", max=C.MAX_MESSAGE)
+        fmt = data.get("format") or ""
+        if fmt and (not isinstance(fmt, str) or fmt not in {f["id"] for f in self.formats()["formats"]}):
+            raise refused(400, "create.format", format=str(fmt)[:40])
+        locale = data.get("locale") or ""
+        if locale:
+            try:
+                locale = locales.check(locale)
+            except (ValueError, TypeError):
+                raise refused(400, "create.locale", locale=str(locale)[:40]) from None
+        engine = data.get("engine")
+        if engine is not None and engine not in C.ENGINE_ORDER:
+            raise refused(400, "create.engine", engine=str(engine)[:40])
+        name = data.get("name")
+        if name is None or name == "":
+            name = A.suggest(self.ws_now(), desc)
+        made = self.create_project(name, fmt, locale)
+        out = {"name": made["name"], "url": made["url"], "turn": None, "queued": False}
+        if data.get("start") and desc:
+            site = self.site(made["name"])
+            try:
+                out["turn"] = site.send_chat(desc, engine, None)
+                out["queued"] = site.queued is not None
+            except HTTPError as exc:
+                out["refused"] = exc.body
+        return out
+
+    def film_busy(self, root: Path) -> bool:
+        site = self.sites.get(root.name)
+        if site is not None and (site.chat_busy is not None or site.action):
+            return True
+        return P.running(root) is not None or render_busy(root)
+
+    def retitle(self, name: str, title) -> dict:
+        root = self.project_dir(name)
+        if (not isinstance(title, str) or len(title.strip()) > A.TITLE_MAX
+                or re.search(r"[\x00-\x1f\x7f]", title)):
+            raise refused(400, "title.invalid", max=A.TITLE_MAX)
+        other = P.owner_elsewhere(root)
+        if other is not None:
+            raise refused(409, "owner.elsewhere", url=str(other.get("url") or ""), pid=other.get("pid"))
+        result = TL.edit(str(root), [{"op": "set", "path": "meta.title", "value": title.strip()}])
+        if not getattr(result, "ok", True):
+            raise refused(409, "title.failed", error=str(result).split("\n", 1)[0][:300])
+        self.bump_home()
+        return {"name": name, "title": title.strip()}
+
+    def duplicate(self, name: str, new) -> dict:
+        root = self.project_dir(name)
+        with self._create_lock:
+            if new is None or new == "":
+                new = A.free_name(A.folder_names(self.workspace.projects_dir), f"{name}-copy")
+            problem = self.name_problem(new)
+            if problem is not None:
+                raise refused(problem[0], problem[1], name=str(new)[:64] if isinstance(new, str) else "")
+            dest = (self.workspace.projects_dir.resolve() / new).resolve()
+            if dest.parent != self.workspace.projects_dir.resolve():
+                raise refused(400, "create.chars", name=new)
+            P.skip_auto_open(dest)
+            try:
+                dest.mkdir(parents=True)        # holds the name while the copy runs outside the lock
+            except OSError as exc:
+                raise refused(409, "duplicate.failed", error=str(exc.strerror or exc)) from None
+        A.duplicate(root, dest)
+        self.bump_home()
+        return {"name": new, "url": f"/p/{new}/"}
+
+    def drop_site(self, name: str) -> None:
+        with self._sites_lock:
+            site = self.sites.pop(name, None)
+        if site is not None:
+            site.gone = True
+            if site._still.acquire(timeout=STILL_TIMEOUT_S):    # a frame still being drawn finishes first
+                site._still.release()
+            site.release()
+            with site.changed:
+                site.changed.notify_all()
+        with self._home_lock:
+            self._home_facts.pop(name, None)
+        self._home_scan.pop(name, None)
+        self._chat_facts.pop(name, None)
+
+    def trash_film(self, name: str) -> dict:
+        root = self.project_dir(name)
+        if self.film_busy(root):
+            raise refused(409, "film.busy", name=name)
+        other = P.owner_elsewhere(root)
+        if other is not None:
+            raise refused(409, "owner.elsewhere", url=str(other.get("url") or ""), pid=other.get("pid"))
+        self.drop_site(name)
+        row = A.trash(self.workspace, root)
+        if self.marks is not None:
+            self.marks.rename(name, None)
+        self.bump_home()
+        return {"id": row["id"], "name": name}
+
+    def restore(self, tid: str) -> dict:
+        with self._create_lock:
+            name = A.restore(self.workspace, tid)
+        self.bump_home()
+        return {"name": name, "url": f"/p/{name}/"}
+
+    def reveal_film(self, name: str, what) -> dict:
+        root = self.project_dir(name)
+        if what not in ("folder", "out"):
+            raise refused(400, "reveal.what")
+        folder = root if what == "folder" else root / "out"
+        if not folder.is_dir():
+            raise refused(404, "reveal.no_film")
+        open_folder(folder)
+        return {"revealed": True, "what": what}
+
+    def reveal_place(self, what) -> dict:
+        """The Library and Settings pages' folders: the notes, the .env and the workspace itself."""
+        ws = self.ws_now()
+        places = {"workspace": self.workspace.root, "env": self.workspace.root / ".env", "notes": ws.notes_path}
+        if what not in places:
+            raise refused(400, "reveal.what")
+        target = places[what]
+        if not target.exists():
+            raise refused(404, "reveal.missing", path=target.as_posix())
+        open_folder(target if target.is_dir() else target.parent)
+        return {"revealed": True, "what": what}
+
+    def checks(self, fresh: bool = False) -> list:
+        from .. import doctor
+        if fresh or self._checks is None:
+            root = str(self.workspace.root)
+            self._checks = A.check_rows(doctor.run_checks(workspace=root, cwd=root))
+        return self._checks
+
+    def settings(self) -> dict:
+        ws = self.ws_now()
+        rows = self.engine_rows()
+        return {"engines": [{k: r[k] for k in ("id", "label", "available", "code", "params", "why")} for r in rows],
+                "default_engine": C.default_engine(rows, ws), "parallel": self.gate.limit,
+                "parallel_range": list(A.PARALLEL_RANGE), "budgets": A.budgets(ws), "keys": A.key_rows(ws),
+                "env_path": (ws.root / ".env").as_posix(), "spend": A.month_spend(ws), "checks": self.checks(),
+                **A.version_facts(), "workspace_path": ws.root.as_posix()}
+
+    def save_settings(self, data: dict) -> dict:
+        config = A.update_settings(self.ws_now(), data, C.ENGINE_ORDER)
+        if "parallel" in data:
+            self.gate.set_limit(A.parallel_of(config))
+        self.forget_engines()
+        return self.settings()
+
+    def import_into(self, site: Site, paths) -> dict:
+        site.claim()
+        got = A.import_files(site.root, paths)
+        self.bump_home()
+        return got
+
+    def raise_app(self) -> dict:
+        fn = self.raise_window
+        if fn is None:
+            return {"raised": False}
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - a window that cannot come forward still runs
+            return {"raised": False}
+        return {"raised": True}
+
     def stop_chats(self, wait_s: float = 15) -> None:
         """A closing window takes its chat's agent along (a CLI child would outlive it otherwise)."""
         sites = list(self.sites.values())
@@ -1369,6 +1880,24 @@ class WatchServer(ThreadingHTTPServer):
         """Drop this server's claims on its projects (presence)."""
         for site in list(self.sites.values()):
             site.release()
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        self.serving = True
+        super().serve_forever(poll_interval)
+
+    def stop_quietly(self) -> None:
+        """The end of a command: every request stopped, claims dropped, the socket closed, whichever thread served."""
+        self.stopping.set()
+        self.stop_chats()
+        self.release()
+        for site in list(self.sites.values()):
+            with site.changed:
+                site.changed.notify_all()
+        with self.home_changed:
+            self.home_changed.notify_all()
+        if self.serving:
+            self.shutdown()
+        self.server_close()
 
     def stop(self) -> None:
         self.stopping.set()

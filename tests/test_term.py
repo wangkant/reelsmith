@@ -692,16 +692,18 @@ def test_bare_reelsmith_without_a_terminal_keeps_the_usage(monkeypatch, capsys):
         cli.main([])
     assert stop.value.code == 2 and "usage: reelsmith" in capsys.readouterr().err
     help_text = cli._parser().format_help()
-    first = help_text.split("  command", 1)[1].split()[0]
-    assert first == "chat"
+    first = help_text.split("  command", 1)[1].split()[:2]
+    assert first == ["app", "Open"] and "\n    chat " in help_text
 
 
-def test_bare_reelsmith_in_a_terminal_starts_the_session(monkeypatch):
-    started = []
+def test_bare_reelsmith_in_a_terminal_opens_the_application(monkeypatch):
+    from reelsmith.watch import entry
+    started, opened = [], []
     monkeypatch.setattr(cli, "_terminal", lambda: True)
     monkeypatch.setattr(TC, "main", lambda argv: started.append(argv) or 0)
-    assert cli.main([]) == 0 and cli.main(["chat", "x", "--plain"]) == 0
-    assert started == [[], ["x", "--plain"]]
+    monkeypatch.setattr(entry, "main", lambda argv: opened.append(argv) or 0)
+    assert cli.main([]) == 0 and cli.main(["chat", "x", "--plain"]) == 0 and cli.main(["app", "y"]) == 0
+    assert opened == [[], ["y"]] and started == [["x", "--plain"]]
 
 
 def test_plain_mode_from_the_command_line(ws, monkeypatch, capsys):

@@ -6,11 +6,21 @@ import ja from "./i18n/ja.js";
 import ko from "./i18n/ko.js";
 import zhCN from "./i18n/zh-CN.js";
 import zhTW from "./i18n/zh-TW.js";
+import dePages from "./i18n/pages/de.js";
+import enPages from "./i18n/pages/en.js";
+import esPages from "./i18n/pages/es.js";
+import frPages from "./i18n/pages/fr.js";
+import jaPages from "./i18n/pages/ja.js";
+import koPages from "./i18n/pages/ko.js";
+import zhCNPages from "./i18n/pages/zh-CN.js";
+import zhTWPages from "./i18n/pages/zh-TW.js";
 
 // Each language names itself in its own script; the order is the menu's.
 export const LANGS = [
-  ["en", "English", en], ["zh-CN", "简体中文", zhCN], ["zh-TW", "繁體中文", zhTW], ["ja", "日本語", ja],
-  ["ko", "한국어", ko], ["es", "Español", es], ["fr", "Français", fr], ["de", "Deutsch", de],
+  ["en", "English", { ...en, ...enPages }], ["zh-CN", "简体中文", { ...zhCN, ...zhCNPages }],
+  ["zh-TW", "繁體中文", { ...zhTW, ...zhTWPages }], ["ja", "日本語", { ...ja, ...jaPages }],
+  ["ko", "한국어", { ...ko, ...koPages }], ["es", "Español", { ...es, ...esPages }],
+  ["fr", "Français", { ...fr, ...frPages }], ["de", "Deutsch", { ...de, ...dePages }],
 ];
 const BY = Object.fromEntries(LANGS.map(([code, , d]) => [code, d]));
 const KEY = "rs-watch:lang";
@@ -37,7 +47,7 @@ function fromUrl() {
 }
 
 export const lang = fromUrl() || chosen() || fromSystem();
-const dict = { ...en, ...BY[lang] };
+const dict = { ...BY.en, ...BY[lang] };
 const plural = new Intl.PluralRules(lang);
 
 // {n} picks the ".one" form when the language says n is singular and a ".one" form exists.
@@ -64,7 +74,7 @@ export function setLang(code) {
 // For the translator: the English keys a language does not have yet.
 export function missingKeys(code) {
   const d = BY[code] || {};
-  return Object.keys(en).filter((k) => !(k in d));
+  return Object.keys(BY.en).filter((k) => !(k in d));
 }
 window.__i18n = { missingKeys, langs: LANGS.map(([c]) => c) };
 

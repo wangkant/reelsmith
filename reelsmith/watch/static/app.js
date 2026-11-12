@@ -1,13 +1,14 @@
-import { getHistory, getState, subscribe } from "./api.js";
+import { BASE, getHistory, getState, postAt, putFile, subscribe } from "./api.js";
 import { createBeats } from "./beats.js";
 import { createChat } from "./chat.js";
 import { has, lang, t, translate } from "./i18n.js";
 import { createMonitor } from "./monitor.js";
 import { createPanel } from "./panel.js";
+import { mountShell } from "./shell.js";
 import { createTimeline } from "./timeline.js";
 import { createTop } from "./top.js";
 import { createTransport } from "./transport.js";
-import { busy, clamp, closeOnBackdrop, elapsed, h, installTips, lowerFirst, note, pressable, storage, store, tip } from "./util.js";
+import { busy, clamp, closeOnBackdrop, elapsed, h, installTips, isOff, lowerFirst, note, pressable, storage, store, tip } from "./util.js";
 
 installTips();
 translate();
@@ -509,6 +510,88 @@ addEventListener("keydown", (e) => {
   else if (k === "Escape" && panel.current() !== "chat") panel.show("chat");
   else if (k === "Escape" && app.selected) app.select(null);
   else if (k === "Escape" && app.beat != null) app.setBeat(null, { seek: false });
+});
+
+// ---------------------------------------------------------------- the frame: the sidebar, the palette's commands, media
+const shell = mountShell({ page: "film", beforeReload: () => app.keepPlace?.(), onTheme: () => app.emit("theme") });
+const press = (id) => () => { const b = $(id); if (isOff(b)) note(b, b.dataset.tip || ""); else b.click(); };
+const offOf = (id) => ($(id) && isOff($(id)) ? $(id).dataset.tip || "" : null);
+const addBtn = $("addMedia"), fileIn = $("mediaFile");
+let adding = false;
+function renderCommands() {
+  shell.commands([
+    { ic: "i-clapper", text: t("q.render"), run: press("qRender"), off: offOf("qRender") },
+    { ic: "i-checks", text: t("q.check"), run: press("qCheck"), off: offOf("qCheck") },
+    { ic: "i-undo", text: t("q.undo"), run: press("qUndo"), off: offOf("qUndo") },
+    { ic: "i-import", text: t("media.add"), run: () => { panel.show("assets"); pickMedia(); }, off: adding ? t("media.busy") : null },
+  ]);
+}
+app.on("state", renderCommands);
+app.on("conn", renderCommands);
+renderCommands();
+tip(addBtn, t("media.addTip"));
+function mediaResult(got) {
+  const added = (got.assets || []).length, refused = got.refused || [];
+  if (refused.length) {
+    const r = refused[0];
+    note(addBtn, t("media.refused", { name: r.name, why: has(r.code) ? t(r.code, r.params || {}) : r.code }), "is-error");
+  } else note(addBtn, t("media.added", { n: added }), "is-ok");
+  return added;
+}
+async function addMedia(job) {
+  if (adding) { note(addBtn, t("media.busy")); return; }
+  adding = true;
+  busy(addBtn, true);
+  renderCommands();
+  try {
+    const got = await job();
+    if (got) { mediaResult(got); refresh(); }
+  } catch (e) {
+    note(addBtn, t("media.failed", { why: e.code && has(e.code) ? t(e.code, e.params || {}) : e.message }), "is-error");
+  } finally {
+    adding = false;
+    busy(addBtn, false);
+    renderCommands();
+  }
+}
+// a file's bytes go up one after another; the answers are summed
+const uploadAll = (files) => addMedia(async () => {
+  const out = { assets: [], refused: [] };
+  for (const f of files) {
+    // the server takes only pictures, video and sound; anything else is turned away here
+    if (!/^(image|video|audio)\//.test(f.type)) { out.refused.push({ name: f.name, code: "upload.name", params: {} }); continue; }
+    try {
+      const got = await putFile(`${BASE}/api/upload?name=${encodeURIComponent(f.name)}`, f);
+      out.assets.push(...(got.assets || []));
+      out.refused.push(...(got.refused || []));
+    } catch (e) { out.refused.push({ name: f.name, code: e.code || "import.failed", params: e.params || { error: e.message } }); }
+  }
+  return out;
+});
+function pickMedia() {
+  const api = window.pywebview?.api;
+  if (api?.pick_files) {
+    addMedia(async () => {
+      const paths = await api.pick_files();
+      return paths?.length ? postAt(`${BASE}/api/import`, { paths }) : null;
+    });
+  } else fileIn.click();
+}
+pressable(addBtn, pickMedia);
+fileIn.addEventListener("change", () => { const files = [...fileIn.files]; fileIn.value = ""; if (files.length) uploadAll(files); });
+const veil = $("dropVeil"), mainEl = $("main") || document.body;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+let depth = 0;
+mainEl.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; veil.hidden = false; });
+mainEl.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+mainEl.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; veil.hidden = true; } });
+mainEl.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  depth = 0;
+  veil.hidden = true;
+  const files = [...e.dataTransfer.files];
+  if (files.length) { panel.show("assets"); uploadAll(files); }
 });
 
 // ---------------------------------------------------------------- start

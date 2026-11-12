@@ -80,6 +80,8 @@ body.ready .disc-chev { transition: transform var(--t) var(--ease); }
   border-radius: var(--r-l);
   background: var(--surface-2);
 }
+/* one or the other: an empty session already says what the window is for */
+.intro:has(+ .pane-chat .chat-log > .empty-state) { display: none; }
 .intro-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
 .intro-title { font-size: var(--fs-3); font-weight: 600; }
 .intro p { margin: 0; color: var(--text-2); font-size: var(--fs-2); line-height: 1.5; }

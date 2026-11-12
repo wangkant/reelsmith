@@ -472,7 +472,7 @@ def test_still_refuses_while_a_render_runs(served, demo):
     with W.R.project_lock(demo / "build"):
         assert W.render_busy(demo)
         code, _, body = get(served, "/api/still?t=1")
-    assert code == 503 and json.loads(body)["busy"] is True
+    assert code == 202 and json.loads(body)["busy"] is True        # pending, not a failure: the page asks again
     assert not W.render_busy(demo)
 
 
@@ -1669,7 +1669,9 @@ def test_a_chat_turn_and_an_action_never_start_together(chat_served, monkeypatch
 
 def test_every_code_the_page_translates_has_its_parameters():
     import re
-    en = (W.STATIC / "i18n" / "en.js").read_text("utf-8")
+    # the dictionary has two parts: the frame and films pages, and the Library and Settings pages
+    en = "".join((W.STATIC / "i18n" / part).read_text("utf-8") for part in ("en.js", "pages/en.js")
+                 if (W.STATIC / "i18n" / part).is_file())
     page = {k: set(re.findall(r"\{(\w+)\}", v)) for k, v in re.findall(r'^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"', en,
                                                                        re.M)}
     sent = {code: set(re.findall(r"\{(\w+)\}", text)) for code, text in S.TEXTS.items()}

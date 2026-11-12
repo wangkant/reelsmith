@@ -324,6 +324,50 @@ TEXTS = {
     "owner.elsewhere": "This film is open in another window ({url}). Requests and actions are available only there "
                        "until that window is closed.",
 }
+# the application's codes (the frame, the films, the library and the settings)
+APP_TEXTS = {
+    "film.unknown": "There is no film named \"{name}\" in this workspace",
+    "film.busy": "A request, an action or a render is running in this film; it can be moved once it has ended",
+    "title.invalid": "A title is one line of at most {max} characters",
+    "title.failed": "The title could not be changed: {error}",
+    "duplicate.failed": "The film could not be duplicated: {error}",
+    "trash.failed": "The film could not be moved: {error}",
+    "trash.unknown": "There is no film \"{id}\" in the trash",
+    "reveal.what": "Choose the film's folder or its output folder",
+    "reveal.missing": "{path} does not exist",
+    "create.format": "There is no format named \"{format}\"",
+    "create.locale": "\"{locale}\" is not a language tag such as en, zh-CN or ja",
+    "create.engine": "There is no engine named \"{engine}\"",
+    "create.description": "A description can be at most {max} characters long",
+    "import.empty": "Choose at least one file",
+    "import.too_many": "At most {max} files can be added at once",
+    "import.not_absolute": "The file is not given by its full path",
+    "import.missing": "The file does not exist",
+    "import.kind": "Files of type {ext} cannot be added; add an image, a video or an audio file",
+    "import.failed": "The file could not be added: {error}",
+    "upload.name": "The file name is not accepted; add an image, a video or an audio file",
+    "upload.size": "The file must state its size and be at most {max_gb} GB",
+    "upload.incomplete": "The upload ended before the whole file arrived",
+    "library.unknown": "There is no component named \"{name}\"",
+    "library.unusable": "The component \"{name}\" cannot be used: {error}",
+    "library.theme": "The theme must be light or dark",
+    "library.preview_failed": "The preview of \"{name}\" could not be rendered: {error}",
+    "settings.unknown": "\"{key}\" is not a setting",
+    "settings.engine": "There is no engine named \"{engine}\"",
+    "settings.parallel": "Requests at once must be a whole number from {min} to {max}",
+    "settings.budget": "The amount \"{key}\" must be a number of at least zero (a request budget above zero)",
+    "settings.workspace": "The workspace settings could not be saved: {error}",
+    "key.unknown": "\"{name}\" is not a key reelsmith reads",
+    "key.value": "The value of {name} must be one line of text",
+    "attention.reply": "The agent has replied with a question",
+    "attention.failed": "The last request did not complete",
+    "attention.refused": "The last render was refused",
+    "attention.issues": "The project has {n} errors",
+    "attention.to_accept": "The delivered film awaits acceptance",
+    "queue.waiting": "Waiting for a free place: number {position} in the queue",
+    "stage.renderer_wait": "waiting for the renderer",
+}
+TEXTS.update(APP_TEXTS)
 STAGES = {"check": ("stage.check", "checking the project"), "layout": ("stage.layout", "measuring layout"),
           "film": ("stage.film", "rendering frames"), "master": ("stage.master", "mastering loudness"),
           "film check": ("stage.film_check", "checking the film"), "sweep": ("stage.sweep", "measuring the whole film"),
@@ -342,14 +386,16 @@ def say(code: str, english: str | None = None, /, **params) -> dict:
     return {"code": code, "params": params, "text": english if english is not None else TEXTS[code].format(**params)}
 
 
-def running_view(row: dict | None, by: str) -> dict | None:
+def running_view(row: dict | None, by: str, waiting: bool = False) -> dict | None:
     """presence.running's row with what it means: by "window" (an action of this window), "chat" (its agent) or
-    "agent" (any other caller); a code, its parameters and the English sentence."""
+    "agent" (any other caller); a code, its parameters and the English sentence. `waiting`: the call waits for the
+    renderer, which another film holds."""
     if row is None:
         return None
     tool = str(row.get("tool") or "")
     verb = VERBS.get(tool, f"running {tool}")
-    stage = STAGES.get(row.get("stage") or "")
+    stage = (("stage.renderer_wait", APP_TEXTS["stage.renderer_wait"]) if waiting
+             else STAGES.get(row.get("stage") or ""))
     pct = None if row.get("progress") is None else round(row["progress"] * 100)
     text = verb[0].upper() + verb[1:] if by == "window" else f"The agent is {verb}"
     if stage:

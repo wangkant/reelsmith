@@ -1,7 +1,7 @@
 import { BASE, post as act } from "./api.js";
 import { kindName } from "./beats.js";
 import { has, t } from "./i18n.js";
-import { busy, clamp, clock, disable, elapsed, h, icon, isOff, lowerFirst, note, pressable, storage, store, timecode, tip } from "./util.js";
+import { busy, clamp, clock, disable, elapsed, h, icon, isOff, lowerFirst, note, pressable, storage, store, takeHandOff, timecode, tip } from "./util.js";
 import { disclosure, emptyState, money, rove, toolName } from "./panel.js";
 
 const MAX_MESSAGE = 8000;
@@ -717,6 +717,14 @@ export function createChat(app, panel) {
   grow();
   renderLog(true);
   renderControls();
+  // a first request the chat refused when the film was created: the text waits here with the reason
+  const handed = BASE ? takeHandOff(`film:${decodeURIComponent(BASE.slice(3))}`) : null;
+  if (handed?.text) {
+    app.showPanel?.("chat");
+    setInput(handed.text);
+    if (handed.refused) showErr(t("chat.notSent", { why: whyText(handed.refused).replace(/[.。．]\s*$/, "") }));
+    requestAnimationFrame(() => input.focus());
+  }
   listen();
   return { load };
 }

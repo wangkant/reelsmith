@@ -1,6 +1,8 @@
-import { ago, setupLanguage, setupTheme } from "./chrome.js";
+import { json, postAt } from "./api.js";
+import { ago } from "./chrome.js";
+import { mountShell } from "./shell.js";
 import { has, t, translate } from "./i18n.js";
-import { busy, disable, h, icon, installTips, isOff, note, pressable, shortTime, tip } from "./util.js";
+import { busy, disable, h, handOff, icon, installTips, isOff, note, pressable, shortTime, storage, store, tip } from "./util.js";
 
 installTips();
 translate();
@@ -10,8 +12,13 @@ const home = { data: null, status: "connecting", query: "" };
 const cards = new Map();            // project name -> {el, poster, img, ...}
 const SEARCH_FROM = 9;              // the search appears once there are more films than fit at a glance
 
-setupLanguage($("langBtn"), $("langMenu"), $("langName"));
-setupTheme($("themeSeg"));
+// a film the frame no longer lists (moved to the trash) leaves the shelf at once, before its poster is asked for again
+const shell = mountShell({ page: "films" }).on("films", (films) => {
+  if (!home.data) return;
+  const names = new Set(films.map((f) => f.name));
+  const kept = home.data.projects.filter((p) => names.has(p.name));
+  if (kept.length !== home.data.projects.length) { home.data.projects = kept; render(); }
+});
 
 // ---------------------------------------------------------------- the server
 async function getJSON(url) {
@@ -21,23 +28,6 @@ async function getJSON(url) {
   if (!r.ok) throw Object.assign(new Error(body?.error || `${r.status} ${r.statusText}`), { status: r.status, body });
   return body;
 }
-let token = null;
-async function post(url, body, again = true) {
-  token ||= (await getJSON("/api/session")).token;
-  const r = await fetch(url, {
-    method: "POST", cache: "no-store",
-    headers: { "Content-Type": "application/json", "X-Reelsmith-Token": token }, body: JSON.stringify(body),
-  });
-  let data = null;
-  try { data = await r.json(); } catch { /* no body */ }
-  if (r.status === 403 && again && /header/.test(data?.error || "")) {      // a restarted server has a new token
-    token = null;
-    return post(url, body, false);
-  }
-  if (!r.ok) throw Object.assign(new Error(data?.error || `${r.status} ${r.statusText}`), { status: r.status, code: data?.code, params: data?.params });
-  return data;
-}
-const reason = (e) => (e.code && has(e.code) ? t(e.code, e.params || {}) : e.message);
 
 let loading = null, again = false;
 async function load() {
@@ -92,14 +82,13 @@ function renderConn() {
   tip(c, t("status.goneTip"));
   const why = home.status === "reconnecting" ? t("status.goneTip") : null;
   for (const b of [$("newBtn"), $("emptyNew")]) disable(b, why, t("home.newTip"), "N");
+  cfRender();
 }
 
 function renderHead() {
   const d = home.data;
   if (!d) return;
-  $("wsName").textContent = d.workspace.name;
-  tip($("wsName"), d.workspace.path);
-  document.title = `${d.workspace.name} · reelsmith watch`;
+  document.title = `${t("frame.films")} · ${d.workspace.name}`;
   const n = d.projects.length;
   $("wsCount").textContent = n ? t("home.count", { n }) : "";
 }
@@ -277,93 +266,112 @@ const clear = $("searchClear");
 tip(clear, t("home.searchClear"));
 pressable(clear, () => { search.value = ""; home.query = ""; render(); search.focus(); });
 
-// ---------------------------------------------------------------- a new film
-const dlg = $("newDlg"), input = $("newName"), create = $("newCreate"), cancel = $("newCancel");
-let creating = false, opener = null;
-const refusedNames = new Set();        // taken by a folder the list does not show; only the server knew
-const RESERVED_FALLBACK = ["aux", "con", "nul", "prn"];
-
-function problem(name) {
-  const rules = home.data?.names || {};
-  if (!name) return { code: "create.empty", quiet: true };
-  if (name.length > (rules.max || 64)) return { code: "create.long" };
-  if (!new RegExp(rules.pattern || "^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$").test(name)) return { code: "create.chars" };
-  if ((rules.reserved || RESERVED_FALLBACK).includes(name.toLowerCase())) return { code: "create.reserved" };
-  if (refusedNames.has(name.toLowerCase()) || (home.data?.projects || []).some((p) => p.name.toLowerCase() === name.toLowerCase())) return { code: "create.taken" };
-  return null;
+// ---------------------------------------------------------------- the composer: describe a film, Enter creates it
+const cf = { form: $("cf"), text: $("cfText"), go: $("cfGo"), folder: $("cfFolder"), hint: $("cfHint"), more: $("cfMore"),
+  creating: false, seq: 0, timer: 0 };
+const reasonOf = (e) => (e?.code && has(e.code) ? t(e.code, e.params || {}) : e?.message || String(e));
+cf.text.placeholder = t("home.compose");
+cf.text.setAttribute("aria-label", t("home.compose"));
+tip(cf.more, t("home.composeMoreTip"));
+function cfGrow() {
+  cf.text.style.height = "auto";
+  cf.text.style.height = `${Math.min(cf.text.scrollHeight, 168)}px`;
 }
-function validate() {
-  const name = input.value;
-  const bad = problem(name);
-  const field = $("newField"), msg = $("newMsg");
-  field.classList.toggle("is-bad", !!bad && !bad.quiet);
-  field.classList.toggle("is-good", !bad);
-  msg.className = `field-msg ${bad && !bad.quiet ? "is-bad" : !bad ? "is-good" : ""}`;
-  msg.textContent = bad ? (bad.quiet ? t("new.hint") : t(bad.code, { name })) : t("new.available");
-  input.setAttribute("aria-invalid", String(!!bad && !bad.quiet));
-  disable(create, creating ? t("new.busy") : bad ? t(bad.code, { name }) : null, t("new.createTip"));
-  return !bad;
+function cfHint(text = null, kind = "") {
+  cf.hint.className = `cf-hint${kind ? ` ${kind}` : ""}`;
+  cf.hint.textContent = text ?? (cf.text.value.trim() ? t("home.composeHint") : "");
+  cf.form.classList.toggle("is-bad", kind === "is-bad");
 }
-function openNew(from) {
-  if (isOff(from)) { note(from, from.dataset.tip || ""); return; }
-  opener = from;
-  input.value = "";
-  $("newErr").hidden = true;
-  validate();
-  dlg.showModal();
-  input.focus();
+function cfRender() {
+  const lost = home.status === "reconnecting";
+  const why = cf.creating ? t("home.composeBusy") : lost ? t("status.goneTip") : !cf.text.value.trim() ? t("home.composeEmpty") : null;
+  disable(cf.go, why, t("newp.createTip"), "Enter");
+  cf.go.setAttribute("aria-label", t("newp.createStart"));
 }
-function closeNew() { if (!creating) dlg.close(); }
-for (const b of [$("newBtn"), $("emptyNew")]) b.addEventListener("click", () => openNew(b));
-input.addEventListener("input", () => { $("newErr").hidden = true; validate(); });
-tip(cancel, t("new.cancel"));
-pressable(cancel, closeNew);
-dlg.addEventListener("cancel", (e) => { if (creating) e.preventDefault(); });
-let downOn = null;
-dlg.addEventListener("pointerdown", (e) => { downOn = e.target; });
-dlg.addEventListener("click", (e) => { if (e.target === dlg && downOn === dlg) closeNew(); downOn = null; });
-dlg.addEventListener("close", () => { (opener?.isConnected && !opener.closest("[hidden]") ? opener : $("newBtn")).focus(); });
-
-$("newForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (creating) return;
-  if (!validate()) { note(create, create.dataset.tip, "is-error"); input.focus(); return; }
-  const name = input.value;
-  creating = true;
-  input.readOnly = true;
-  busy(create, true);
-  disable(create, t("new.busy"), t("new.createTip"));
-  disable(cancel, t("new.busy"), t("new.cancel"));
+async function cfSuggest() {
+  const text = cf.text.value.trim(), seq = ++cf.seq;
+  if (!text) { cf.folder.hidden = true; return; }
   try {
-    const res = await post("/api/projects", { name });
-    note(create, t("new.created"), "is-ok");
-    location.href = res.url;              // stays busy until the film's page replaces this one
-    return;
-  } catch (err) {
-    if (err.code === "create.taken") {       // the field says it; the list catches up
-      refusedNames.add(name.toLowerCase());
-      load();
-    } else {
-      $("newErr").hidden = false;
-      $("newErr").textContent = t("new.failed", { why: reason(err) });
-    }
-    note(create, t("new.failed", { why: reason(err) }), "is-error");
-  }
-  creating = false;
-  input.readOnly = false;
-  busy(create, false);
-  disable(cancel, null, t("new.cancel"));
-  validate();
-  input.focus();
+    const got = await json(`/api/films/suggest?text=${encodeURIComponent(text.slice(0, 400))}`);
+    if (seq !== cf.seq) return;
+    cf.folder.textContent = t("home.composeFolder", { name: got.name });
+    tip(cf.folder, t("newp.nameHint"));
+    cf.folder.hidden = false;
+  } catch { cf.folder.hidden = true; }      // the server names it on create
+}
+cf.text.value = storage("films-compose", "") || "";
+cf.text.addEventListener("input", () => {
+  store("films-compose", cf.text.value || null);
+  cfGrow();
+  cfHint();
+  cfRender();
+  clearTimeout(cf.timer);
+  cf.timer = setTimeout(cfSuggest, 250);
 });
+cf.text.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !e.isComposing) { cf.text.blur(); return; }
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  cfSubmit();
+});
+cf.form.addEventListener("submit", (e) => { e.preventDefault(); cfSubmit(); });
+async function cfSubmit() {
+  if (cf.creating) return;
+  if (isOff(cf.go)) { note(cf.go, cf.go.dataset.tip || "", "is-error"); cf.text.focus(); return; }
+  const text = cf.text.value.trim();
+  cf.creating = true;
+  cf.text.readOnly = true;
+  busy(cf.go, true);
+  cfRender();
+  cfHint(t("home.composeBusy"));
+  try {
+    const res = await postAt("/api/films", { description: text, start: true });
+    if (res.refused) {                              // never lost: the film's message box receives it, with the reason
+      handOff(`film:${res.name}`, { text, refused: res.refused });
+      store("films-compose", null);
+      location.href = res.url;
+      return;
+    }
+    cf.text.value = "";
+    store("films-compose", null);
+    cf.folder.hidden = true;
+    cfGrow();
+    cfHint(t("home.composeDone", { name: res.name }), "is-ok");
+    note(cf.go, t("home.composeDone", { name: res.name }), "is-ok");
+    shell.refresh();
+    load();
+  } catch (e) {
+    cfHint(t("home.composeFailed", { why: reasonOf(e) }), "is-bad");
+    note(cf.go, t("home.composeFailed", { why: reasonOf(e) }), "is-error");
+  }
+  cf.creating = false;
+  cf.text.readOnly = false;
+  busy(cf.go, false);
+  cfRender();
+  cf.text.focus();
+}
+cf.more.addEventListener("click", (e) => {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (cf.creating) { e.preventDefault(); return; }
+  if (cf.text.value.trim()) handOff("new", { text: cf.text.value.trim() });
+  busy(cf.more, true);
+});
+cfGrow();
+cfHint();
+cfRender();
+if (cf.text.value.trim()) cfSuggest();
 
-// ---------------------------------------------------------------- keys: "/" searches, "N" starts a new film
+// ---------------------------------------------------------------- a new film: its own page
+for (const b of [$("newBtn"), $("emptyNew")]) {
+  b.addEventListener("click", (e) => { if (!isLocked(b)) { if (!(e.ctrlKey || e.metaKey || e.shiftKey)) busy(b, true); } else { e.preventDefault(); note(b, b.dataset.tip || ""); } });
+}
+function isLocked(b) { return b.getAttribute("aria-disabled") === "true"; }
+
+// ---------------------------------------------------------------- keys: "/" searches (the frame has "N")
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || dlg.open) return;
-  const typing = e.target.closest?.("input, textarea, [contenteditable]");
-  if (typing) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (e.target.closest?.("input, textarea, [contenteditable]")) return;
   if (e.key === "/" && !$("searchBox").hidden) { e.preventDefault(); search.focus(); search.select(); }
-  else if (e.key === "n" || e.key === "N") { e.preventDefault(); openNew($("newBtn")); }
 });
 
 render();

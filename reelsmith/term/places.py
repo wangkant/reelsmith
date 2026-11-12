@@ -26,7 +26,7 @@ class Place:
         """The project lies in the workspace's projects folder, so the workspace server can open it."""
         return (self.workspace is not None and self.project is not None
                 and self.project.parent.resolve() == self.workspace.projects_dir.resolve()
-                and bool(_NAME.match(self.project.name)))
+                and bool(_NAME.fullmatch(self.project.name)))
 
 
 def locate(path: str | Path) -> Place:
@@ -64,7 +64,7 @@ def new_name(ws: Workspace, text: str = "", today: date | None = None) -> str:
 
 
 def valid_name(name: str) -> bool:
-    return bool(_NAME.match(name))
+    return bool(_NAME.fullmatch(name))
 
 
 NOTES = """# Notes

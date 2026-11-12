@@ -1,12 +1,11 @@
-/* The home of a workspace: its films as cards, a search, and the dialog that starts a new film. */
-.home { display: grid; grid-template-rows: 52px minmax(0, 1fr); height: 100vh; }
-.home .crumb h1 { font-size: var(--fs-5); }
-.home .top .btn.primary { margin-left: 4px; }
+/* The Films page: the workspace's films as cards and a search. */
+.home { height: 100%; }
+.shelf-head .facts { color: var(--text-3); font-size: var(--fs-3); }
 
 .shelf { min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
 .shelf-in { max-width: 1320px; margin: 0 auto; padding: 28px 32px 48px; }
 .shelf-head { display: flex; align-items: center; gap: 12px; min-height: 36px; margin-bottom: 18px; }
-.shelf-head h2 { font-size: var(--fs-6); font-weight: 600; letter-spacing: -0.015em; }
+.shelf-head h1 { font-size: var(--fs-6); font-weight: 600; letter-spacing: -0.015em; }
 
 /* ------------------------------------------------------------------ search: a quiet field, a line beneath */
 .search {
@@ -143,51 +142,42 @@ body.ready .poster img { transition: opacity 300ms var(--ease); }
 }
 .load-err > span { flex: 1; min-width: 0; color: var(--text); }
 
-/* ------------------------------------------------------------------ the new-film dialog */
-.new-film {
-  border: 0;
-  border-radius: var(--r-l);
-  padding: 24px;
-  background: var(--surface);
+/* ------------------------------------------------------------------ the composer: one line that grows, no box */
+.cf { margin: -4px 0 26px; }
+.cf-line {
+  display: flex; align-items: flex-end; gap: 12px;
+  padding: 2px 0 8px;
+  box-shadow: inset 0 -1px 0 var(--hair);
+}
+body.ready .cf-line { transition: box-shadow var(--t-fast) var(--ease); }
+.cf-line:hover { box-shadow: inset 0 -1px 0 var(--hair-2); }
+.cf-line:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
+.cf.is-bad .cf-line { box-shadow: inset 0 -2px 0 var(--err); }
+.cf textarea {
+  flex: 1; min-width: 0;
+  height: 34px; max-height: 168px;
+  border: 0; padding: 4px 0; background: none; outline: none; resize: none;
   color: var(--text);
-  box-shadow: var(--sh-3);
-  width: min(440px, calc(100vw - 48px));
-  margin-top: max(48px, 16vh);          /* a message that wraps grows the dialog downwards, not both ways */
-  animation: pop-in var(--t) var(--ease);
+  font-size: var(--fs-5); line-height: 1.45; letter-spacing: -0.005em;
 }
-:root[data-theme="dark"] .new-film { background: var(--surface-2); }
-.new-film::backdrop { background: var(--scrim); }
-.new-film h2 { margin: 0 0 6px; font-size: var(--fs-5); font-weight: 600; letter-spacing: -0.01em; }
-.new-about { margin: 0 0 18px; color: var(--text-2); font-size: var(--fs-3); line-height: 1.55; text-wrap: pretty; }
-.field-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-2); font-weight: 500; }
-.field {
-  display: flex; align-items: center;
-  height: 38px;
-  padding: 0 10px;
-  border-radius: var(--r-m) var(--r-m) 0 0;
-  background: var(--surface-2);
-  box-shadow: inset 0 -1px 0 var(--hair-2);
+.cf textarea::placeholder { color: var(--text-3); }
+.cf textarea[readonly] { color: var(--text-2); cursor: progress; }
+.cf-folder {
+  flex: none; max-width: 36%;
+  padding-bottom: 7px;
+  color: var(--text-3); font-family: var(--font-code); font-size: var(--fs-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-:root[data-theme="dark"] .field { background: var(--surface-3); }
-body.ready .field { transition: box-shadow var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease); }
-.field:hover { background: var(--surface-3); }
-:root[data-theme="dark"] .field:hover { background: var(--surface-4); }
-.field:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
-.field.is-bad, .field.is-bad:focus-within { box-shadow: inset 0 -2px 0 var(--err); }
-.field.is-good:focus-within { box-shadow: inset 0 -2px 0 var(--ok); }
-.field input { flex: 1; min-width: 0; height: 100%; border: 0; padding: 0; background: none; outline: none; font-family: var(--font-code); font-size: var(--fs-4); }
-.field input[readonly] { color: var(--text-2); cursor: progress; }
-.field-msg { min-height: 20px; margin: 6px 0 0; color: var(--text-3); font-size: var(--fs-2); line-height: 1.5; }
-.field-msg.is-bad { color: var(--err); }
-.field-msg.is-good { color: var(--ok); }
-.field-err { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--r-s); background: var(--err-soft); color: var(--err); font-size: var(--fs-3); }
-.new-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.cf-go { flex: none; margin-bottom: 1px; color: var(--text-3); }
+.cf-go:not([aria-disabled="true"]) { color: var(--accent); }
+.cf-go[aria-disabled="true"] { cursor: default; }
+.cf-foot { display: flex; align-items: center; gap: 12px; min-height: 28px; margin-top: 6px; }
+.cf-hint { flex: 1; min-width: 0; color: var(--text-3); font-size: var(--fs-2); line-height: 1.5; }
+.cf-hint.is-ok { color: var(--ok); }
+.cf-hint.is-bad { color: var(--err); }
+.cf-foot .text-btn { margin-right: -8px; color: var(--text-2); }
 
-@media (max-width: 1180px) {
+@container main (max-width: 940px) {
   .shelf-in { padding: 24px 24px 40px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 24px 18px; }
-}
-@media (max-width: 1160px) {
-  .home .crumb .facts { display: block; }
-  .home .lang-btn .lang-name { display: inline; }
 }

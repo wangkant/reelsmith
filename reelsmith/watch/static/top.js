@@ -183,26 +183,32 @@ export function createTop(app) {
   }
 
   // ---------------------------------------------------------------- language, theme
-  const langs = setupLanguage($("langBtn"), $("langMenu"), $("langName"), () => {
+  app.keepPlace = () => {
     try { sessionStorage.setItem("rs-watch:resume", JSON.stringify({ time: app.time, beat: app.beat })); } catch { /* private window */ }
-  });
+  };
+  const langs = setupLanguage($("langBtn"), $("langMenu"), $("langName"), app.keepPlace);
   app.closeMenus = () => langs.close(true);
   setupTheme($("themeSeg"), () => app.emit("theme"));
 
   // ---------------------------------------------------------------- the divider between the session and the stage
   const split = $("colSplit");
-  const fallback = () => Math.round(clamp(innerWidth * 0.356, 380, 560));
-  const maxW = () => Math.max(340, Math.min(680, innerWidth - 560));
+  // inside the frame the column starts after the sidebar and shares the main area's width
+  const area = () => document.getElementById("main") || document.documentElement;
+  const left = () => area().getBoundingClientRect().left;
+  const room = () => area().clientWidth || innerWidth;
+  const minW = () => (room() < 960 ? 300 : 340);
+  const fallback = () => Math.round(clamp(room() * 0.356, 340, 560));
+  const maxW = () => Math.max(minW(), Math.min(680, room() - 520));
   let userW = storage("session-w", null);
   function applyWidth() {
-    const w = Math.round(clamp(userW ?? fallback(), 340, maxW()));
+    const w = Math.round(clamp(userW ?? fallback(), minW(), maxW()));
     document.documentElement.style.setProperty("--session-w", `${w}px`);
     split.setAttribute("aria-valuenow", String(w));
-    split.setAttribute("aria-valuemin", "340");
+    split.setAttribute("aria-valuemin", String(minW()));
     split.setAttribute("aria-valuemax", String(maxW()));
   }
   function setWidth(px) {
-    userW = Math.round(clamp(px, 340, maxW()));
+    userW = Math.round(clamp(px, minW(), maxW()));
     store("session-w", userW);
     applyWidth();
     app.emit("layout");
@@ -213,7 +219,7 @@ export function createTop(app) {
     split.setPointerCapture(e.pointerId);
     split.classList.add("is-dragging");
     document.body.classList.add("is-resizing");
-    const move = (ev) => setWidth(ev.clientX);
+    const move = (ev) => setWidth(ev.clientX - left());
     const up = () => {
       split.classList.remove("is-dragging");
       document.body.classList.remove("is-resizing");

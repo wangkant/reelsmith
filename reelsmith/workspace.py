@@ -1,6 +1,7 @@
 """The workspace around a project (config, owner rules, keys, library, ledger) and a project's standard paths."""
 from __future__ import annotations
 
+import contextvars
 import copy
 import functools
 import json
@@ -24,6 +25,13 @@ FONT_EXTS = (".woff2", ".woff", ".ttf", ".otf")
 FONT_FAMILY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
 
 _KEY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+# per call, so tool calls in two films never wait on each other; the MCP server process uses REELSMITH_ROOT
+ROOT_FENCE: contextvars.ContextVar[str | None] = contextvars.ContextVar("reelsmith_root_fence", default=None)
+
+
+def root_fence() -> str | None:
+    """The folder projects and imports must stay inside, if any."""
+    return ROOT_FENCE.get() or os.environ.get("REELSMITH_ROOT") or None
 
 
 class WorkspaceError(ValueError):

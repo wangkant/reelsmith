@@ -1,4 +1,8 @@
-# reelsmith watch
+# The film window (reelsmith watch)
+
+This page describes one film's page and its routes. The application around it (the sidebar of every film, requests
+in several films at once, new films, the trash, media, the library and the settings) is described in
+[app.md](app.md); `reelsmith` alone or `reelsmith app` opens it, and each film's page there is the page below.
 
 `reelsmith watch` opens an editor window on the project your coding agent is editing: a desktop window of its
 own when the `app` extra is installed (`pip install -e ".[app]"`), else a tab in your browser. It is for
@@ -296,16 +300,18 @@ under `/p/<name>/`, beside the workspace's own:
 | `/api/state` | the whole state: canvas, duration, voice, tracks, beats, markers, chapters, assets, issues, render, result, spend, activity, history, running, can, action, summary, and a `revision` (which `running`, `can` and `action` do not move) |
 | `/api/events` | server-sent events: `change` with `{"revision", "running"}` whenever the state changes; `running` with the running call (or `null`) when one starts, changes stage or ends, and as its progress moves (at most once a second); `chat` with `{"rows", "busy", "turn", "stopping"}` (the new or changed transcript rows) as a turn proceeds, or `{"resync": true}` when the stream fell behind and the page should fetch `/api/chat`; `frames` when queued frames are ready; `action` when an action starts and ends |
 | `/api/session` | `{"token"}`: the server's random token, which every POST sends back as `X-Reelsmith-Token` |
-| `/api/chat` | `{"busy", "turn", "stopping", "engine", "session_engine", "engines": [{"id", "label", "available", "why", "code", "params"}], "spent_usd", "budget_usd", "messages"}`; `messages` are the last 200 rows; `engine` is the default (or the running turn's) |
+| `/api/chat` | `{"busy", "turn", "stopping", "queued" (the turn's place in the workspace's queue while it waits, else `null`), "engine", "session_engine", "engines": [{"id", "label", "available", "why", "code", "params"}], "spent_usd", "budget_usd", "messages"}`; `messages` are the last 200 rows; `engine` is the default (or the running turn's) |
 | `POST /api/chat` | body `{"message", "engine"?, "context"?: {"clip", "start", "end", "playhead"}}`: 202 `{"turn"}`; 409 while a turn runs or another window holds the project (`owner.elsewhere`); 400 for an empty message, one over 8000 characters, or an engine that cannot run here (the reason in `error`) |
 | `POST /api/chat/stop` | `{"stopped"}`: whether a turn was running and is being stopped |
 | `POST /api/action` | body `{"action"}`: runs render, check, undo or redo (202), or stops a chat turn; see [Actions](#actions) |
 | `POST /api/accept` | `{"accepted": {"at"}}`: records the current delivered film as accepted in `out/accepted.json`; 409 unless the result is `current`, or `owner.elsewhere` |
 | `POST /api/reveal` | `{"revealed": true, "folder": "out"}`: opens the folder of `out/film.mp4` in the file manager; 404 without a film |
+| `POST /api/import` | body `{"paths": [absolute paths]}`: each file added as an asset; see [app.md](app.md#media) |
+| `PUT /api/upload?name=` | the file as the body, streamed to disk and added as an asset; see [app.md](app.md#media) |
 | `/api/history/<n>` | the timeline right after edit batch `n` (`0`: before the first recorded batch) |
 | `/api/resolved` | the resolved film the renderer plays |
 | `/api/frame?t=&h=&w=&src=` | a JPEG of the film as it stands: from the delivered film while it matches the cut, else rendered by the engine (202 `{"pending": true}` while queued); see [Frames](#frames) |
-| `/api/still?t=&w=` | a JPEG of the film at `t`, rendered by the engine (cached by the resolved film, the renderer and components, and the files it shows); 503 `{"busy"}` while a render, preview or draft of the project holds its lock |
+| `/api/still?t=&w=` | a JPEG of the film at `t`, rendered by the engine (cached by the resolved film, the renderer and components, and the files it shows); 202 `{"busy": true, "pending": true}` while a render, preview or draft of the project, or another still, holds the renderer (the page asks again) |
 | `/api/thumb?asset=&t=&h=` | a small JPEG of an image or video asset |
 | `/api/wave?asset=` | `{"duration", "peaks"}` of an audio or video asset (`voice` = the narration) |
 | `/project/<path>` | a file under `assets/`, `voice/`, `out/` or `build/` (byte ranges work); nothing else |

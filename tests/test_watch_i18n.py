@@ -6,35 +6,36 @@ from pathlib import Path
 import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / "reelsmith" / "watch" / "static"
-LANGS = re.findall(r'\["([a-zA-Z-]+)", "[^"]+", \w+\]', (STATIC / "i18n.js").read_text(encoding="utf-8"))
+LANGS = re.findall(r'\["([a-zA-Z-]+)", "[^"]+", \{', (STATIC / "i18n.js").read_text(encoding="utf-8"))
 OTHERS = [code for code in LANGS if code != "en"]
 # Intl.PluralRules never answers "one" in these, so their ".one" forms would never be read.
 NO_ONE = {"zh-CN", "zh-TW", "ja", "ko"}
 HOLE = re.compile(r"\{(\w+)\}")
 # Names, units and symbols that read the same in every language.
-SAME_EVERYWHERE = {"reelsmith watch", "{n} fps", "{n} s", "s"}
+SAME_EVERYWHERE = {"reelsmith watch", "{n} fps", "{n} s", "s", "{id} · {w} × {h}, {fps} fps"}
 # Words a language shares with English by its own right (French and German editors say "clip" and "timeline").
 SAME_IN = {
-    "fr": {"Agent", "Animation", "Clip", "Films", "Pause", "Session", "Timeline", "Transcription", "Type", "Volume",
-           "{n} clips", "{n} films"},
-    "de": {"Agent", "Animation", "Clip", "Import", "Layout", "Pause", "Text", "Video"},
-    "es": {"Clip", "Error", "Video", "video", "{n} clips", "1 clip", "1 error"},
+    "fr": {"Agent", "Animation", "Clip", "Description", "Documentation", "Films", "Format", "Licence", "Notes", "Pages",
+           "Pause", "Session", "Timeline", "Transcription", "Type", "Version", "Volume", "{n} clips", "{n} films"},
+    "de": {"Agent", "Animation", "Clip", "Engine", "Format", "Import", "Layout", "Name", "Optional", "Pause", "System",
+           "Text", "Version", "Video"},
+    "es": {"Clip", "Error", "Manual", "No", "Video", "video", "{n} clips", "1 clip", "1 error"},
 }
 # The glossary, enforced: terms a language must not use because it settled on another for the same thing.
 NOT_THE_TERM = {
-    "zh-CN": [r"代理", r"请求(?!修正)", r"播放指针", r"时间轴(?!卡片)"],
-    "zh-TW": [r"成片", r"视频|視頻", r"软件|軟件", r"文件(?!夾)", r"播放頭", r"渲染", r"請求", r"[这们说后为]"],
-    "ja": [r"レンダリング", r"リクエスト", r"検査"],
-    "ko": [r"컷"],
+    "zh-CN": [r"代理", r"请求(?!修正)", r"播放指针", r"时间轴(?!卡片)", r"废纸篓"],
+    "zh-TW": [r"成片", r"视频|視頻", r"软件|軟件", r"文件(?!夾)", r"播放頭", r"渲染", r"請求", r"[这们说后为]", r"回收|廢紙簍"],
+    "ja": [r"レンダリング", r"リクエスト", r"検査", r"ごみ箱"],
+    "ko": [r"컷", r"쓰레기통"],
     "es": [r"vídeo", r"fragmento", r"tramo(?!s suprimidos|\s+suprimido)", r"[Pp]ulse\b", r"[Dd]escriba", r"[Vv]uelva a"],
-    "fr": [r"séquence", r"[Aa]ppuyez", r"[Vv]euillez", r"\bnarration"],
+    "fr": [r"séquence", r"[Aa]ppuyez", r"[Vv]euillez", r"\bnarration", r"[Rr]églages"],
     "de": [r"Timeline", r"\bStille Abschnitte", r"während der \{stage\}"],
 }
 
 
-def load(code: str) -> dict:
+def _part(path: Path, code: str) -> dict:
     """A dictionary file is `export default { "key": "value", ... };` with JSON strings."""
-    src = (STATIC / "i18n" / f"{code}.js").read_text(encoding="utf-8")
+    src = path.read_text(encoding="utf-8")
     body = src[src.index("export default {") + len("export default "):src.rindex("}") + 1]
     body = re.sub(r"^\s*//.*$", "", body, flags=re.M)
     body = re.sub(r",(\s*)\}$", r"\1}", body)
@@ -47,7 +48,19 @@ def load(code: str) -> dict:
     return json.loads(body, object_pairs_hook=unique)
 
 
+def load(code: str) -> dict:
+    """A language's strings: its main file and the Library and Settings pages' part; no key in both."""
+    main = _part(STATIC / "i18n" / f"{code}.js", code)
+    pages = _part(STATIC / "i18n" / "pages" / f"{code}.js", code)
+    assert not set(main) & set(pages), f"{code}: keys in both parts {sorted(set(main) & set(pages))}"
+    return {**main, **pages}
+
+
 EN = load("en")
+EN_MAIN = _part(STATIC / "i18n" / "en.js", "en")
+EN_PAGES = _part(STATIC / "i18n" / "pages" / "en.js", "en")
+# The pages part's own prefixes, so the two parts never compete for a key.
+PAGES_PREFIXES = ("pages.", "lib.", "set.", "library.", "settings.", "key.", "reveal.missing")
 
 
 def holes(s: str) -> set:
@@ -150,9 +163,35 @@ def test_french_spaces_before_high_punctuation():
     assert wrong == []
 
 
+@pytest.mark.parametrize("code", OTHERS)
+@pytest.mark.parametrize("part", ["main", "pages"])
+def test_each_key_sits_in_the_part_english_puts_it(code, part):
+    en = EN_MAIN if part == "main" else EN_PAGES
+    d = _part(STATIC / "i18n" / (f"{code}.js" if part == "main" else f"pages/{code}.js"), code)
+    need = {k for k in en if not (code in NO_ONE and k.endswith(".one") and k[:-4] in en)}
+    assert sorted(need - d.keys()) == [] and sorted(d.keys() - en.keys()) == []
+
+
+def test_pages_part_keeps_to_its_prefixes():
+    assert [k for k in EN_PAGES if not k.startswith(PAGES_PREFIXES)] == []
+
+
 def test_every_key_the_page_names_exists():
-    src = "".join(p.read_text(encoding="utf-8") for p in [*STATIC.glob("*.js"), STATIC / "index.html", STATIC / "home.html"]
+    src = "".join(p.read_text(encoding="utf-8") for p in [*STATIC.glob("*.js"), *STATIC.glob("*.html")]
                   if not p.name.startswith("i18n"))
     named = set(re.findall(r"""\bt\(\s*["']([\w.]+)["']""", src))
     named |= set(re.findall(r'data-i18n(?:-title)?="([\w.]+)"', src))
     assert sorted(named - EN.keys()) == []
+
+
+@pytest.mark.parametrize("code", LANGS)
+def test_settings_name_the_theme_choice_as_its_button_does(code):
+    d = {**EN, **load(code)}
+    assert d["theme.system"] in d["set.themeAbout"]
+
+
+@pytest.mark.parametrize("code", LANGS)
+def test_directions_name_the_pages_as_the_sidebar_does(code):
+    d = load(code)
+    for key, section in (("frame.trash.body", "set.sec.trash"), ("frame.engine.tip", "set.sec.agent")):
+        assert d["frame.settings"] in d[key] and d[section] in d[key], key

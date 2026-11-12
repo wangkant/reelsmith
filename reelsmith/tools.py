@@ -18,7 +18,8 @@ from .checks import check_project, platform_of
 from .media import run_tree
 from .profiles import PLAYBOOKS, ProfileError, choose, fps_label, parse_canvas
 from .watch import presence
-from .workspace import PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_file, project_root
+from .workspace import (PROJECT_FILE, WorkspaceError, find_workspace, profile_for, project_file, project_root,
+                        root_fence)
 
 ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "manual.md"
@@ -218,7 +219,7 @@ def _project(project: str, must_exist: bool = True) -> Path:
     if not isinstance(project, str) or not project.strip():
         raise ToolInputError("project must be the path of a project folder (the folder holding project.json)")
     root = project_root(project.strip())
-    allowed = os.environ.get("REELSMITH_ROOT")
+    allowed = root_fence()
     if allowed:
         base = Path(allowed).expanduser().resolve()
         if root != base and base not in root.parents:

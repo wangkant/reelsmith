@@ -1,6 +1,4 @@
-"""reelsmith <command> ...: the agent tools for scripts and people, plus `chat` (the interactive session, also
-`reelsmith` alone in a terminal), `run` (the self-hosted agent), `mcp` (the MCP server), `setup` (attach the server
-and skill to a coding agent) and `doctor` (check this machine)."""
+"""reelsmith <command> ...: the agent tools, plus app (also bare reelsmith), chat, run, mcp, setup and doctor."""
 import argparse
 import inspect
 import re
@@ -49,8 +47,9 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("project", help="the project folder (holding project.json)")
         return p
 
-    sub.add_parser("chat", help="Work in this terminal: open a film and ask the agent for changes (also `reelsmith` "
-                                "alone in a terminal)", add_help=False)
+    sub.add_parser("app", help="Open the application on this workspace: every film, requests in several at once, the "
+                               "library and the settings (also `reelsmith` alone in a terminal)", add_help=False)
+    sub.add_parser("chat", help="Work in this terminal: open a film and ask the agent for changes", add_help=False)
     cmd("manual", tools.manual).add_argument("project", nargs="?", default="",
                                              help="a project folder: its platform's playbook follows the manual")
     proj(cmd("describe", tools.describe)).add_argument("--at", help="seconds or a Time, e.g. line:3")
@@ -138,8 +137,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def command_parser(name: str) -> argparse.ArgumentParser:
-    """The parser that reads `reelsmith <name> ...`: chat, run, mcp, setup, doctor and watch have their own."""
-    if name == "chat":
+    """The parser that reads `reelsmith <name> ...`: app, chat, run, mcp, setup, doctor and watch have their own."""
+    if name == "app":
+        from .watch.entry import parser
+    elif name == "chat":
         from .term.console import parser
     elif name == "run":
         from .runner import parser
@@ -220,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["chat"] or (not argv and _terminal()):
+    if argv[:1] == ["app"] or (not argv and _terminal()):
+        from .watch.entry import main as app
+        return app(argv[1:])
+    if argv[:1] == ["chat"]:
         from .term.console import main as chat
         return chat(argv[1:])
     if argv[:1] == ["run"]:

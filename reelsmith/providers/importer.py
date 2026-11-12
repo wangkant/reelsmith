@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 from .. import netcheck
-from ..workspace import project_file
+from ..workspace import project_file, root_fence
 from .config import (Context, ProviderError, check_id, check_replaceable, context, header_size, number, probe,
                      read_project, register_asset, rel, safe_tool)
 
@@ -199,7 +199,7 @@ def _local_source(ctx: Context, source: str) -> Path:
     p = Path(source).expanduser()
     p = (p if p.is_absolute() else ctx.project / p).resolve()
     # the same fence tools._project puts around projects: a confined agent cannot pull files from elsewhere
-    fence = os.environ.get("REELSMITH_ROOT")
+    fence = root_fence()
     if fence:
         base = Path(fence).expanduser().resolve()
         if p != base and base not in p.parents:

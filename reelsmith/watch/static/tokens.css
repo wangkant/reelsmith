@@ -46,6 +46,10 @@
   --tip-bg: #1f1f1f;
   --tip-text: #f5f5f5;
   --scrim: rgba(24, 24, 24, 0.36);
+  /* the application's sidebar */
+  --side-bg: #f2f2f2;
+  --side-hover: rgba(24, 24, 24, 0.045);
+  --side-sel: rgba(24, 24, 24, 0.08);
 
   /* the stage is dark in both themes */
   --stage: #0d0d0d;
@@ -135,6 +139,9 @@
   --tip-bg: #333333;
   --tip-text: #f1f1f1;
   --scrim: rgba(0, 0, 0, 0.55);
+  --side-bg: #151515;
+  --side-hover: rgba(255, 255, 255, 0.045);
+  --side-sel: rgba(255, 255, 255, 0.085);
   --stage: #0a0a0a;
   --stage-2: #171717;
   --stage-3: #232323;

@@ -20,7 +20,7 @@ from reelsmith import guard
 from reelsmith import tools as rtools
 from reelsmith.agent import tools as AT
 from reelsmith.agent import web as W
-from reelsmith.workspace import find_workspace
+from reelsmith.workspace import find_workspace, root_fence
 
 REPO = Path(__file__).resolve().parent.parent
 DEMO = REPO / "tests" / "fixtures" / "demo"
@@ -157,11 +157,11 @@ def test_a_failing_reelsmith_call_is_flagged(demo):
     assert r.error and "no component" in r.text
 
 
-def test_reelsmith_root_is_set_for_the_call_only(demo, monkeypatch):
+def test_the_fence_is_set_for_the_call_only(demo, monkeypatch):
     @rtools.tool
     def where(project: str) -> str:
         """Where the fence is."""
-        return os.environ.get("REELSMITH_ROOT", "unset")
+        return root_fence() or "unset"
     tool = AT.reelsmith_tool("where", where, demo.project, demo.scope)
     assert tool.run({}).text == str(demo.scope.home)
     assert "REELSMITH_ROOT" not in os.environ

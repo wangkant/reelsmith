@@ -1,11 +1,14 @@
 # The terminal session
 
-`reelsmith chat` is the main way to work with reelsmith by hand: an interactive session in the terminal that lists
-the films of a workspace, opens one and sends requests to an agent, which edits, checks and renders the film while
-the session shows each step. Running `reelsmith` with no arguments in a terminal starts the same session.
+`reelsmith chat` works with reelsmith in the terminal: an interactive session that lists the films of a workspace,
+opens one and sends requests to an agent, which edits, checks and renders the film while the session shows each
+step. Running `reelsmith` with no arguments opens the application instead ([app.md](app.md)), which does the same
+for every film of the workspace at once in a window.
 
-The editor window ([watch.md](watch.md)) is its companion: `/window` opens it on the session itself, so a request
-sent from either one appears in both.
+The film window ([watch.md](watch.md)) is its companion: `/window` opens it on the session itself, so a request
+sent from either one appears in both. Requests started in the session keep to the workspace's limit of requests at
+once (`"watch": {"parallel": N}`); the limit is counted per process, so the session and an application running
+beside it each count their own.
 
 ## Start it
 

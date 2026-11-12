@@ -1,6 +1,4 @@
-"""`reelsmith chat` (and `reelsmith` alone in a terminal): the interactive session. prompt_toolkit reads the input
-(history, completion), rich writes the output; --plain, a pipe or a console prompt_toolkit cannot drive gets plain
-lines with the same features."""
+"""`reelsmith chat`: the session in this terminal (prompt_toolkit in, rich out, plain lines when it cannot)."""
 from __future__ import annotations
 
 import argparse
@@ -16,8 +14,8 @@ from .views import PlainView, RichView
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="reelsmith chat",
                                  description="Work with reelsmith in this terminal: list the films of a workspace, "
-                                             "open one and ask the agent for changes. `reelsmith` alone in a "
-                                             "terminal starts the same session.")
+                                             "open one and ask the agent for changes. `reelsmith` alone opens the "
+                                             "application instead (reelsmith app).")
     ap.add_argument("path", nargs="?", default="", help="a project or workspace folder (default: the current folder)")
     ap.add_argument("--lang", default=None, help=f"the interface language: {', '.join(i18n.LANGUAGES)}")
     ap.add_argument("--engine", default=None, help="the agent engine: agent-sdk, codex, dsh or api")
