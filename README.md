@@ -37,38 +37,29 @@ previous delivery is kept.
 NOT DELIVERED (stopped at layout): words sit where the viewer cannot read them (listed in layout): fix and render again
 ```
 
-## Terminal session
+## The application
+
+<p align="center">
+  <img src="docs/media/window.webp" width="100%" alt="The reelsmith application: a sidebar listing the workspace's films, one of them at work; the open film's session, where the agent has just changed a title's colour; the current cut playing above the film's five beats">
+</p>
+
+Running `reelsmith` in a workspace opens the application: a desktop window, or a browser tab without the `app`
+extra. A sidebar lists every film of the workspace with its state, and requests to the agent run in several films at
+once, each film showing its session, its current cut and its beats. A new film starts from a one-line description;
+media are added from the file dialog or by dropping files on a film; the Library shows the workspace's components,
+notes, rules and fonts, and Settings holds the engine, the budgets and the keys. The interface is available in eight
+languages, runs locally, and uses the engine already installed (Claude Agent SDK, Codex, DeepSeek Harness or any
+OpenAI-compatible API). See [docs/app.md](docs/app.md).
 
 <p align="center">
   <img src="docs/media/terminal.webp" width="100%" alt="The reelsmith terminal session: a list of the workspace's films, one opened, a request to make a title word red, the agent's three steps and its reply, and the cost of the request">
 </p>
 
-Running `reelsmith` in a workspace opens an interactive session. It lists the workspace's films; a number or a name
-opens one, and a sentence describing a new film creates it. Requests are entered at the prompt, each step the agent
-takes is printed as it happens, and every request ends with its duration and cost. `/render`, `/check`, `/undo`,
-`/status` and the other commands act on the open film, and `/window` opens the desktop window on the same
-conversation. The session is available in eight languages. See [docs/terminal.md](docs/terminal.md).
-
-```sh
-reelsmith                        # in a workspace, or in an empty folder to create one
-```
-
-## Monitoring window
-
-<p align="center">
-  <img src="docs/media/window.webp" width="100%" alt="The reelsmith window: on the left a session where the agent has changed a title's colour and inspected a frame, on the right the current cut playing above the film's five beats">
-</p>
-
-`/window` in the session, or `reelsmith watch <path>` on a workspace or a project, opens a desktop window for
-following the agent's work. Its home lists every film of the workspace. For the open film, a session records each
-step (edits, inspected frames, check results, the cost of paid calls) beside the current cut and the film's beats,
-one per narration line; requests can be entered there as well. The interface is available in eight languages with
-light and dark themes, runs locally, and uses the engine already installed (Claude Agent SDK, Codex, DeepSeek
-Harness or any OpenAI-compatible API). See [docs/watch.md](docs/watch.md).
+`reelsmith chat` holds the same conversation in the terminal. See [docs/terminal.md](docs/terminal.md).
 
 ```sh
 pip install -e ".[app]"          # the desktop window; without it, a browser tab
-reelsmith watch ~/studio/projects/first
+reelsmith                        # in a workspace, or in an empty folder to create one
 ```
 
 ## Installation
@@ -184,8 +175,9 @@ Paid calls are estimated first and refused above `budget.per_project_usd` (defau
 - [docs/editor-spec.md](docs/editor-spec.md): the full reference (project format, edit operations, providers,
   checks, profiles, the runner).
 - [docs/agents.md](docs/agents.md): attaching coding agents and running them headless.
+- [docs/app.md](docs/app.md): the application.
 - [docs/terminal.md](docs/terminal.md): the terminal session.
-- [docs/watch.md](docs/watch.md): the monitoring window.
+- [docs/watch.md](docs/watch.md): the window on a single film.
 - [docs/kit.md](docs/kit.md): `@reelsmith/kit`, for writing components.
 
 ## Development

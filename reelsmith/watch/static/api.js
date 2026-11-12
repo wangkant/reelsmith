@@ -1,4 +1,4 @@
-async function json(url) {
+export async function json(url) {
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) {
     let body = null;
@@ -31,6 +31,7 @@ export async function playerStatus() {
 export async function getStill(t, w, cut) {
   try {
     const r = await fetch(`/api/still?t=${t}&w=${w}&cut=${encodeURIComponent(cut || "")}`);
+    if (r.status === 202) return { error: (await r.json().catch(() => ({}))).error || "busy", busy: true };   // the renderer is busy: ask again
     if (r.ok) return { url: URL.createObjectURL(await r.blob()) };
     let body = {};
     try { body = await r.json(); } catch { /* not JSON */ }
@@ -81,16 +82,25 @@ async function getToken() {
 }
 
 // A POST with a JSON body; the server's reason is the error's message, with its code and parameters beside it.
-export async function post(url, body = {}, again = true) {
-  const r = await fetch(`${BASE}${url}`, {
-    method: "POST", cache: "no-store",
-    headers: { "Content-Type": "application/json", "X-Reelsmith-Token": await getToken() }, body: JSON.stringify(body),
-  });
+export const post = (url, body = {}) => postAt(`${BASE}${url}`, body);
+
+// The same to an address that is not the page's own film (the workspace's /api/... and other films' /p/<name>/...).
+export async function postAt(url, body = {}, again = true) {
+  return send(url, "POST", { "Content-Type": "application/json" }, JSON.stringify(body), again);
+}
+
+// A file streamed as the body of a PUT, for a browser tab that has no paths to give.
+export async function putFile(url, file) {
+  return send(url, "PUT", { "Content-Type": file.type || "application/octet-stream" }, file, true);
+}
+
+async function send(url, method, headers, body, again) {
+  const r = await fetch(url, { method, cache: "no-store", headers: { ...headers, "X-Reelsmith-Token": await getToken() }, body });
   let data = null;
   try { data = await r.json(); } catch { /* no body */ }
   if (r.status === 403 && again && /header/.test(data?.error || "")) {      // a restarted server has a new token
     token = null;
-    return post(url, body, false);
+    return send(url, method, headers, body, false);
   }
   if (!r.ok) {
     const err = new Error(data?.error || `${r.status} ${r.statusText}`);

@@ -89,6 +89,18 @@ export function store(key, value) {
   } catch { /* private window */ }
 }
 
+// Text one page hands to the next, per tab and never in the address: {text, refused?}.
+export function handOff(key, value) {
+  try { sessionStorage.setItem(`rs-watch:handoff:${key}`, JSON.stringify(value)); } catch { /* private window */ }
+}
+export function takeHandOff(key) {
+  try {
+    const k = `rs-watch:handoff:${key}`, v = sessionStorage.getItem(k);
+    sessionStorage.removeItem(k);
+    return v == null ? null : JSON.parse(v);
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------- controls
 // The tooltip text, its shortcut key, and the accessible name of an icon-only control in one place.
 export function tip(el, text, key = null, name = text) {

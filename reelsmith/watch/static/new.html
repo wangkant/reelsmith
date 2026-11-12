@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>New film · reelsmith</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script>
+  // The theme and language are settled before the first paint, so neither flashes.
+  (function () {
+    var d = document.documentElement, pick = "system";
+    try { pick = JSON.parse(localStorage.getItem("rs-watch:theme")) || "system"; } catch (e) {}
+    d.dataset.themePick = pick;
+    d.dataset.theme = pick === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : pick;
+    try { var l = JSON.parse(localStorage.getItem("rs-watch:lang")); if (l) d.lang = l; } catch (e) {}
+    // the desktop window (WebView2) draws its own window controls: their room is kept from the first paint
+    var f = window.__reelsmithFrame;
+    try { f = f || sessionStorage.getItem("rs-watch:frame"); } catch (e) {}
+    if (f === "frameless" || (!f && window.chrome && window.chrome.webview)) d.classList.add("frameless");
+  })();
+</script>
+<link rel="preload" href="/static/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/frame.css">
+<link rel="stylesheet" href="/static/pages.css">
+<script type="module" src="/static/new.js"></script>
+</head>
+<body class="app" data-page="new">
+<div class="app-frame">
+<aside class="side" id="side"></aside>
+<div class="app-main" id="main">
+<main class="page newp">
+  <form class="newp-form" id="newForm" autocomplete="off" novalidate>
+    <header class="page-head">
+      <h1 data-i18n="newp.title">New film</h1>
+      <p class="page-sub" data-i18n="newp.sub"></p>
+    </header>
+    <div class="newp-row">
+      <label class="fld-label" for="desc" data-i18n="newp.desc">Description</label>
+      <div class="fld" id="descField"><textarea id="desc" rows="4" maxlength="4000" aria-describedby="descMsg"></textarea></div>
+      <p class="fld-msg" id="descMsg" data-i18n="newp.descHint"></p>
+    </div>
+    <div class="newp-row">
+      <label class="fld-label" for="name" data-i18n="newp.name">Folder name</label>
+      <div class="fld" id="nameField"><input id="name" class="code" type="text" maxlength="80" spellcheck="false" autocapitalize="off" aria-describedby="nameMsg"></div>
+      <p class="fld-msg" id="nameMsg" aria-live="polite"></p>
+    </div>
+    <div class="newp-grid">
+      <div class="newp-row">
+        <label class="fld-label" for="format" data-i18n="newp.format">Format</label>
+        <div class="fld"><select id="format"></select><svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></div>
+      </div>
+      <div class="newp-row">
+        <label class="fld-label" for="locale" data-i18n="newp.locale">Language of the film</label>
+        <div class="fld"><select id="locale"></select><svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></div>
+      </div>
+    </div>
+    <div class="newp-grid">
+      <div class="newp-row">
+        <label class="fld-label" for="engine" data-i18n="newp.engine">Engine</label>
+        <div class="fld"><select id="engine"></select><svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></div>
+      </div>
+    </div>
+    <label class="newp-check"><input type="checkbox" id="start" checked><span><b data-i18n="newp.start">Send the description to the agent</b><small data-i18n="newp.startHint"></small></span></label>
+    <p class="form-err" id="formErr" role="alert" hidden></p>
+    <div class="newp-foot">
+      <span class="newp-why" id="why" aria-live="polite"></span>
+      <a class="text-btn" id="cancel" href="/" data-i18n="newp.cancel">Cancel</a>
+      <button class="btn primary" id="create" type="submit"><svg><use href="#i-plus"/></svg><span id="createText"></span><span class="spin" aria-hidden="true"></span></button>
+    </div>
+  </form>
+</main>
+</div>
+</div>
+</body>
+</html>

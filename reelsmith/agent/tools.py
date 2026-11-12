@@ -13,7 +13,6 @@ import itertools
 import logging
 import os
 import re
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -22,7 +21,7 @@ from pydantic import ValidationError
 
 from .. import guard
 from .. import tools as rtools
-from ..workspace import locale_for
+from ..workspace import ROOT_FENCE, locale_for
 from . import web as W
 
 log = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ GREP_FILES = 5000
 GREP_FILE_BYTES = 2 << 20
 LIST_SHOWN = 500
 _PRUNE_DIRS = {".git", "node_modules", "__pycache__"}
-_ROOT_LOCK = threading.RLock()
 
 
 @dataclass
@@ -134,17 +132,12 @@ def _show(path: Path, project: Path) -> str:
 # ------------------------------------------------------------------ reelsmith tools
 @contextlib.contextmanager
 def _confined(root: Path):
-    """REELSMITH_ROOT for the call, as the runner gives the MCP server: projects and imports stay inside it."""
-    with _ROOT_LOCK:
-        old = os.environ.get("REELSMITH_ROOT")
-        os.environ["REELSMITH_ROOT"] = str(root)
-        try:
-            yield
-        finally:
-            if old is None:
-                os.environ.pop("REELSMITH_ROOT", None)
-            else:
-                os.environ["REELSMITH_ROOT"] = old
+    """The fence for the call, as REELSMITH_ROOT is for the MCP server: projects and imports stay inside it."""
+    token = ROOT_FENCE.set(str(root))
+    try:
+        yield
+    finally:
+        ROOT_FENCE.reset(token)
 
 
 def _validation_text(exc) -> str:

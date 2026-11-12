@@ -1,5 +1,5 @@
 /* The window: top bar, the session column, the divider, the stage with its transport, the beats and the Tracks drawer. */
-.app { display: grid; grid-template-rows: 52px minmax(0, 1fr); height: 100vh; min-width: 1000px; }
+.film-app { display: grid; grid-template-rows: 52px minmax(0, 1fr); height: 100%; min-width: 0; }
 
 /* ------------------------------------------------------------------ top bar */
 .top {
@@ -345,6 +345,9 @@ body.ready .knob { transition: transform var(--t-fast) var(--ease); }
 .health.is-run { color: var(--accent); font-variant-numeric: tabular-nums; }
 .health:empty { display: none; }
 .beats-head .btn { flex: none; }
+.beats-head.no-sum .beats-sum { display: none; }
+.beats-head.is-tight #tracksBtn { width: 28px; padding: 0; justify-content: center; }
+.beats-head.is-tight #tracksBtn > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .beat-row { flex: 1 1 auto; display: flex; gap: 8px; min-height: 0; padding: 2px; margin: -2px; overflow-x: auto; overflow-y: hidden; scroll-padding: 8px; }
 body.is-tall .beat-row { flex-direction: column; overflow-x: hidden; overflow-y: auto; }
@@ -565,17 +568,17 @@ body.is-tall .d-pic img, body.is-tall .d-pic .no-pic { width: 54px; }
 .tl-empty-art rect { fill: none; stroke: var(--hair-2); stroke-width: 1.2; stroke-dasharray: 3 3; }
 
 /* ------------------------------------------------------------------ smaller windows */
-@media (max-width: 1240px) {
+@container main (max-width: 1000px) {
   .facts .c-fps { display: none; }
   .session-head { padding: 12px 16px 8px 20px; }
 }
-@media (max-width: 1160px) {
+@container main (max-width: 920px) {
   .facts { display: none; }
   .lang-btn .lang-name { display: none; }
   .status { max-width: 30ch; }
 }
 @media (max-height: 760px) {
-  .app { grid-template-rows: 48px minmax(0, 1fr); }
+  .film-app { grid-template-rows: 48px minmax(0, 1fr); }
   .stage-area { padding: 14px 18px; gap: 12px; }
   .transport { height: 48px; }
   .strip { height: 44px; }
@@ -583,4 +586,17 @@ body.is-tall .d-pic img, body.is-tall .d-pic .no-pic { width: 54px; }
   .b-body { padding: 6px 10px 8px; gap: 2px; }
   .beat:not(.is-open) .b-els { display: none; }
   .beats-head { margin-bottom: 6px; height: 28px; }
+}
+
+/* a narrow stage (a vertical film beside its beats): the transport keeps its essentials; S and M still work */
+.player { container: player / inline-size; }
+@container player (max-width: 560px) {
+  .transport .step-btn, .transport .vol-wrap, .transport .tc-sub { display: none; }
+}
+@container player (max-width: 460px) {
+  .transport #safeBtn, .transport .tc-total { display: none; }
+  .transport { gap: 6px; }
+}
+@container player (max-width: 360px) {
+  .transport .which, .transport #prevBeat, .transport #nextBeat { display: none; }
 }

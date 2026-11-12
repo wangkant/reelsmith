@@ -180,7 +180,7 @@ def clean_context(context) -> dict | None:
     if not isinstance(context, dict):
         raise ChatError(400, "context must be an object: {clip, start, end, playhead}", "chat.bad_context")
     out = {}
-    if isinstance(context.get("clip"), str) and _ID.match(context["clip"]):
+    if isinstance(context.get("clip"), str) and _ID.fullmatch(context["clip"]):
         out["clip"] = context["clip"]
     for key in ("start", "end", "playhead"):
         if _number(context.get(key)) is not None:
@@ -207,12 +207,14 @@ class Chat:
     """One project's chat. notify(payload) hears every new or changed row ({"rows", "busy", "turn", "stopping"})."""
 
     def __init__(self, root: Path, notify=None, *, query_fn=None, client_factory=None, tools_factory=None,
-                 engines_fn=None):
+                 engines_fn=None, gate=None):
         self.root = Path(root)
         self.path = self.root / TRANSCRIPT
         self.notify = notify
         self.seams = {"query_fn": query_fn, "client_factory": client_factory, "tools_factory": tools_factory}
         self.engines_fn = engines_fn or reason
+        self.gate = gate                        # the workspace's limit on turns running at once (app.Gate)
+        self._ticket: object | None = None      # this turn's place in the gate
         self._lock = threading.RLock()
         self.rows: list[dict] = self._load()
         self._next = max((int(r.get("id") or 0) for r in self.rows), default=0) + 1
@@ -258,10 +260,10 @@ class Chat:
         with self._lock:
             row = {"id": self._next, "ts": datetime.now().isoformat(timespec="seconds"), "role": role,
                    "text": text, "tool": None, "ok": None, "turn": turn, **extra}
+            self._write(row)
             self._next += 1
             self.rows.append(row)
             del self.rows[:-KEPT]
-            self._write(row)
         self._tell([row])
         return row
 
@@ -274,7 +276,13 @@ class Chat:
     def _tell(self, rows: list[dict]) -> None:
         if self.notify is not None:
             self.notify({"rows": [dict(r) for r in rows], "busy": self.busy is not None, "turn": self.busy,
-                         "stopping": self._stop.is_set()})
+                         "stopping": self._stop.is_set(), "queued": self.queued})
+
+    @property
+    def queued(self) -> int | None:
+        """The running turn's place in the workspace's queue (1 is next), None while it runs or nothing does."""
+        ticket = self._ticket
+        return self.gate.position(ticket) if self.gate is not None and ticket is not None else None
 
     # ---- what the page reads
     def engines(self) -> list[dict]:
@@ -300,6 +308,7 @@ class Chat:
             budget = None
         with self._lock:
             return {"busy": self.busy is not None, "turn": self.busy, "stopping": self._stop.is_set(),
+                    "queued": self.queued,
                     "engine": self.engine if self.busy is not None else default_engine(rows, ws),
                     "session_engine": state.get("engine") if state.get("session_id") else None,
                     "engines": rows, "spent_usd": round(float(state.get("cost_usd") or 0), 4), "budget_usd": budget,
@@ -340,17 +349,33 @@ class Chat:
             self.engine = engine
             self._stop.clear()
             self._calls = {}
-        self._add("user", message.strip(), turn, context=context, engine=engine)
-        self._thread = threading.Thread(target=self._work, args=(turn, message, engine, context),
-                                        name=f"reelsmith-chat-{turn}", daemon=True)
-        self._thread.start()
+            self._ticket = self.gate.ticket(self.root, turn) if self.gate is not None else None
+        try:
+            self._add("user", message.strip(), turn, context=context, engine=engine)
+            self._thread = threading.Thread(target=self._work, args=(turn, message, engine, context),
+                                            name=f"reelsmith-chat-{turn}", daemon=True)
+            self._thread.start()
+        except BaseException:
+            self._abandon(turn)
+            raise
         return turn
+
+    def _abandon(self, turn: int) -> None:
+        # a turn that never started must not hold the workspace's queue
+        with self._lock:
+            ticket, self._ticket = self._ticket, None
+            if self.busy == turn:
+                self.busy = self.engine = None
+        if ticket is not None:
+            self.gate.leave(ticket)
 
     def stop(self) -> bool:
         with self._lock:
             if self.busy is None:
                 return False
             self._stop.set()
+        if self.gate is not None:
+            self.gate.poke()                    # a queued turn leaves the queue at once
         self._tell([])
         return True
 
@@ -366,6 +391,11 @@ class Chat:
         return self.busy is None
 
     def _work(self, turn: int, message: str, engine: str, context: dict | None) -> None:
+        ticket = self._ticket
+        if ticket is not None and not self.gate.enter(ticket, self._stop):
+            self._ticket = None
+            self._finish(turn, {"aborted": runner.STOPPED, "cost_usd": 0.0})
+            return
         self._origin = presence.set_origin(self.root, turn=turn)
         try:
             ws = self._workspace()
@@ -377,6 +407,10 @@ class Chat:
         except Exception as exc:  # noqa: BLE001 - the window says why the turn failed
             row = {"error": str(exc) if isinstance(exc, WorkspaceError) else f"{type(exc).__name__}: {exc}",
                    "cost_usd": 0.0}
+        finally:
+            if ticket is not None:
+                self._ticket = None
+                self.gate.leave(ticket)         # the next queued turn may start
         self._finish(turn, row)
 
     def _heard(self, turn: int, kind: str, data: dict) -> None:

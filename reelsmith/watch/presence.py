@@ -195,7 +195,7 @@ def forget_window(root: Path) -> None:
 
 # ------------------------------------------------------------------ opening it by itself
 def wanted(root: Path) -> bool:
-    """REELSMITH_WATCH=1, or "watch": true in the workspace's workspace.json."""
+    """REELSMITH_WATCH=1, or "watch": true (or {"open": true}) in the workspace's workspace.json."""
     if os.environ.get(WATCH_ENV, "").strip() == "1":
         return True
     from ..workspace import WorkspaceError, find_workspace
@@ -203,7 +203,9 @@ def wanted(root: Path) -> bool:
         ws = find_workspace(root)
     except WorkspaceError:
         return False
-    return bool(ws and ws.config.get("watch") is True)
+    watch = ws.config.get("watch") if ws else None
+    # "watch": {"open": true, "parallel": N} once the application has written its settings there
+    return watch is True or (isinstance(watch, dict) and watch.get("open") is True)
 
 
 def skip_auto_open(root: Path) -> None:

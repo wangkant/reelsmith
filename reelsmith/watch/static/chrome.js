@@ -24,7 +24,7 @@ export function setupLanguage(btn, menu, nameEl, beforeReload = () => {}) {
 // Light, dark or the system's; onApply hears every change (the canvas colours follow it).
 export function setupTheme(seg, onApply = () => {}) {
   const dark = matchMedia("(prefers-color-scheme: dark)");
-  // the desktop window's own title bar follows the page (a browser tab has none to set)
+  // the desktop window's border (and, with the system frame, its title bar) follows the page; a browser tab has none
   const nativeTheme = () => { try { window.pywebview?.api?.set_theme?.(document.documentElement.dataset.theme); } catch { /* a browser */ } };
   function apply(pick, said) {
     const root = document.documentElement;

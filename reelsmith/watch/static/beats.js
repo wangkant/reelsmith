@@ -116,9 +116,8 @@ function issueText(is) {
 export function createBeats(app) {
   const $ = (id) => document.getElementById(id);
   const row = $("beatRow"), sum = $("beatsSum"), health = $("health");
-  let beats = [], key = "", frameApi = null;
-
-  fetch("/api/frame?t=0&w=16", { method: "HEAD" }).then((r) => { frameApi = r.ok; if (r.ok) render(true); }).catch(() => {});
+  let beats = [], key = "";
+  const frameApi = true;      // the server always cuts beat frames; an empty film has no beats to ask for
   const frameUrl = (sec) => `/api/frame?t=${sec.toFixed(2)}&w=320&cut=${encodeURIComponent(app.cut()?.revision || "")}`;
   function pic(c, b) {
     const mid = (Math.max(c.start, b ? b.start : c.start) + Math.min(c.end, b ? b.end : c.end)) / 2;
@@ -334,7 +333,17 @@ export function createBeats(app) {
       health.replaceChildren(icon("i-check"), t("beats.clean"));
       tip(health, t("beats.cleanTip"));
     }
+    fitHead();
   }
+  // one line in every language: the summary drops first, then the Tracks label (its icon and tooltip stay)
+  function fitHead() {
+    const head = sum.parentElement;
+    head.classList.remove("no-sum", "is-tight");
+    const over = () => head.scrollWidth > head.clientWidth + 1;
+    if (sum.scrollWidth > sum.clientWidth + 1 || over()) head.classList.add("no-sum");
+    if (over()) head.classList.add("is-tight");
+  }
+  new ResizeObserver(fitHead).observe(sum.parentElement);
   pressable(health, () => { if (health.getAttribute("role") === "button") app.showPanel("issues"); });
 
   // what moves with the playhead and the agent's progress, without rebuilding the cards
