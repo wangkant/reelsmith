@@ -121,6 +121,11 @@ and sizes itself to its box on any canvas. The agent can also write its own: a c
 JSON schema in the workspace library, built on a documented kit ([docs/kit.md](docs/kit.md)), type-checked and
 import-guarded.
 
+For films made entirely in code, the kit's stage primitives (grounds, a camera, torn photo cut-outs, paper, ink and
+drawn objects) act each narration line out, and every scene times its moves to the words it plays under, read from
+the voice. [examples/performance](examples/performance) is a complete one, and the built-in `AssetGrid` helps trace
+a picture's outline for a cut-out.
+
 ## Supported agents
 
 | Agent | Setup |
@@ -184,7 +189,7 @@ Paid calls are estimated first and refused above `budget.per_project_usd` (defau
 
 ```sh
 pip install -e ".[dev]" && pytest
-cd renderer && npm run typecheck && node test/selftest.mjs && cd ..
+cd renderer && npm run typecheck && node test/selftest.mjs && node test/stage.test.mjs && cd ..
 cd integrations/dsh && npm ci && npm test && cd ../..
 python integrations/sync_skills.py --check     # the plugin's copy of the skill
 ```

@@ -244,7 +244,7 @@ def test_component_checks(demo):
     assert find(issues, "error", "clip verdict", "props: unknown prop(s) colour")
     assert find(issues, "error", "clip verdict", "props.text: 22 characters; at most 12")
     assert find(issues, "error", "clip verdict.props.at", "line:99 is past the voice")
-    assert find(issues, "error", "clip count.name", "no component 'Counter'; there are: Arrow, BarCompare")
+    assert find(issues, "error", "clip count.name", "no component 'Counter'; there are: Arrow, AssetGrid, BarCompare")
     assert find(issues, "warning", "clip bill.props.rows[0].at", "after the clip ends")
 
 
@@ -412,7 +412,8 @@ def test_every_shipped_example_validates_against_its_schema():
     # a project folder need not exist: the library comes from the nearest workspace.json above it
     comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
     presets = {"Receipt", "Stamp", "CountUp", "BarCompare", "TimelineRule", "DotGrid", "EvidenceCard",
-               "Highlighter", "Arrow", "Parties", "QuoteCard", "NewsBrief", "Versus", "StoryBeats", "Seesaw"}
+               "Highlighter", "Arrow", "Parties", "QuoteCard", "NewsBrief", "Versus", "StoryBeats", "Seesaw",
+               "AssetGrid"}
     assert presets <= set(comps)
     assert comps["PriceTag"].source == "library"
     for name, comp in comps.items():

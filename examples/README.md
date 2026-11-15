@@ -11,3 +11,7 @@
   voice), `script.md` (its source, lines, picture prompts and storyboard) and the narration's line times. The
   pictures, clips and narration themselves are not in the repository; `speak`, `draw`, `animate` and `capture` make
   them again from `script.md`.
+- `performance/`: a workspace with one performance film (`projects/salt`, 13 s, vertical, English): a `ground`
+  clip, three scene components that act the narration out with the stage kit (two with drawn objects, one with a
+  torn photo cut-out), a head text clip and captions in the performance style. Everything it needs is in the
+  repository; `reelsmith render examples/performance/projects/salt` makes the film. Its README says how it was made.

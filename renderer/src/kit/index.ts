@@ -1,6 +1,6 @@
 // @reelsmith/kit: everything a component may import besides react, remotion and @remotion/*. Reference: docs/kit.md.
 export { useClip, ClipContext } from "./context";
-export type { ClipCtx } from "./context";
+export type { ClipCtx, ClipLine } from "./context";
 export { Media } from "../elements/Media";
 export { EvidenceCrop, evidenceLayout } from "../elements/EvidenceCrop";
 export { FONTS, fontFamily } from "../fonts";
@@ -10,3 +10,4 @@ export {
   themeColor, toFrames, TOKEN_NAMES, twoLines, withAlpha, words,
 } from "./helpers";
 export type { AssetRef, BlockOptions, FontName, Ground, SpringOptions, Tokens } from "./helpers";
+export * from "./stage";

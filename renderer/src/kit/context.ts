@@ -3,6 +3,10 @@ import { createContext, useContext } from "react";
 import { useVideoConfig } from "remotion";
 import type { Box, Theme } from "../types";
 
+/** A voice line heard during the clip: frames from the clip's start (from < 0: it began earlier; to > dur: it
+ *  runs on after the clip). */
+export type ClipLine = { i: number; text: string; from: number; to: number };
+
 export type ClipCtx = {
   /** the clip box size now (keyframed w/h included) */
   w: number;
@@ -20,6 +24,8 @@ export type ClipCtx = {
   locale: string;
   /** 0..1: the clip's "progress" keyframes, else its elapsed fraction */
   progress: number;
+  /** component clips: the voice lines overlapping the clip, in order; [] without a voice */
+  lines: ClipLine[];
 };
 
 export const ClipContext = createContext<ClipCtx | null>(null);
@@ -33,9 +39,9 @@ const FALLBACK_THEME: Theme = {
 export const useClip = (): ClipCtx => {
   const ctx = useContext(ClipContext);
   const { width, height, fps, durationInFrames } = useVideoConfig();
-  if (ctx) return ctx.locale ? ctx : { ...ctx, locale: "en" };
+  if (ctx) return ctx.locale && ctx.lines ? ctx : { ...ctx, locale: ctx.locale || "en", lines: ctx.lines ?? [] };
   return {
     w: width, h: height, dur: durationInFrames, fps, theme: FALLBACK_THEME, width, height,
-    safe: { x: 0, y: 0, w: width, h: height }, locale: "en", progress: 0,
+    safe: { x: 0, y: 0, w: width, h: height }, locale: "en", progress: 0, lines: [],
   };
 };

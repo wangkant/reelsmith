@@ -147,7 +147,10 @@ export type EvidenceContent = {
   highlight?: Highlight | null;
 };
 
-export type ComponentContent = { name: string; props?: Record<string, unknown> };
+/** `lines`: the voice lines overlapping the clip, in frames from its start (useClip().lines). */
+export type ComponentContent = {
+  name: string; props?: Record<string, unknown>; lines?: { i: number; text: string; from: number; to: number }[];
+};
 
 export type ClipType = "image" | "video" | "text" | "shape" | "evidence" | "component";
 

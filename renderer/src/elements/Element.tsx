@@ -3,7 +3,7 @@
 // the clip's start.
 import React from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
-import { ClipContext, type ClipCtx } from "../kit/context";
+import { ClipContext, type ClipCtx, type ClipLine } from "../kit/context";
 import { cutAt, sample, transitionAt } from "../keyframes";
 import type { Box, ClipStyle, EvidenceContent, Keyframe, RClip, RenderMode, Theme } from "../types";
 import { ComponentHost } from "./ComponentHost";
@@ -15,6 +15,7 @@ import { clamp01, filterBase, filterCss, type FilterNow, num, origin, shadowFor 
 
 // content that fills the box and is cropped by it
 const CROPPED = new Set(["image", "video", "evidence"]);
+const NO_LINES: ClipLine[] = [];
 
 type Props = { clip: RClip; theme: Theme; safe: Box; locale: string; mode: RenderMode };
 
@@ -125,6 +126,7 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, locale, mode }) =>
   const ctx: ClipCtx = {
     w, h, dur: clip.dur, fps, theme, width, height, safe, locale,
     progress: kfProgress ?? (clip.dur > 1 ? clamp01(f / (clip.dur - 1)) : 1),
+    lines: clip.type === "component" && Array.isArray(clip.content?.lines) ? clip.content.lines : NO_LINES,
   };
   const moved = zoom !== 1 || panX !== 0 || panY !== 0;
   const contentOrigin = `${sx * 100}% ${sy * 100}%`;

@@ -448,6 +448,20 @@ under 28 px, render refuses under 20 px); the words a component adds follow `use
 frame, never from time or randomness; give SVG ids `React.useId()`. Then `typecheck` and `preview` a moment where it
 shows. A component that crashes shows a red box in previews and is reported first, with its source line.
 
+## Performance films
+
+Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); example: `examples/performance/`.
+- **Tracks**, bottom to top: `ground` (one component clip, 0 to `"end"`), `scenes` (a component clip per line,
+  `"start": "line:3", "end": "line:4"`), a head text clip with the take (at most 4.5 s; the cover), captions.
+- **Cues by word**: a component clip receives the voice lines it plays under (`useClip().lines`); in a scene,
+  `const { T } = useCues()` and `T("litre")` is the frame that word is said; never type seconds. Something lands
+  every 1.5 to 2 s, on its word; words on screen belong to objects, 64 px or more.
+- **Cut-outs only** (no full-frame image or video): a picture enters a scene as a `*_asset` prop, shown as a
+  `Cut` or a `Loupe`. Trace each outline on a preview of the preset `AssetGrid` (full box, `{"asset": "<id>"}`:
+  the picture under a grid labelled in its own pixels), then remove that clip.
+- **Captions**: `"style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color":
+  "#FFFDF7", "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}`, `max_chars` 10 (CJK) or 16 to 18 (Latin).
+
 ## Tools
 
 | tool | what it does | example |

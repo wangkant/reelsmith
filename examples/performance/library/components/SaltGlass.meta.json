@@ -1,0 +1,20 @@
+{
+  "name": "SaltGlass",
+  "description": "Line 3 performed with a cut-out: a torn photo of a glass of seawater, a litre label, a loupe on the salt and a swinging 35 g tag.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "photo_asset"
+    ],
+    "properties": {
+      "photo_asset": {
+        "type": "string",
+        "description": "image asset id of the glass photo (the outline is traced for glass.jpg)"
+      }
+    }
+  },
+  "example": {
+    "photo_asset": "glass"
+  }
+}

@@ -181,6 +181,63 @@ def test_component_props_get_frames_and_asset_refs(demo):
     assert rclip(r, "bill")["content"]["props"]["total"]["at"] == 342 - 169       # line:4.end at 11.40 s
 
 
+def test_component_clips_get_the_voice_lines_they_overlap(demo):
+    r = R.resolve(demo)
+    # bill: line:3 (frame 169) to line:5 (349); line 5 starts where the clip ends, so it is not heard
+    assert rclip(r, "bill")["content"]["lines"] == [
+        {"i": 3, "text": "茶底加奶，大约两块五。", "from": 0, "to": 240 - 169},
+        {"i": 4, "text": "杯子、吸管和封口膜，差不多一块钱。", "from": 247 - 169, "to": 342 - 169}]
+    assert [ln["i"] for ln in rclip(r, "count")["content"]["lines"]] == [6]
+    assert "lines" not in rclip(r, "hook")["content"]                 # only component clips carry them
+
+    data = raw(demo)
+    data["tracks"][1]["clips"][0].update(start="line:2+0.5", end="line:4")
+    write(demo, data)
+    lines = rclip(R.resolve(demo), "bill")["content"]["lines"]
+    assert [(ln["i"], ln["from"]) for ln in lines] == [(2, 103 - 118), (3, 169 - 118)]   # began before the clip
+
+
+def test_clip_lines_follow_a_re_recorded_voice_markup_free(demo):
+    voice = demo / "voice" / "voice.json"
+    data = json.loads(voice.read_text(encoding="utf-8"))
+    data["lines"][2]["text"] = "茶底加奶，**大约两块五**。"
+    for ln in data["lines"]:
+        ln["t0"], ln["t1"] = ln["t0"] + 0.5, ln["t1"] + 0.5           # a re-recorded voice, half a second later
+    voice.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    lines = rclip(R.resolve(demo), "bill")["content"]["lines"]
+    assert [ln["i"] for ln in lines] == [3, 4]
+    assert lines[0]["text"] == "茶底加奶，大约两块五。"
+    # the clip moved with line 3, so the lines keep their places inside it
+    assert (lines[0]["from"], lines[1]["from"]) == (0, 247 - 169)
+    assert rclip(R.resolve(demo), "bill")["from"] == 169 + 15
+
+
+def test_clip_lines_without_a_voice_are_empty(demo):
+    data = raw(demo)
+    data["voice"] = None
+    data["duration"] = 21
+    for t in data["tracks"]:
+        for c in t.get("clips") or []:
+            c.pop("end", None)
+            c.update(start=0, dur=2)
+    write(demo, data)
+    assert rclip(R.resolve(demo), "bill")["content"]["lines"] == []
+
+
+def test_performance_caption_style_resolves_as_written(demo):
+    data = raw(demo)
+    cap = next(t for t in data["tracks"] if t["kind"] == "captions")
+    cap["style"] = {"bg": None, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color": "#FFFDF7",
+                    "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": True}
+    cap["max_chars"] = 10
+    write(demo, data)
+    assert D.validate(demo, D.load(demo)) == []
+    track = rtrack(R.resolve(demo), "cap")
+    assert track["style"] == cap["style"]
+    texts = ["".join(run["text"] for run in it["runs"]) for it in track["items"]]
+    assert texts and max(len(t) for t in texts) <= 10
+
+
 def test_evidence_line_measures_reach_the_crop_and_components(demo):
     data = raw(demo)
     data["assets"]["ev"].update(line=58, around=[89, 58])

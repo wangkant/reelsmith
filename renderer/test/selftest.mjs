@@ -348,6 +348,22 @@ console.log("the film's locale reaches components (EvidenceCard's source line)")
   check(unset.text === "Source: example.org", `no locale (en): the source line reads Source: example.org (${unset.s} s): ${unset.text}${unset.error}`);
 }
 
+console.log("a component hears the voice lines over it (useClip().lines)");
+{
+  const heard = [{ i: 1, text: "earlier", from: -4, to: 3 }, { i: 2, text: "now", from: 5, to: 14 }];
+  const w = writeMini("lines", [
+    { ...comp("ln", "Lines"), content: { name: "Lines", props: {}, lines: heard } },
+    { ...comp("none", "Lines"), box: { x: 0, y: 400, w: 540, h: 400 } },
+  ]);
+  const r = run(["inspect", w.file, w.dir, path.join(w.dir, "out"), "3"], { REELSMITH_LIBRARY: library });
+  const out = path.join(w.dir, "out", "inspect.json");
+  const data = fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : { frames: [] };
+  const rows = (id) => (data.frames[0]?.items ?? []).filter((i) => i.clip === id && i.kind === "text").map((i) => i.text);
+  check(r.result?.ok === true && rows("ln").join("|") === "1 -4 3 earlier|2 5 14 now",
+    `the lines reach the component in order (${r.s} s): ${rows("ln").join("|")} ${r.result?.error ?? ""}`);
+  check(rows("none").join("|") === "none", `a clip without lines gets [] (${rows("none").join("|")})`);
+}
+
 console.log("word-aware line breaking (unit)");
 {
   const { pieces, breakLines } = await import("../src/elements/linebreak.ts");

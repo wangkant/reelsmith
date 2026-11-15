@@ -1115,7 +1115,17 @@ class _Resolver:
                 if ref.get(k):
                     out[k] = ref[k]
             return out
-        return {"name": c.name, "props": self.props(c.props, start)}
+        return {"name": c.name, "props": self.props(c.props, start), "lines": self.clip_lines(start, dur)}
+
+    def clip_lines(self, start: int, dur: int) -> list[dict]:
+        """The voice lines heard during frames [start, start + dur): {i, text, from, to} in frames from `start`, so a
+        component times itself to the words and follows a re-recorded voice."""
+        rows = []
+        for ln in self.voice.lines if self.voice else []:
+            a, b = self.frame(ln.t0) - start, self.frame(ln.t1) - start
+            if b > 0 and a < dur:
+                rows.append({"i": ln.i, "text": _plain(ln.text)[0], "from": a, "to": b})
+        return sorted(rows, key=lambda r: (r["from"], r["i"]))
 
     def retime(self, c, start: int, dur: int, out: dict) -> None:
         """hold, a speed curve and reverse in a video clip's content: Media.tsx shows source frame `hold` throughout,

@@ -455,15 +455,22 @@ export default function Receipt({ props }: { props: any }) {
 }
 ```
 
+`useClip()` also gives `width`, `height`, `safe`, `locale`, `progress` and `lines`: the voice lines overlapping the
+clip, in time order, each `{i, text, from, to}` (type `ClipLine`) with `from`/`to` in frames from the clip's start
+(negative, or past `dur`, for a line that began before it or runs on after it); `[]` without a voice. resolve writes
+them into the component clip's content (section 7) from the voice, so they follow a re-recorded voice.
+
 - It renders inside an absolutely positioned div of the clip box's size and lays itself out in `w × h`.
 - Imports allowed: `react`, `remotion`, installed `@remotion/*`, `@reelsmith/kit`, relative files in the same
   folder. Anything else (node builtins, other packages, a package path with `.` or `..` in it, absolute paths) is
   refused at bundle time.
-- Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `BarCompare`, `CountUp`, `DotGrid`,
+- Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `AssetGrid`, `BarCompare`, `CountUp`, `DotGrid`,
   `EvidenceCard`, `Highlighter`, `NewsBrief`, `Parties`, `QuoteCard`, `Receipt`, `Seesaw`, `Stamp`, `StoryBeats`,
   `TimelineRule`, `Versus`. Library: `<workspace>/library/components/`.
   The renderer discovers both; a library component shadows a preset of the same name.
-- `@reelsmith/kit` is documented in full in [kit.md](kit.md).
+- `@reelsmith/kit` is documented in full in [kit.md](kit.md), including the stage kit (`renderer/src/kit/stage/`,
+  named exports: timing and cues by word, geometry, palette, `Stage` and grounds, cut-outs, paper, ink, effects and
+  drawn things) for performance films.
 - `typecheck` type-checks the library with the renderer's TypeScript; a component that throws fails `render` and
   shows as a red box in `preview`, reported with its source line.
 
@@ -502,7 +509,8 @@ content by type:
   text      {"runs": [{"text", "accent"}], "style": TextStyle (defaults filled), "reveal": {...} | null}
   shape     {"shape", "fill", "stroke", "stroke_width", "d", "draw"}
   evidence  {"src", "size", "box", "site", "line"?, "around"?, "highlight": {"at" frames, "dur" frames, "color"} | null}
-  component {"name", "props" (Times → frames, asset ids → refs)}
+  component {"name", "props" (Times → frames, asset ids → refs),
+             "lines": [{"i", "text", "from", "to"}] (voice lines overlapping the clip, frames from its start)}
 ```
 The narration is the first `audio` entry (`"id": "voice"`). Motion shorthand is already turned into
 `zoom`/`pan_x`/`pan_y` keyframes, captions are already phrase-split and timed, and a captions track without a box

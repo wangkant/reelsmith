@@ -1,0 +1,6 @@
+{
+  "name": "SaltGround",
+  "description": "The film's ground: kraft paper over a wooden table with warm light and a slow drift. One clip for the whole film on the bottom track.",
+  "props": {"type": "object", "additionalProperties": false, "properties": {}},
+  "example": {}
+}

@@ -1,0 +1,10 @@
+{
+  "file": "voice/voice.m4a",
+  "duration_s": 12.6,
+  "gap_s": 0.22,
+  "lines": [
+    {"i": 1, "text": "Rivers carry a little salt into the sea every day.", "t0": 0.0, "t1": 3.3},
+    {"i": 2, "text": "The sun lifts the water back into the sky. The salt stays behind.", "t0": 3.52, "t1": 7.9},
+    {"i": 3, "text": "So every litre of seawater holds about thirty-five grams of salt.", "t0": 8.12, "t1": 12.6}
+  ]
+}

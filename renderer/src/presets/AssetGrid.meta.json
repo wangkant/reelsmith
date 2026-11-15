@@ -1,0 +1,15 @@
+{
+  "name": "AssetGrid",
+  "description": "A tracing aid, not film content: one picture shown whole under a labelled grid, its edges marked in the source image's pixels; preview it once to read the coordinates of a cut-out's outline. Give it the full box.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["asset"],
+    "properties": {
+      "asset": {"type": "string", "description": "the image asset id to trace"},
+      "cols": {"type": "integer", "minimum": 2, "maximum": 40, "default": 10, "description": "grid columns"},
+      "rows": {"type": "integer", "minimum": 2, "maximum": 40, "default": 10, "description": "grid rows"}
+    }
+  },
+  "example": {"asset": "photo"}
+}

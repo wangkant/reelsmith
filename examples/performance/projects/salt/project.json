@@ -1,0 +1,37 @@
+{
+ "version": 2,
+ "profile": "vertical",
+ "locale": "en",
+ "meta": {
+  "title": "Why is the sea salty?",
+  "desc": "Where the sea's salt comes from, acted out in thirteen seconds",
+  "topic": "why seawater is salty when rivers taste fresh",
+  "shape": "the mechanism in two moves, then the number",
+  "sources": [
+   {"title": "Why is the ocean salty? (NOAA Ocean Service)", "url": "https://oceanservice.noaa.gov/facts/whysalty.html"}
+  ]
+ },
+ "voice": "voice/voice.json",
+ "assets": {
+  "glass": {"path": "assets/glass.jpg", "kind": "image", "note": "A glass of seawater on a wooden table at the shore, a small pile of sea salt beside it"}
+ },
+ "tracks": [
+  {"id": "ground", "kind": "visual", "clips": [
+   {"id": "g", "type": "component", "name": "SaltGround", "start": 0, "end": "end", "props": {}}
+  ]},
+  {"id": "scenes", "kind": "visual", "clips": [
+   {"id": "s1", "type": "component", "name": "SaltRiver", "start": "line:1", "end": "line:2", "props": {}},
+   {"id": "s2", "type": "component", "name": "SaltSun", "start": "line:2", "end": "line:3", "props": {}},
+   {"id": "s3", "type": "component", "name": "SaltGlass", "start": "line:3", "end": "end", "props": {"photo_asset": "glass"}}
+  ]},
+  {"id": "head", "kind": "visual", "clips": [
+   {"id": "take", "type": "text", "text": "Why is the sea **salty**?", "start": 0, "end": 2.3,
+    "box": {"x": 120, "y": 250, "w": 840, "h": 300},
+    "style": {"font": "display", "size": "fit", "max_size": 150, "color": "ink", "accent": "accent", "weight": 900},
+    "exit": {"preset": "fade", "dur": 0.3}}
+  ]},
+  {"id": "cap", "kind": "captions", "source": "voice", "max_chars": 18,
+   "style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color": "#FFFDF7",
+    "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}}
+ ]
+}
