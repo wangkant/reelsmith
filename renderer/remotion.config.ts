@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Config } from "@remotion/cli/config";
 import { importGuard } from "./scripts/import-guard.mjs";
+import { workspaceModules } from "./scripts/workspace-modules.mjs";
 
 Config.setEntryPoint("src/index.ts");
 Config.setVideoImageFormat("jpeg");
@@ -20,6 +21,10 @@ const library = process.env.REELSMITH_LIBRARY
   ? path.resolve(process.env.REELSMITH_LIBRARY)
   : path.join(os.tmpdir(), "reelsmith-empty-library");
 fs.mkdirSync(library, { recursive: true });
+const workspace = process.env.REELSMITH_LIBRARY && process.env.REELSMITH_WORKSPACE
+  ? path.resolve(process.env.REELSMITH_WORKSPACE)
+  : null;
+const own = workspaceModules({ root, library, workspace });
 
 Config.overrideWebpackConfig((config) => ({
   ...config,
@@ -29,8 +34,10 @@ Config.overrideWebpackConfig((config) => ({
       ...((config.resolve?.alias as Record<string, string>) ?? {}),
       "@reelsmith/kit$": path.join(root, "src", "kit", "index.ts"),
       "@library": library,
+      ...own.alias,
     },
     modules: [path.join(root, "node_modules"), "node_modules"],
   },
-  plugins: [...(config.plugins ?? []), importGuard({ root, library })],
+  module: { ...(config.module ?? {}), rules: [...(config.module?.rules ?? []), ...(own.rules as never[])] },
+  plugins: [...(config.plugins ?? []), importGuard({ root, library, workspace })],
 }));

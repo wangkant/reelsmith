@@ -1,0 +1,6 @@
+{
+  "name": "SaltShore",
+  "description": "Lines 1-2 as one world on an Outdoors set: salt drops off a rock into a river and rides it to the sea, the sun lifts the water into a cloud and the shore dries to a crust of salt.",
+  "props": {"type": "object", "additionalProperties": false, "properties": {}},
+  "example": {}
+}

@@ -152,12 +152,15 @@ def _last_json(stdout: str) -> dict | None:
 
 
 def node_env(project: Path) -> dict:
-    """The environment for render.mjs: REELSMITH_LIBRARY = the workspace's components folder, when there is one."""
+    """The environment for render.mjs: REELSMITH_LIBRARY = the workspace's components folder, when there is one, and
+    REELSMITH_WORKSPACE = the workspace (its node_modules and library/made)."""
     env = dict(os.environ)
     env.pop("REELSMITH_LIBRARY", None)
+    env.pop("REELSMITH_WORKSPACE", None)
     ws = find_workspace(project)
     if ws and ws.components_dir.is_dir():
         env["REELSMITH_LIBRARY"] = str(ws.components_dir)
+        env["REELSMITH_WORKSPACE"] = str(ws.root)
     return env
 
 
@@ -507,9 +510,15 @@ def layout_key(root: Path, resolved: dict, frames: list[int], profile: Profile) 
     for name in ("package.json", "package-lock.json", "remotion.config.ts", "tsconfig.json"):
         f = RENDERER / name
         h.update(f.read_bytes() if f.is_file() else b"-")
-    library = node_env(root).get("REELSMITH_LIBRARY")
+    env = node_env(root)
+    library = env.get("REELSMITH_LIBRARY")
     if library:
         _digest_files(h, Path(library), Path(library))
+    if env.get("REELSMITH_WORKSPACE"):
+        ws_root = Path(env["REELSMITH_WORKSPACE"])
+        _digest_files(h, ws_root / "library" / "made", ws_root)
+        lock = ws_root / "package-lock.json"
+        h.update(lock.read_bytes() if lock.is_file() else b"-")
     for src in sorted(set(_srcs(resolved))):
         try:
             st = (root / src).stat()

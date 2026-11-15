@@ -318,7 +318,8 @@ def check(project: str) -> str:
 def library(project: str, name: str = "") -> str:
     """The components a component clip can use (built-in presets and your own library): name, source, what it is
     and its prop names. With `name`, one component in full: props schema, example props and the source file to read
-    as a model. Also gives the path of the @reelsmith/kit reference (docs/kit.md)."""
+    as a model. Also gives the path of the @reelsmith/kit reference (docs/kit.md) and the packages a component can
+    import (the renderer's and the workspace's own, added with add_package)."""
     root = _project(project)
     comps = _mod("library").components(root)
     kit = f"@reelsmith/kit (what a component can import) is documented in {KIT_DOC}"
@@ -332,8 +333,9 @@ def library(project: str, name: str = "") -> str:
     rows = [_component_text(comps[n], full=False) for n in sorted(comps)]
     ws = find_workspace(root)
     where = f"\nYour own components go in {ws.components_dir} (Name.tsx + Name.meta.json)." if ws else ""
+    packages = _mod("workbench").packages_text(ws.root if ws else None)
     return (f"{len(rows)} component(s) (props: * = required; library(project, name) gives one in full):\n"
-            + "\n".join(rows) + where + f"\n{kit}")
+            + "\n".join(rows) + where + f"\n{kit}\n{packages}")
 
 
 def _first_sentence(text: str, limit: int = 110) -> str:
@@ -769,21 +771,34 @@ def export_captions(project: str, track: str = "") -> str:
 def _typecheck_config(ws, renderer: Path) -> Path:
     nm = (renderer / "node_modules").as_posix()
     kit = (renderer / "src" / "kit").as_posix()
+    own = (ws.root / "node_modules").as_posix()
     comp = ws.components_dir.as_posix()
+    renderer_first = [f"{nm}/@types/*", f"{nm}/*", f"{own}/@types/*", f"{own}/*"]
+    path = ws.cache_dir / "typecheck" / "tsconfig.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    media_types = path.with_name("media.d.ts")       # what the bundler gives for `import x from "../made/x.png"`
+    media_types.write_text("".join(f'declare module "*.{e}" {{ const src: string; export default src; }}\n'
+                                   for e in ("png", "svg", "jpg", "jpeg", "webp", "gif", "mp3", "wav", "mp4")),
+                           encoding="utf-8", newline="\n")
     cfg = {
         "compilerOptions": {
             "target": "ES2022", "module": "ES2022", "moduleResolution": "bundler", "jsx": "react-jsx",
             "lib": ["DOM", "DOM.Iterable", "ES2022"], "strict": True, "noEmit": True, "skipLibCheck": True,
             "esModuleInterop": True, "forceConsistentCasingInFileNames": True, "types": [],
-            "typeRoots": [f"{nm}/@types"],
-            # the library sits outside the renderer: point bare imports at its node_modules (@types first, since a
-            # package without types would otherwise win); the kit folder before a stray kit.tsx
-            "paths": {"@reelsmith/kit": [f"{kit}/index", kit], "*": [f"{nm}/@types/*", f"{nm}/*"]},
+            "resolveJsonModule": True, "typeRoots": [f"{nm}/@types"],
+            # the library sits outside the renderer: bare imports go to the workspace's packages first, the
+            # renderer's own (react, remotion) to the renderer first, as the bundle resolves them; @types before a
+            # package without types; the kit folder before a stray kit.tsx
+            "paths": {"@reelsmith/kit": [f"{kit}/index", kit],
+                      **{p: [x.replace("*", p) for x in renderer_first]
+                         for p in ("react", "react-dom", "remotion")},
+                      **{f"{p}/*": [x.replace("*", f"{p}/*") for x in renderer_first]
+                         for p in ("react", "react-dom", "remotion")},
+                      "@remotion/*": [x.replace("*", "@remotion/*") for x in renderer_first],
+                      "*": [f"{own}/@types/*", f"{own}/*", f"{nm}/@types/*", f"{nm}/*"]},
         },
-        "include": [f"{comp}/**/*.tsx", f"{comp}/**/*.ts"],
+        "include": [f"{comp}/**/*.tsx", f"{comp}/**/*.ts", media_types.as_posix()],
     }
-    path = ws.cache_dir / "typecheck" / "tsconfig.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=1), encoding="utf-8", newline="\n")
     return path
 
@@ -820,6 +835,52 @@ def typecheck(project: str) -> str:
     if not mine:
         return f"{len(files)} file(s) in {ws.components_dir}: no type errors{elsewhere}"
     return _fail(f"{len(mine)} type error(s) in {ws.library_dir}{elsewhere}:\n{_lines(mine, 40)}")
+
+
+# ------------------------------------------------------------------ the workbench (packages, scripts)
+def _workspace_of(project: str):
+    root = _project(project, must_exist=False)
+    ws = find_workspace(root)
+    if not ws:
+        raise ToolInputError(f"{root} is outside a workspace (no workspace.json above it): packages belong to a "
+                             "workspace")
+    return root, ws
+
+
+def _workbench_call(name: str, *args) -> ToolResult:
+    W = _mod("workbench")
+    try:
+        ok, text = getattr(W, name)(*args)
+    except W.WorkbenchError as exc:
+        raise ToolInputError(str(exc)) from None
+    return ToolResult(text, ok)
+
+
+@tool
+def add_package(project: str, names: list[str] = []) -> str:  # noqa: B006 - never mutated
+    """Add npm packages your components and scripts can import, e.g. ["d3-shape", "simplex-noise@4.0.3"]: registry
+    names, optionally @version or @tag. They go into the workspace (package.json, node_modules) and stay for every
+    film; their install scripts never run. No names: reinstall what package.json lists. Packages the renderer ships
+    (react, remotion...) are already there; other @remotion/* follow the renderer's version. library lists what can
+    be imported."""
+    _, ws = _workspace_of(project)
+    names = [names] if isinstance(names, str) else list(names or [])
+    result = _workbench_call("add_packages", ws.root, names)
+    if result.ok and names:
+        result = ToolResult(f"{result}\nImport them by name in your components; typecheck sees them too.", True)
+    return result
+
+
+@tool
+def run_script(project: str, script: str, args: list[str] = [],  # noqa: B006 - never mutated
+               timeout_s: float = 120) -> str:
+    """Run a Node script you wrote (.mjs/.js in the project, or library/tools/... to keep it) to make a file or
+    precompute data: a texture, a traced path, a baked simulation. Sandboxed: it reads only the project, the library
+    and installed packages, writes only <project>/made/ and library/made/ (at most 1 GB a run), gets no keys, no
+    network, no node:sqlite, and starts or signals no other process; cwd is the project; stopped after timeout_s. A
+    component uses what it made with staticFile("made/...") or an import from "../made/..." (library/made)."""
+    root = _project(project)
+    return _workbench_call("run_script", root, find_workspace(root), script, list(args or []), timeout_s)
 
 
 # ------------------------------------------------------------------ providers (assets)
@@ -969,4 +1030,5 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
 
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, redo, check, library, preview, render,
                                  review, export_captions, speak, capture, draw, animate, import_asset, assets, probe,
-                                 frames, scenes, silences, transcribe, notes, note, typecheck)}
+                                 frames, scenes, silences, transcribe, notes, note, typecheck, add_package,
+                                 run_script)}

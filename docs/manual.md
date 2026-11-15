@@ -451,16 +451,33 @@ shows. A component that crashes shows a red box in previews and is reported firs
 ## Performance films
 
 Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); example: `examples/performance/`.
-- **Tracks**, bottom to top: `ground` (one component clip, 0 to `"end"`), `scenes` (a component clip per line,
-  `"start": "line:3", "end": "line:4"`), a head text clip with the take (at most 4.5 s; the cover), captions.
-- **Cues by word**: a component clip receives the voice lines it plays under (`useClip().lines`); in a scene,
-  `const { T } = useCues()` and `T("litre")` is the frame that word is said; never type seconds. Something lands
-  every 1.5 to 2 s, on its word; words on screen belong to objects, 64 px or more.
-- **Cut-outs only** (no full-frame image or video): a picture enters a scene as a `*_asset` prop, shown as a
-  `Cut` or a `Loupe`. Trace each outline on a preview of the preset `AssetGrid` (full box, `{"asset": "<id>"}`:
-  the picture under a grid labelled in its own pixels), then remove that clip.
+- **World first**: a set (`Room`, `Street`, `Outdoors`, `Desk`) for a place with depth and a full lower frame, then
+  camera stops (`stations`), then your own shapes inside `Solid`, then motion on the word (`drop`, `pendulum`,
+  `follow`, `shake`, `breathe`). Cheap: flat icons on a bare ground, an empty lower third, slide in and stop.
+- **Tracks**: `world` (one component clip for the whole film reading every line from `useClip().lines`, or one per
+  line, `"start": "line:3"`), a head text clip with the take (at most 4.5 s; the cover), captions.
+- **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.5 to 2 s, on its word.
+- **Cut-outs only** (no full-frame image or video): a picture enters as a `*_asset` prop, shown as a `Cut` or a
+  `Loupe`; trace its outline on a preview of the preset `AssetGrid` (`{"asset": "<id>"}`), then remove that clip.
 - **Captions**: `"style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color":
   "#FFFDF7", "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}`, `max_chars` 10 (CJK) or 16 to 18 (Latin).
+
+## Bring your own tools
+
+What you build stays in the workspace for every film; `note` what each piece is for and how to call it.
+- **Components and helpers**: any `.tsx`/`.ts` under `library/components/` (helpers in a subfolder: `./rig/spring`).
+- **Packages**: `add_package(project, ["simplex-noise@4.0.3"])` installs from npm into the workspace (install scripts
+  never run; no names reinstalls `package.json`); then `import { createNoise2D } from "simplex-noise"` in a component,
+  types included in `typecheck`; `library(project)` lists what can be imported. Pure-JS drawing and maths libraries
+  work (noise, easing, d3 modules, morphing, physics); Node-only or native ones do not. The renderer's packages are
+  already there; another `@remotion/*` follows its version.
+- **Scripts**: `run_script(project, "library/tools/terrain.mjs", ["7"])` runs your Node script once to make a file:
+  a texture, a traced path, a baked simulation (`fs.writeFileSync("made/ridge.svg", svg)`, or
+  `` `${process.env.REELSMITH_LIBRARY_MADE}/terrain.json` `` to keep it). It reads only the project, the library and
+  installed packages, writes only `made/` and `library/made/` (1 GB a run), has no keys, network or `node:sqlite`,
+  starts or signals no other process, stops after `timeout_s` (120). Node's permission model holds the files and
+  processes; network and signals are refused by in-process locks, a best effort rather than an OS wall. Use them with
+  `<Img src={staticFile("made/ridge.svg")} />` or, in a library component, `import terrain from "../made/terrain.json"`.
 
 ## Tools
 

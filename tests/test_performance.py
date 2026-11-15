@@ -1,5 +1,5 @@
-"""The performance example (examples/performance): it checks clean, every scene hears its own line and every word
-it cues on is in that line; the AssetGrid preset's meta; and the stage kit's unit tests (renderer/test/stage.test.mjs)."""
+"""The performance example (examples/performance): it checks clean, every world hears its own lines and every word
+it cues on is in them; the AssetGrid preset's meta; and the stage kit's unit tests (renderer/test/stage.test.mjs)."""
 import json
 import re
 import shutil
@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "performance"
 COMPONENTS = EXAMPLE / "library" / "components"
 RENDERER = ROOT / "renderer"
-SCENES = {"s1": "SaltRiver", "s2": "SaltSun", "s3": "SaltGlass"}
+SCENES = {"w1": "SaltShore", "w2": "SaltDesk"}
+HEARS = {"w1": [1, 2], "w2": [3]}
 
 
 @pytest.fixture
@@ -40,21 +41,23 @@ def test_example_checks_clean(salt):
 
 def test_example_library_lists_scenes_not_helpers(salt):
     lib = {n: c for n, c in L.components(salt).items() if c.source == "library"}
-    assert set(lib) == {"SaltGround", *SCENES.values()}
+    assert set(lib) == set(SCENES.values())
     assert all(not c.problem for c in lib.values())
 
 
-def test_each_scene_hears_its_own_line(salt):
+def test_each_world_hears_its_own_lines(salt):
     voice = json.loads((salt / "voice" / "voice.json").read_text(encoding="utf-8"))
     resolved = R.resolve(salt)
     fps = resolved["fps"]
-    for n, (cid, name) in enumerate(SCENES.items(), 1):
-        lines = clip(resolved, cid)["content"]["lines"]
-        assert [ln["i"] for ln in lines] == [n], cid
-        line = voice["lines"][n - 1]
-        assert lines[0]["text"] == line["text"]
-        assert lines[0]["from"] == 0 and lines[0]["to"] == round((line["t1"] - line["t0"]) * fps)
-    assert [ln["i"] for ln in clip(resolved, "g")["content"]["lines"]] == [1, 2, 3]
+    for cid, want in HEARS.items():
+        c = clip(resolved, cid)
+        lines = c["content"]["lines"]
+        assert [ln["i"] for ln in lines] == want, cid
+        for ln in lines:
+            line = voice["lines"][ln["i"] - 1]
+            assert ln["text"] == line["text"]
+            assert ln["to"] - ln["from"] == round((line["t1"] - line["t0"]) * fps)
+    assert clip(resolved, "w1")["content"]["lines"][0]["from"] == 0
 
 
 def test_every_cued_word_is_said_in_its_scene(salt):
@@ -64,11 +67,11 @@ def test_every_cued_word_is_said_in_its_scene(salt):
         words = cued_words(name)
         assert words, name
         missing = [w for w in words if w not in text]
-        assert not missing, f"{name} cues on words its line does not say: {missing}"
+        assert not missing, f"{name} cues on words its lines do not say: {missing}"
 
 
 def test_cut_out_picture_arrives_with_its_size(salt):
-    ref = clip(R.resolve(salt), "s3")["content"]["props"]["photo_asset"]
+    ref = clip(R.resolve(salt), "w2")["content"]["props"]["photo_asset"]
     assert ref["kind"] == "image" and list(ref["size"]) == [232, 338]
 
 

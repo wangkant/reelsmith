@@ -16,13 +16,9 @@
   "glass": {"path": "assets/glass.jpg", "kind": "image", "note": "A glass of seawater on a wooden table at the shore, a small pile of sea salt beside it"}
  },
  "tracks": [
-  {"id": "ground", "kind": "visual", "clips": [
-   {"id": "g", "type": "component", "name": "SaltGround", "start": 0, "end": "end", "props": {}}
-  ]},
-  {"id": "scenes", "kind": "visual", "clips": [
-   {"id": "s1", "type": "component", "name": "SaltRiver", "start": "line:1", "end": "line:2", "props": {}},
-   {"id": "s2", "type": "component", "name": "SaltSun", "start": "line:2", "end": "line:3", "props": {}},
-   {"id": "s3", "type": "component", "name": "SaltGlass", "start": "line:3", "end": "end", "props": {"photo_asset": "glass"}}
+  {"id": "world", "kind": "visual", "clips": [
+   {"id": "w1", "type": "component", "name": "SaltShore", "start": 0, "end": "line:3", "props": {}},
+   {"id": "w2", "type": "component", "name": "SaltDesk", "start": "line:3", "end": "end", "props": {"photo_asset": "glass"}}
   ]},
   {"id": "head", "kind": "visual", "clips": [
    {"id": "take", "type": "text", "text": "Why is the sea **salty**?", "start": 0, "end": 2.3,

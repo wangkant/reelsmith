@@ -229,9 +229,19 @@ def find_workspace(project_dir: str | Path) -> Workspace | None:
     """The nearest folder at or above `project_dir` holding workspace.json, loaded; None outside any workspace."""
     start = project_root(project_dir)
     for d in (start, *start.parents):
-        if (d / WORKSPACE_FILE).is_file():
+        if (d / WORKSPACE_FILE).is_file() and not in_made(d):
             return Workspace.load(d)
     return None
+
+
+def in_made(path: str | Path) -> bool:
+    """Whether `path` lies in a project's made/ or library/made/, the folders sandboxed scripts may write: a
+    workspace.json found there was planted and never counts."""
+    p = Path(path).resolve()
+    for a in (p, *p.parents):
+        if a.name.lower() == "made" and ((a.parent / PROJECT_FILE).is_file() or a.parent.name.lower() == "library"):
+            return True
+    return False
 
 
 def rules_for(project: str | Path) -> dict:

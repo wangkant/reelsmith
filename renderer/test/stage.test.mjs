@@ -1,4 +1,4 @@
-// Unit tests for the stage kit's pure functions (cues, step, win, torn): bundles them with esbuild and runs them in
+// Unit tests for the stage kit's pure functions (cues, step, win, torn, motion, camera stations): bundles them with esbuild and runs them in
 // Node, no browser and no render. A few seconds.
 //   node test/stage.test.mjs
 import assert from "node:assert/strict";
@@ -15,6 +15,8 @@ const entry = path.join(OUT, "entry.ts");
 fs.writeFileSync(entry, [
   `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/time.ts").replace(/\\/g, "/"))};`,
   `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/geom.ts").replace(/\\/g, "/"))};`,
+  `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/motion.ts").replace(/\\/g, "/"))};`,
+  `export { camAt } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/Stage.tsx").replace(/\\/g, "/"))};`,
 ].join("\n"));
 const bundle = path.join(OUT, "stage.mjs");
 await build({
@@ -111,6 +113,63 @@ test("easing and helpers stay in range", () => {
   const [x, y] = K.boil("s", 5, 3);
   assert.ok(Math.abs(x) <= 3 && Math.abs(y) <= 3);
   assert.deepEqual(K.boil("s", 5, 3), K.boil("s", 6, 3));
+});
+
+test("drop falls faster and faster, lands at `to`, squashes and settles", () => {
+  const at = 10, to = 900;
+  assert.deepEqual(K.drop(5, at, 0, to), { y: 0, sx: 1, sy: 1, t: 0, landed: false });
+  const ys = [12, 14, 16, 18].map((f) => K.drop(f, at, 0, to).y);
+  assert.ok(ys[1] - ys[0] < ys[3] - ys[2], `accelerates: ${ys}`);
+  let land = at;
+  while (!K.drop(land, at, 0, to).landed) land++;
+  const hit = K.drop(land, at, 0, to, { squash: 0.3 });
+  assert.equal(hit.y, to);
+  assert.ok(hit.sx > 1 && hit.sy < 1, "squashes on landing");
+  const late = K.drop(land + 90, at, 0, to, { squash: 0.3 });
+  assert.ok(Math.abs(late.sx - 1) < 0.01 && Math.abs(late.sy - 1) < 0.01, "settles");
+});
+
+test("pendulum decays to a faint idle sway, never a dead stop", () => {
+  const early = Math.max(...Array.from({ length: 30 }, (_, i) => Math.abs(K.pendulum(i, 0, 24))));
+  const late = Array.from({ length: 90 }, (_, i) => K.pendulum(300 + i, 0, 24));
+  assert.ok(early > 15);
+  assert.ok(Math.max(...late.map(Math.abs)) <= 1.4 && Math.max(...late) - Math.min(...late) > 0.5);
+});
+
+test("follow trails its leader and catches up when it stops", () => {
+  const lead = (f) => Math.min(100, Math.max(0, f));
+  assert.ok(K.follow(50, lead, 8) < lead(50));
+  assert.ok(Math.abs(K.follow(200, lead, 8) - 100) < 1e-9);
+});
+
+test("shake is deterministic, bounded and over after its duration", () => {
+  assert.deepEqual(K.shake("s", 13, 10, 12, 18), K.shake("s", 13, 10, 12, 18));
+  for (let f = 10; f <= 28; f++) {
+    const [x, y] = K.shake("s", f, 10, 12, 18);
+    assert.ok(Math.abs(x) <= 12 && Math.abs(y) <= 12);
+  }
+  assert.deepEqual(K.shake("s", 40, 10, 12, 18), [0, 0]);
+  assert.deepEqual(K.shake("s", 5, 10, 12, 18), [0, 0]);
+});
+
+test("breathe stays within 1 +- amp", () => {
+  const v = Array.from({ length: 200 }, (_, f) => K.breathe(f, 0.02));
+  assert.ok(Math.max(...v) <= 1.02 + 1e-9 && Math.min(...v) >= 0.98 - 1e-9 && Math.max(...v) > 1.015);
+});
+
+test("stations arrive on each stop's frame, hold with a push and dip the zoom while travelling", () => {
+  const stops = [{ at: 0, x: 100, y: 200, z: 1 }, { at: 60, x: 900, y: 300, z: 1.2 }, { at: 90, x: 1500, y: 300 }];
+  const keys = K.stations(stops, { travel: 20, dip: 0.1, push: 0.05, until: 150 });
+  for (const s of stops) {
+    const c = K.camAt(keys, s.at);
+    assert.ok(Math.abs(c.x - s.x) < 1e-9 && Math.abs(c.y - s.y) < 1e-9, `at ${s.at}`);
+  }
+  assert.equal(K.camAt(keys, 30).x, 100);
+  assert.ok(K.camAt(keys, 30).z > 1, "pushes in while holding");
+  assert.ok(K.camAt(keys, 50).z < K.camAt(keys, 40).z, "dips mid-travel");
+  assert.ok(K.camAt(keys, 150).z > 1, "keeps pushing on the last stop");
+  const close = K.stations([{ at: 0, x: 0, y: 0 }, { at: 5, x: 10, y: 0 }], { travel: 30 });
+  assert.ok(close.every((k, i) => i === 0 || k.at > close[i - 1].at), "keys stay in order when stops are close");
 });
 
 fs.rmSync(OUT, { recursive: true, force: true });

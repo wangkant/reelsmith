@@ -124,6 +124,13 @@ def _parser() -> argparse.ArgumentParser:
     proj(cmd("notes", tools.notes))
     proj(cmd("note", tools.note)).add_argument("text", help="the note, @file, or - for stdin")
     proj(cmd("typecheck", tools.typecheck))
+    p = cmd("add", tools.add_package, "add_package")
+    p.add_argument("project", help="a project folder, or the workspace folder")
+    p.add_argument("names", nargs="*", help="registry names, optionally @version or @tag (none: restore)")
+    p = proj(cmd("script", tools.run_script, "run_script"))
+    p.add_argument("--timeout", type=float, default=120, dest="timeout_s", help="seconds (default 120, at most 600)")
+    p.add_argument("script", help="a .mjs/.js file in the project, or library/tools/... in the workspace")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="passed to the script")
     sub.add_parser("run", help="run the self-hosted agent on a project (reelsmith run <project> --brief ...)",
                    add_help=False)
     sub.add_parser("mcp", help="serve the tools over MCP: stdio, or streamable HTTP with --http", add_help=False)
@@ -193,6 +200,10 @@ def _call(args) -> tools.ToolResult:
         return tools.import_asset(args.project, args.id, _source_arg(args.source), args.kind)
     if c == "note":
         return tools.note(args.project, _text_arg(args.text))
+    if c in ("add", "add_package"):
+        return tools.add_package(args.project, args.names)
+    if c in ("script", "run_script"):
+        return tools.run_script(args.project, args.script, args.args, args.timeout_s)
     if c == "probe":
         return tools.probe(args.project, args.source)
     if c == "frames":

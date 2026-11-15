@@ -238,7 +238,7 @@ console.log("import guard");
   const g = writeMini("guard-fs", [comp("c", "UsesFs")]);
   const r4 = run(["stills", g.file, g.dir, path.join(g.dir, "out"), "0"], { REELSMITH_LIBRARY: badlib });
   check(r4.result?.stage === "bundle" && r4.result?.error ===
-    "Component UsesFs imports 'fs': only react, remotion, @remotion/*, @reelsmith/kit and files in the same folder are allowed",
+    "Component UsesFs imports 'fs': only react, remotion, @remotion/*, @reelsmith/kit, the workspace's packages (add_package) and files in the library folder or library/made are allowed",
   `an unresolvable forbidden import is refused by name, without a resolve trace (${r4.s} s): ${r4.result?.error ?? ""}`);
   const h = writeMini("guard-dotdot", [comp("c", "DotDot")]);
   const r5 = run(["stills", h.file, h.dir, path.join(h.dir, "out"), "0"], { REELSMITH_LIBRARY: badlib });

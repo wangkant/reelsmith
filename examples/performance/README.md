@@ -11,16 +11,17 @@ reelsmith render examples/performance/projects/salt
 
 | track | clips |
 |---|---|
-| `ground` | `SaltGround`, 0 to the end: kraft paper over a wooden table, warm light, a slow drift |
-| `scenes` | `SaltRiver` (`line:1`), `SaltSun` (`line:2`), `SaltGlass` (`line:3` to the end) |
+| `world` | `SaltShore`, 0 to `line:3`; `SaltDesk`, `line:3` to the end |
 | `head` | the take, "Why is the sea salty?", 0 to 2.3 s |
 | `cap` | captions from the voice in the performance style |
 
-`SaltRiver` and `SaltSun` are drawn objects: a river inked down the page carries salt grains into the sea, the sun
-lifts the sea into a cloud and leaves a pile of salt. `SaltGlass` is a cut-out: a torn photo of a glass of seawater,
-the water line marked, a label, a loupe on the salt and a tag with the number. Every move is timed with
-`useCues().T` to a word of the line the scene plays under. `library/components/salt/parts.tsx` holds the pieces
-two scenes share; files in a subfolder are not registered as components.
+`SaltShore` is one world for two lines on an `Outdoors` set, four camera stops along it: salt crystals drop off a
+rock into a river, trail each other down it to the sea, a sign drops in and swings; the sun rises, steam lifts
+into a cloud, the shoreline retreats over a crust of salt and a heap of salt drops onto it. `SaltDesk` plays the
+last line on a `Desk` set: a torn photo of a glass of seawater is taped down, a heap of salt drops into a dish and
+squashes, and a tag with the number swings in. Every object is a path or a few shapes inside `Solid`; every move
+is timed with `useCues().T` to a word. `library/components/salt/shore.tsx` holds the shore's pieces; files in a
+subfolder are not registered as components.
 
 ## How it was made
 

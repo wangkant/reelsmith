@@ -1,6 +1,6 @@
 {
-  "name": "SaltGlass",
-  "description": "Line 3 performed with a cut-out: a torn photo of a glass of seawater, a litre label, a loupe on the salt and a swinging 35 g tag.",
+  "name": "SaltDesk",
+  "description": "Line 3 on a Desk set: a torn photo of a glass of seawater taped down, the litre marked, a heap of salt dropping into a dish and a swinging 35 g tag.",
   "props": {
     "type": "object",
     "additionalProperties": false,

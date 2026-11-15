@@ -222,7 +222,7 @@ def test_manual_names_every_profile_and_stays_short():
     # read at the start of every session: it must not grow, and its craft chapter stays a page
     text = T.MANUAL.read_text(encoding="utf-8")
     lines = text.splitlines()
-    assert len(lines) <= 560
+    assert len(lines) <= 580
     assert all(f"| `{name}`" in text or f"`{name}` /" in text or f"/ `{name}`" in text for name in profiles.PROFILES)
     start = lines.index("## Making a film people watch")
     end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## "))

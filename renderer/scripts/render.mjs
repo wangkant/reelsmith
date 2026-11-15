@@ -4,7 +4,8 @@
 //   stills   <out> = a folder; each frame -> <out>/still_<frame>.png (at most 600 frames a call, several at once)
 //   inspect  <out> = a folder; stills as above plus <out>/inspect.json = {"frames": [{"frame", "png", "items"}]}
 // One bundle per call; the public dir is the project dir; @reelsmith/kit -> src/kit, @library -> $REELSMITH_LIBRARY
-// (an empty folder when unset); the import guard enforces contract section 6. Progress lines go to stdout and the
+// (an empty folder when unset), $REELSMITH_WORKSPACE's node_modules and library/made usable from the library;
+// the import guard enforces contract section 6. Progress lines go to stdout and the
 // last stdout line is JSON: {"ok": true, ..., "bundleMs", "renderMs", "timings", "port"} or
 // {"ok": false, "stage", "error", "browserErrors", "timings"}. `timings` is ms per stage (bundle, browser,
 // composition, render, cleanup, total); `port` is the local server port this call used (each call picks a free one).
@@ -20,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { openBrowser, renderMedia, renderStill, selectComposition } from "@remotion/renderer";
 import { importGuard, narrowContexts } from "./import-guard.mjs";
+import { workspaceModules } from "./workspace-modules.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = path.join(ROOT, "src");
@@ -129,6 +131,14 @@ const libraryDir = () => {
   fs.mkdirSync(dir, { recursive: true });
   for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
   return dir;
+};
+
+// the workspace whose node_modules and library/made a library component may use; null without a library
+const workspaceDir = (library) => {
+  const env = process.env.REELSMITH_WORKSPACE;
+  if (!env || !process.env.REELSMITH_LIBRARY || !fs.existsSync(library)) return null;
+  const dir = path.resolve(env);
+  return fs.existsSync(dir) && fs.statSync(dir).isDirectory() ? dir : null;
 };
 
 // ------------------------------------------------------------------ server port
@@ -268,6 +278,8 @@ const main = async (state) => {
   if (args.mode === "inspect") resolved.inspect = true;
   const library = libraryDir();
   libraryRoot = library;
+  const workspace = workspaceDir(library);
+  const own = workspaceModules({ root: ROOT, library, workspace });
   const used = componentNames(resolved);
   const inputProps = { resolved, mode: args.mode };
 
@@ -297,13 +309,16 @@ const main = async (state) => {
             ...((config.resolve && config.resolve.alias) || {}),
             "@reelsmith/kit$": path.join(SRC, "kit", "index.ts"),
             "@library": library,
+            ...own.alias,
           },
-          // library files live outside the renderer: their package imports resolve here first
+          // library files live outside the renderer: their package imports resolve here first (the workspace's
+          // packages before it, by the rules below)
           modules: [path.join(ROOT, "node_modules"), "node_modules"],
         },
+        module: { ...(config.module ?? {}), rules: [...((config.module && config.module.rules) || []), ...own.rules] },
         plugins: [
           ...(config.plugins ?? []),
-          importGuard({ root: ROOT, library, warn: (m) => guardWarnings.push(m) }),
+          importGuard({ root: ROOT, library, workspace, warn: (m) => guardWarnings.push(m) }),
           narrowContexts([
             { dir: path.join(SRC, "presets"), names: used },
             { dir: library, names: used },

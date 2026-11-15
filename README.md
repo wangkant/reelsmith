@@ -119,7 +119,9 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
 Fifteen React components are built in; twelve are shown above. Each lands its parts at the times the agent gives
 and sizes itself to its box on any canvas. The agent can also write its own: a component is a `.tsx` file and a
 JSON schema in the workspace library, built on a documented kit ([docs/kit.md](docs/kit.md)), type-checked and
-import-guarded.
+import-guarded. It can equip itself further: `add_package` brings npm libraries into the workspace for its
+components, and `run_script` runs a Node script of its own under Node's permission model to make textures, paths or
+baked data ([Bring your own tools](docs/manual.md#bring-your-own-tools)).
 
 For films made entirely in code, the kit's stage primitives (grounds, a camera, torn photo cut-outs, paper, ink and
 drawn objects) act each narration line out, and every scene times its moves to the words it plays under, read from

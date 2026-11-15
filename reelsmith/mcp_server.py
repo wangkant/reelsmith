@@ -31,6 +31,8 @@ Times. To make a film from a script, gather assets with speak, capture, draw, an
 -> check -> preview (look at the stills; sweep=true measures the whole film's layout as render would) -> fix ->
 render -> review; render(draft=true) is a quick look at a stretch as video, export_captions writes .srt/.vtt.
 speak, animate and transcribe cost money and draw spends Codex tries: they estimate first and refuse over budget.
+When the presets and the kit fall short, write components and equip yourself: add_package brings npm libraries in,
+run_script runs a sandboxed Node script of yours that makes files (manual: Bring your own tools).
 Failures come back as text that says what to do."""
 
 ROOT = Path(__file__).resolve().parent.parent

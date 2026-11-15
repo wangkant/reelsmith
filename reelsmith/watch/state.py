@@ -378,7 +378,8 @@ VERBS = {"render": "rendering the film", "preview": "rendering stills", "check":
          "animate": "animating a picture", "capture": "capturing a web page", "transcribe": "transcribing audio",
          "import_asset": "importing an asset", "frames": "extracting frames", "scenes": "finding scene changes",
          "silences": "finding silences", "typecheck": "checking the components", "new_project": "creating the project",
-         "export_captions": "exporting the captions", "probe": "inspecting a file", "note": "recording a note"}
+         "export_captions": "exporting the captions", "probe": "inspecting a file", "note": "recording a note",
+         "add_package": "installing packages", "run_script": "running a script"}
 
 
 def say(code: str, english: str | None = None, /, **params) -> dict:

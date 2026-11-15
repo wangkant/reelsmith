@@ -22,7 +22,7 @@ declare namespace JSX {
   const KNOWN_TOOLS = [
     'manual', 'notes', 'note', 'new_project', 'describe', 'edit', 'undo', 'redo', 'check', 'library', 'typecheck',
     'preview', 'render', 'review', 'speak', 'capture', 'draw', 'animate', 'import_asset', 'assets',
-    'look', 'probe', 'scenes', 'silences', 'transcribe', 'frames', 'export_captions',
+    'look', 'probe', 'scenes', 'silences', 'transcribe', 'frames', 'export_captions', 'add_package', 'run_script',
   ]
 
   const en: Record<string, string> = {

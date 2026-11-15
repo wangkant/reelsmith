@@ -12,7 +12,8 @@ stage kit for performance films is the last chapter.
 name. Check it with `typecheck(p)`, then `preview(p, [...])` a moment where it shows.
 
 - **Imports allowed**: `react`, `remotion`, `@remotion/*` packages that are installed (`@remotion/paths`,
-  `@remotion/layout-utils`, `@remotion/media`), `@reelsmith/kit`, and files in the same folder. Anything else (node
+  `@remotion/layout-utils`, `@remotion/media`), `@reelsmith/kit`, packages the workspace added with `add_package`,
+  and files in the same folder or in `library/made`. Anything else (node
   builtins, other packages, absolute paths) is refused when the film is bundled.
 - **Where it draws**: inside an absolutely positioned div the size of the clip box, `w × h` from `useClip()`. Lay
   yourself out in that box; text outside it is reported. Clip keyframes (`x`, `scale`, `opacity`...) move the box from
@@ -216,19 +217,41 @@ layout.
 
 ### The form
 
-1. One `ground` clip runs the whole film (a `Stage` with a ground); one scene component per narration line (or per
-   two short lines) sits on a `scenes` track with `"start": "line:N"`; a head text clip holds the take for at most
-   4.5 s; captions come from the captions track, never from a component.
-2. No image or video clip fills the frame. A picture appears only as a `Cut` (or a `Loupe` of one) inside a scene.
+1. A film is one or more **worlds**: a component clip that draws a set (`Room`, `Street`, `Outdoors`, `Desk`)
+   and performs on it. A world may span the whole film and read every narration line from `useClip().lines`
+   (`T("word")` finds a word in any of them), or one world may play under each line (`"start": "line:N"`). A head
+   text clip holds the take for at most 4.5 s; captions come from the captions track, never from a component.
+   The older layout, one `ground` clip under transparent per-line scenes, still works.
+2. No image or video clip fills the frame. A picture appears only as a `Cut` (or a `Loupe` of one) inside a world.
 3. Cues come from the narration: `const { T } = useCues()`, then `T("word")`. Never type a time in a scene.
 4. Something lands at least every 1.5 to 2 s, on the word that names it; start the move 2 to 6 frames before `T`.
-5. Paper and cut-outs move at 12 poses a second (`step`, `Actor`); ink, mist and swings move on every frame.
+5. Paper and cut-outs move at 12 poses a second (`step`, `Actor`); ink, mist, swings and falls move on every frame.
 6. Words on screen belong to objects (`Label`, `Tag`, `Stamp`, `Card`, `Sign`): 64 px or more, the film's key
    number 140 px or more, one new word per beat.
 7. Lay out in the clip's own pixels (`useClip()` `w`, `h`); the hero object spans most of the safe box; keep text
    out of the caption band.
-8. One language per scene: drawn objects (`Slab`, `Hand`, `Shelf`...) or cut-outs (`Cut`, `Loupe`, ink on the
-   photo). A film may alternate them.
+8. Drawn objects and cut-outs mix freely on a set: a torn photo taped to a `Desk` is still on the desk.
+
+### Build a world first
+
+Write the place before the story objects, then move the camera through it, then perform:
+
+1. **Place.** Pick a set and give it a `span` wide enough for every station (`[-0.3 * w, 2.9 * w]` for four
+   stops). The set paints the far planes, the surface and the foreground; `useSet().floor` is where things stand.
+2. **Camera stops.** One stop per idea, each arriving a few frames before its word:
+   `cam={stations([{ at: 0, x, y, z: 1.15 }, { at: T("sea") + 4, x, y }], { until: dur })}`. Between stops the
+   camera travels with an eased move and a small zoom dip; at a stop it keeps pushing in slowly.
+3. **Objects with material.** Draw each story object as your own path or shapes inside `Solid` (or `Gloss`,
+   `Shadow`), never as a flat fill: a lit body, a rim, a darker underside and a contact shadow make it a thing.
+4. **Perform on the word.** Things fall (`drop`), swing (`pendulum`), trail (`follow`), shake on impact (`shake`)
+   and idle (`breathe`); nothing slides in and stops dead.
+
+What makes a film look cheap:
+
+- flat icons on a bare ground, no place around them;
+- the picture only in the upper half, the lower third empty;
+- objects that slide in and stop, with a locked-off camera;
+- one object repeated unchanged (vary size, tone, seed and pose).
 
 Every primitive is absolutely positioned in the clip's pixels and takes the clip frame from `useCurrentFrame()`
 unless given `f`. Sizes left out scale with `useUnit()` (clip width / 1080; `72u` below means `72 * useUnit()`). Colours come from props or
@@ -271,7 +294,7 @@ also works outside a `Stage`. Each component's props type is exported as `<Name>
 | `fibre(x0, x1, y, amp, seed, n = 6)` | a wavy line |
 | `along(pts, t)` | the point at fraction `t` of a polyline's length |
 | `mixColor(a, b, k)`, `seedInt(seed, max = 997)` | |
-| `usePalette()` | tokens `ink paper kraft kraftDeep kraftLight red lemon accent wood woodDeep wall wallDeep shadow steel` (type `Palette`); `accent` is the theme's, and a `<Stage palette>` overrides any of them. `PALETTE` holds the defaults, `PaletteContext` carries an override |
+| `usePalette()` | tokens `ink paper kraft kraftDeep kraftLight red lemon accent wood woodDeep wall wallDeep shadow steel sky haze leaf` (type `Palette`); `accent` is the theme's, and a `<Stage palette>` overrides any of them. `PALETTE` holds the defaults, `PaletteContext` carries an override |
 | `useUnit()` | clip width / 1080 |
 | `shadowCss(lift = 0, color?)` | a CSS drop-shadow for an object `lift` (0..1) off the page |
 | `shades(base)` | `{base, hi, deep, rim}` |
@@ -289,6 +312,54 @@ also works outside a `Stage`. Each component's props type is exported as `<Name>
 | `<KraftGround color? fibres = 170 seed pad = 0.25>` | brown paper with fibres and warm light; `pad` draws past the edges so camera moves never show a border |
 | `<WallGround color? deep? awning? bay = 620 x0? x1? lamps = true seed pad>` | a wall of shelf bays and posts, an optional striped awning `[c1, c2]`, swaying lamps |
 | `<TableTop top? kind = "wood" \| "kraft" \| "cloth" color? x0? x1? seed pad>` | fills the frame below `top` (default 0.62 h) with a table seen from the front, so the lower frame is never bare |
+
+### Sets
+
+A set is a whole `Stage` (it takes every `Stage` prop: `cam`, `grain`, `light`, `vignette`, `drift`, `palette`)
+with the place already built in depth: far planes that lag behind the camera, a surface at depth 1 that your
+children stand on, blurred foreground pieces at the frame edges (`front`, default on) and some idle life. Children
+are drawn on the action plane in clip px; do not wrap them in another `Layer`. Sizes scale with the clip (a
+1080 x 1920 design, scaled by the tighter of width and height) and colours come from the palette.
+
+| export | |
+|---|---|
+| `SetProps` | shared by every set: `floor?` (y things stand on, clip px), `span = [-0.3w, 1.3w]` (x range the camera travels over at depth 1), `front = true`, `seed`, `back?` (drawn on the far plane: a sign on the wall, a plane in the sky), children (the action), plus every `Stage` prop |
+| `<Room surface = "floor" \| "counter" lamps = 1 bay?>` | a back wall (0.8) with wallpaper, wainscot, curtained windows onto a landscape, shelves of books and frames; pendant lamps swaying (0.9); a perspective plank floor with window light, or a counter whose front fills the lower frame; a leaf and a door jamb in front. Floor 0.66 h (counter 0.6 h) |
+| `<Street road = true awning?>` | sky with drifting clouds (0.15), a pale skyline (0.35), shopfronts with windows, awnings and swinging hanging signs (0.7); a pavement, a kerb, a road with lane marks and the near pavement (1); a lamp post and leaves in front. Floor 0.58 h; `useSet().near` is the road |
+| `<Outdoors ground = "grass" \| "road" \| "sand" far = "hills" \| "skyline" sun = [0.76, 0.16] trees = 4>` | sky and sun (0.1), drifting clouds (0.2), far hills or a skyline (0.35), near hills with swaying trees (0.6), a field with mowing bands, flowers and tufts that move in the wind, a road across the frame or a beach (1); grass in front. Floor 0.64 h; `sun` is a fraction of the frame or `null` |
+| `<Desk top = "wood" \| "felt" \| "paper" props = true>` | a work surface from above under a warm lamp pool (0.85): papers, a pencil, a steaming mug and a plant round the edges with the centre clear; a blurred pencil and leaves in front (1.25) |
+| `useSet()` | `{floor, near, x0, x1, w, h}` of the enclosing set (`SetInfo`) |
+| `<Clouds x0 x1 y n = 5 speed = 0.4 seed color>`, `<PendantLamp x y len color? phase>`, `<Leaves x y size ang n seed sway color?>` | the sets' idle pieces as SVG, for your own places |
+
+The far planes are static apart from their small idle pieces, so a set costs little to encode; only the camera
+moves the whole frame.
+
+### Materials
+
+SVG wrappers that shade any shape you draw. Put them inside `<Canvas>` (an SVG over the whole clip in clip px
+that never clips what is drawn past its edges) or inside your own `<svg>`. A shape is a path `d`, or SVG children
+plus their `box`; only the children's silhouette counts, their own fills are ignored.
+
+| export | |
+|---|---|
+| `<Canvas z? opacity?>` | the SVG plane for materials and your own drawing |
+| `Box` | `[x, y, w, h]` |
+| `<Solid d? box? tone side = 0 rim = 7u under = 0.5 speckle = 0 gloss = 0 sweep? shadow = 1 lift = 0 outline = 2 seed detail?>` | a made thing: a contact shadow under the box (`shadow` strength, `lift` 0..1 off the surface), a darker thickness of `side` px, a lit radial body, a rim light along the lit edge, a darker underside, seeded specks, gloss and a faint ink line (paths only); `detail` is drawn on the body, clipped to it |
+| `<Shadow x y w h? lift = 0 opacity = 1>` | a contact shadow: a dark core and a soft penumbra centred on the point under the object, spreading and fading with `lift`. Around children, `<Shadow lift>{...}</Shadow>` is a drop shadow of the children instead |
+| `<Gloss d? box? at = [0.3, 0.24] size = 0.32 strength = 0.6 sweep?>` | a wet or polished highlight clipped to the shape; `sweep` 0..1 runs a glint band across it |
+
+### Motion
+
+Pure functions of the frame; times in frames, 30 fps unless `fps` is given.
+
+| export | |
+|---|---|
+| `drop(f, at, from, to, {dur?, squash = 0.22, hz = 2.4, decay = 5, fps}?)` | let go at `at`: `{y, sx, sy, t, landed}` (type `Drop`, options `DropOptions`). y accelerates from `from` to `to`, stretching a little; on landing it squashes (`sx` > 1, `sy` < 1) and settles. Scale around the contact point: `translate(cx, y) scale(sx, sy) translate(-cx, -to)` |
+| `pendulum(f, at, amp = 24, hz = 1.1, decay = 1.6, idle = 1.2, fps)` | degrees: a damped swing kicked at `at` (`swing`) that keeps an idle sway of `idle` degrees instead of stopping dead |
+| `follow(f, leader, lag = 6, n = 6)` | a value trailing `leader` (a function of the frame) by about `lag` frames, smoothed: cargo, followers, a second hand |
+| `shake(seed, f, at, amp = 10, dur = 18, hz = 14, fps)` | `[dx, dy]`: a smooth seeded shake from `at`, fading out over `dur` frames |
+| `breathe(f, amp = 0.015, period = 3.2, phase = 0, fps)` | an idle scale around 1 |
+| `stations(stops, {travel = 22, dip = 0.1, push = 0.04, until?}?)` | camera keys for `<Stage cam>` (or a set's `cam`) from stops `{at, x, y, z = 1}` (type `Stop`, options `StationOptions`): the camera arrives at each stop's `at` after an eased `travel` with a zoom dip, pushes in by `push` while it holds, and keeps pushing on the last stop until `until` |
 
 ### Actors
 
@@ -350,14 +421,19 @@ specks. All sizes have defaults relative to the clip width.
 
 ### A complete scene
 
-The cut-out scene of `examples/performance/` (`library/components/SaltGlass.tsx`), on the clip
-`{"type": "component", "name": "SaltGlass", "start": "line:3", "end": "end", "props": {"photo_asset": "glass"}}`
-over the film's `ground` clip. The line is "So every litre of seawater holds about thirty-five grams of salt."
+The last world of `examples/performance/` (`library/components/SaltDesk.tsx`), on the clip
+`{"type": "component", "name": "SaltDesk", "start": "line:3", "end": "end", "props": {"photo_asset": "glass"}}`.
+The line is "So every litre of seawater holds about thirty-five grams of salt." A `Desk` set, three camera stops,
+a cut-out, a drawn dish and a heap of salt made solid, a drop with a squash and a tag on a pendulum:
 
 ```tsx
+// Line 3 on a Desk set: a torn photo of a glass of seawater is taped down, the litre is marked, a heap of salt drops
+// into a dish beside it and a tag with the number swings in; the camera pushes in on the glass, then on the dish.
 import React from "react";
 import { useCurrentFrame } from "remotion";
-import { Actor, CircleIt, Cut, Label, Loupe, Marker, prog, swing, Tag, Tape, toCanvas, useClip, useCues } from "@reelsmith/kit";
+import {
+  Actor, Canvas, CircleIt, Cut, Desk, drop, Label, Loupe, Marker, pendulum, prog, Shadow, Solid, stations, Tag, Tape, toCanvas, useClip, useCues,
+} from "@reelsmith/kit";
 import type { Placed, Pt } from "@reelsmith/kit";
 
 // outline in glass.jpg source pixels (232 x 338; read off an AssetGrid preview): the glass and the salt beside it
@@ -365,25 +441,44 @@ const GLASS: Pt[] = [[38, 66], [192, 66], [188, 236], [214, 232], [232, 242], [2
 const SALT: Pt = [205, 276];
 const WATER: Pt[] = [[50, 124], [90, 119], [130, 126], [182, 121]];
 
-export default function SaltGlass({ props }: { props: any }) {
+export default function SaltDesk({ props }: { props: any }) {
   const f = useCurrentFrame();
-  const { w } = useClip();
+  const { w, h, dur } = useClip();
   const { T } = useCues();
-  const piece: Placed = { poly: GLASS, x: w * 0.42, y: 840, s: 2.55, r: -3 };
+  const piece: Placed = { poly: GLASS, x: w * 0.36, y: h * 0.42, s: 2.4, r: -4 };
   const salt = toCanvas(piece, SALT);
   const wave = WATER.map((pt) => toCanvas(piece, pt));
+  const dish = { x: w * 0.68, y: h * 0.66 };
+  const heap = drop(f, T("thirty") - 10, dish.y - 700, dish.y - 10, { squash: 0.32 });
+  const cam = stations([
+    { at: 0, x: w * 0.5, y: h * 0.5, z: 0.94 },
+    { at: T("seawater") - 2, x: w * 0.42, y: h * 0.44, z: 1.12 },
+    { at: T("thirty") - 2, x: w * 0.6, y: h * 0.56, z: 1.18 },
+  ], { travel: 24, dip: 0.08, push: 0.05, until: dur });
   return (
-    <>
+    <Desk cam={cam} seed="study">
       <Actor at={0} from="slap" ox={piece.x} oy={piece.y}>
         <Cut src={props.photo_asset} seed="glass" {...piece} lift={0.15} photo="saturate(1.1) contrast(1.05)" />
-        <Tape x={piece.x - 40} y={470} w={220} r={-8} seed="tape" />
+        <Tape x={piece.x - 40} y={piece.y - 330} w={220} r={-8} seed="tape" />
       </Actor>
       <Marker d={"M" + wave.map((p) => p.join(" ")).join(" L")} p={prog(f, T("seawater") - 3, 12)} w={12} seed="water" />
-      <Label x={300} y={420} text="1 litre" r={-5} seed="litre" at={T("litre") - 2} />
+      <Label x={w * 0.62} y={h * 0.3} text="1 litre" r={-5} seed="litre" at={T("litre") - 2} />
+      <Canvas>
+        <Shadow x={dish.x} y={dish.y + 40} w={250} />
+        <Solid d={`M${dish.x - 230} ${dish.y - 20} Q${dish.x} ${dish.y + 120} ${dish.x + 230} ${dish.y - 20} Z`} box={[dish.x - 230, dish.y - 20, 460, 90]}
+          tone="#E9EEF0" side={14} gloss={0.5} shadow={0} seed="dish" />
+        {heap.t > 0 ? (
+          <g transform={`translate(${dish.x} ${heap.y}) scale(${heap.sx} ${heap.sy}) translate(${-dish.x} ${-(dish.y - 10)})`}>
+            <Solid d={`M${dish.x - 170} ${dish.y - 10} Q${dish.x - 80} ${dish.y - 170} ${dish.x} ${dish.y - 175} Q${dish.x + 90} ${dish.y - 165} ${dish.x + 170} ${dish.y - 10} Z`}
+              box={[dish.x - 170, dish.y - 175, 340, 165]} tone="#F8F6F0" speckle={70} gloss={0.3} shadow={heap.landed ? 0.6 : 0} seed="heap" />
+          </g>
+        ) : null}
+        <ellipse cx={dish.x} cy={dish.y - 20} rx={230} ry={18} fill="none" stroke="#FFFFFF" strokeWidth={6} opacity={0.7} />
+      </Canvas>
       <CircleIt x={salt[0]} y={salt[1]} w={210} h={150} p={prog(f, T("salt") - 6, 12)} />
-      <Loupe src={props.photo_asset} at={SALT} x={880} y={1160} r={120} zoom={3.4} piece={piece} p={prog(f, T("grams") - 4, 10)} seed="lp" />
-      {f >= T("thirty") - 4 ? <Tag x={790} y={300} ang={swing(f, T("thirty") - 4, 26)} text="35" unit="grams" /> : null}
-    </>
+      <Loupe src={props.photo_asset} at={SALT} x={w * 0.32} y={h * 0.7} r={120} zoom={3.4} piece={piece} p={prog(f, T("grams") - 4, 10)} seed="lp" />
+      {f >= T("thirty") - 4 ? <Tag x={dish.x + 150} y={h * 0.38} ang={pendulum(f, T("thirty") - 4, 26)} text="35" unit="grams" /> : null}
+    </Desk>
   );
 }
 ```
@@ -391,13 +486,17 @@ export default function SaltGlass({ props }: { props: any }) {
 Its meta.json declares `photo_asset` as `{"type": "string"}`. Re-recording the voice moves every cue with it; a word
 that is no longer said makes `T` throw, and `preview` shows the error in the clip's place.
 
+`SaltShore.tsx`, the first world, spans two lines on an `Outdoors` set with four stops; its own pieces (river,
+sea, sun, cloud, rocks, crystals) are paths in `library/components/salt/shore.tsx` wrapped in `Solid`.
+
 ### Size and render cost
 
 - Grain is static by default. Grain or texture that changes on every frame over the whole picture multiplies the
   file size (a 30 s film with a per-frame grain overlay came out at 71 MB); keep `grainFps` at 6 or less.
 - Aim for 8 Mb/s or less: a 60 s vertical film should stay well under 80 MB. The example renders 13 s at 1080 x 1920
-  to about 6 MB in under a minute.
-- Paint the ground once, in the `ground` clip; scenes draw no ground, light, vignette or grain of their own.
+  to about 7 MB in under a minute.
+- One set per world. In the older layout, paint the ground once in the `ground` clip; scenes over it draw no
+  ground, light, vignette or grain of their own.
 - A cut-out is one `<Img>` under a CSS clip-path: cheap. Many large blurred filters (`Mist` with a high `n`, a
   blurred `Layer`) cost the most render time; keep them to the moments that need them.
 - Text the kit draws is real DOM or SVG text, measured by the layout pass like any other: keep it inside the safe

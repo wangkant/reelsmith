@@ -28,12 +28,18 @@ export type Palette = {
   shadow: string;
   /** steel, glass and plastic */
   steel: string;
+  /** the sky at the top and at the horizon */
+  sky: string;
+  haze: string;
+  /** grass, leaves and hills */
+  leaf: string;
 };
 
 export const PALETTE: Palette = {
   ink: "#211A14", paper: "#FBF6EA", kraft: "#C29B6C", kraftDeep: "#9C7046", kraftLight: "#E0C298",
   red: "#C8372D", lemon: "#F7D417", accent: "#C8372D", wood: "#8B5A34", woodDeep: "#5F3B20",
   wall: "#EBDDC5", wallDeep: "#D9C3A1", shadow: "#28180A", steel: "#8E949A",
+  sky: "#7FB2D6", haze: "#F3E3C4", leaf: "#6E9A4E",
 };
 
 export const PaletteContext = createContext<Partial<Palette> | null>(null);
