@@ -127,6 +127,7 @@ export const Element: React.FC<Props> = ({ clip, theme, safe, locale, mode }) =>
     w, h, dur: clip.dur, fps, theme, width, height, safe, locale,
     progress: kfProgress ?? (clip.dur > 1 ? clamp01(f / (clip.dur - 1)) : 1),
     lines: clip.type === "component" && Array.isArray(clip.content?.lines) ? clip.content.lines : NO_LINES,
+    level: clip.type === "component" && Array.isArray(clip.content?.level) ? clip.content.level : undefined,
   };
   const moved = zoom !== 1 || panX !== 0 || panY !== 0;
   const contentOrigin = `${sx * 100}% ${sy * 100}%`;

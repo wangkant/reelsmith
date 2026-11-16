@@ -1,10 +1,11 @@
 # @reelsmith/kit
 
 Everything a component may import from `@reelsmith/kit`. **To start, read the Exports block below and the one
-section your film needs** ("A component" for a single component, "Stage kit" for drawn worlds, "Layered photographs"
-for photographs that move as layers); the block gives every export's props or arguments, defaults and return type, so
-there is no need to read the sources. The source is `renderer/src/kit/`; the presets in `renderer/src/presets/` are
-fuller examples (`library(p, "Receipt")` prints a preset's source path).
+section your film needs** ("A component" for a single component, "Stage kit" for drawn worlds, "Drawn-pose
+animation" for a drawn character who acts, "Layered photographs" for photographs that move as layers); the block
+gives every export's props or arguments, defaults and return type, so there is no need to read the sources. The
+source is `renderer/src/kit/`; the presets in `renderer/src/presets/` are fuller examples (`library(p, "Receipt")`
+prints a preset's source path).
 
 ## Exports
 
@@ -20,7 +21,7 @@ exported for the kit's own pieces.
 // kit/context.ts
 useClip() → ClipCtx
 <ClipContext >
-type ClipCtx = {w, h, dur, fps, theme: Theme, width, height, safe: Box, locale: string, progress, lines: ClipLine[]}
+type ClipCtx = {w, h, dur, fps, theme: Theme, width, height, safe: Box, locale: string, progress, lines: ClipLine[], level?: number[]}
 type ClipLine = {i, text: string, from, to}
 // elements/Media.tsx
 <Media >
@@ -255,6 +256,39 @@ type Kick = {at, amp?, dur?, fringe?}
 type LensState = {focus, aperture}
 // kit/stage/join.tsx
 <Join a: ReactNode, b: ReactNode, at, len = 14, kind = "push", hole?: [n, n, n, n], round = 0, oval = false, feather = 0.25, dir = "left", from?: [n, n, n], to?: [n, n, n]>
+// kit/stage/drawn.tsx
+actAt(beatsIn: Beat[], f, o = {}) → Act
+beatAt(beats: Beat[], f) → number
+blinkAt(f, seed = "blink", every = [2.5, 5], len = 3, fps = 30) → boolean
+<Burst x, y, at, r = 120, n = 9, len = 14>
+checkTwins(poses: Record<string, Pose>) → void
+<Cracks x, y, at = 0, len = 6, p?, clip?: string | [n, n, n, n], n = 7, reach = 320>
+<DustPuff x, y, at, w = 260, n = 4, len = 22, color = "#EFE3CC">
+faceAt(pose: Pose, talking: boolean, blinking: boolean) → Asset
+<Framing cuts: FramingCut[], scene?: [n, n], children?: ReactNode>
+framingAt(cuts: FramingCut[], f, w, h, scene?: [n, n]) → { x: number; y: number; z: number }
+<LineStyle children?: ReactNode, ...LineStyleValue>
+<Performer poses: Record<string, Pose>, beats: Beat[], x, y, h, flip = false, level?: ((f: number) => number), open = 0.14, hold = 0.07, blinks = [], autoBlink = true, blinkEvery = [2.5, 5], blinkLen = 3, nudge?: ((f: number) => Nudge), ...ActOptions>
+<PopMark x, y, at, kind = "!", size = 170, len = 36, r = 10, color?: string>
+poseBox(pose: Pose, h, scale = 1, who = "Performer") → { w: number; hh: number; fx: number; s: number }
+<PoseSheet poses: Record<string, Pose>, ids?: string[], h, y?, show = "src">
+<Splash x, y, at, w = 180, n = 6, len = 24, color?: string>
+<SpeedLines x, y, at, dir = 0, len = 240, n = 5, spread = 170, life = 10>
+<SteamCurls x, y, n = 3, spread = 120, rise = 260, scale = 1, at = 0>
+<SweatDrop x, y, at, size = 54, len = 30, color = "#9FD8F2">
+talkAt(level: number[] | ((f: number) => number), f, open = 0.14, hold = 0.07) → boolean
+toss(f, at, from: Pt, to: Pt, len = 18, height = 220, spin = 0) → Toss
+<ToonStar x, y, r = 48, rot = 0, at?, len = 20, spin = 6, color?: string>
+useLineStyle() → LineStyleValue
+useVoiceLevel() → (f: number) => number
+type Act = {i, pose: string, scale, sx, sy, rot, dy}
+type ActOptions = {antic?, anticSquash?, anticLean?, anticDip?, settle?, overSquash?, overRot?, overDecay?, overHz?, breath?, breathPeriod?, sway?, swayPeriod?, fps?}
+type Beat = {at, pose: string, dir?, scale?}
+type FramingCut = {at, x, y, z}
+type LineStyleValue = {color: string, weight, paper: string, spark: string}
+type Nudge = {dx?, dy?, rot?, sy?}
+type Pose = {src: Asset, shut?: Asset, blink?: Asset, blinkOpen?: Asset, scale?, feet?, imgW?, imgH?}
+type Toss = {x, y, r, sx, sy, t, landed: boolean}
 ```
 
 <!-- exports:end -->
@@ -471,7 +505,7 @@ instance. Each component's props type is exported as `<Name>Props`; `Actor`'s en
 
 - `useCues`: `cues(useClip().lines, fps)`: the narration cues of the current clip
 - `cues`: `{T, at, end, S, lines, fps}` over `ClipLine[]` (type alias `CueLine`; result type `Cues`)
-- `T`: the frame the `nth` occurrence of `word` is said, across the clip's lines, plus `off` seconds. Placed by character position: every character of the line, punctuation included, takes an equal share of its time. Throws when the word (or that occurrence) is not in the lines
+- `T(word, off = 0, nth = 0)`: the frame the `nth` occurrence of `word` is said (counted from 0, across the clip's lines), plus `off` seconds: `T("egg", 0, 1)` is the second "egg", `T("egg", -0.1)` a tenth of a second before the first. Placed by character position: every character of the line, punctuation included, takes an equal share of its time. Throws when the word (or that occurrence) is not in the lines
 - `at`, `end`: first and last frame of line `i` (its `line:N` number), or of the clip's first / last line; throw when missing
 - `S`: seconds to frames
 - `prog`: 0..1 over `len` frames from `a`, held at both ends
@@ -627,6 +661,95 @@ picture whole on a dark ground under a labelled grid, every fifth line yellow, w
 coordinates on all four edges (fractions when the size is unknown). Preview it once per picture, read the outline's
 points off it (10 to 14 points are enough), write them into the scene as `Pt[]` and remove the clip. It is a
 tracing aid, not film content; its labels are not measured as film text.
+
+### Drawn-pose animation
+
+A drawn host who acts, as limited TV animation does: each key pose is its own drawing; the `Performer` holds one,
+crouches and leans against the coming move, snaps to the next, overshoots and settles, breathes while it holds, flaps
+its mouth on the voice and blinks. For stories, explainers with attitude, comedy: honest animation that never
+pretends to be footage, and needs no photographs, depth, `tween` or `parallax`.
+
+1. **One model sheet** fixes the design. **Every key pose** is a cut-out drawn with `style_ref_asset` = the sheet,
+   head to feet, the same outfit named in every prompt; one pose per attitude (explain, doubt, shock, smug, shrug, think).
+   draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose.
+2. **Twins**, each registered onto its pose's canvas: `draw(p, "pA_shut", "the mouth is closed in a small smile",
+   twin_of="pA")`; for blinks `draw(p, "pA_blink", "the eyes are shut", twin_of="pA_shut")` (eyes shut, mouth
+   shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). Only the asked-for change is taken
+   from a twin; other redrawn spots are reported and kept from the base. A report that says NOT A TWIN is another
+   pose: draw it again, or use it as a pose of its own with its own twins. The Performer refuses a twin whose pixel
+   size differs from its pose's picture (it would make the figure jump on every mouth flap).
+3. **Preview a PoseSheet before staging**: `<PoseSheet poses={poses} h={520} />` as one still shows every pose on
+   one ground line as the Performer places it (pick `h` so they fit side by side), a tick at each `feet` and a guide
+   at the first pose's head top: even out head size with `scale` and the stance with `feet` until both hold.
+4. **The set** as drawn layers in the same style; **props** as cut-outs in `Photo` (`anchor` is the pivot, `r` turns
+   about it, `w` × sx with `sy` = sy / sx squashes), moved by `drop`, `toss` (an arc that lands and squashes), `swing`.
+5. **Beats** from cue times, **effects** under one `LineStyle` in the drawings' line colour, **cuts** between
+   framings with `Framing` (wide, mid, a close shot of the detail): hard cuts on words, never camera stations or a
+   slow move over one picture.
+
+**Pose sizes**: `h` is the drawn height of a pose's canvas at scale 1, in clip px; `feet` is the x of the point
+midway between the feet as a fraction of the canvas width (default 0.5; take it from the draw report); `scale`
+multiplies one pose so its head matches the others. The Performer stands the canvas's bottom edge on `y` with the
+`feet` point on `x`. **Mouth and eyes**: while the voice is heard the open-mouth `src` shows (a blink uses
+`blinkOpen` if given, otherwise it is skipped); in silence `shut`, and `blink` while blinking. Beats may come in any
+order (sorted by `at`).
+
+```tsx
+const { T } = useCues();
+const a = pics;                                    // props named *_asset keep the suffix: a.pA_asset, not a.pA
+const poses = { pA: { src: a.pA_asset, shut: a.pA_shut_asset, blink: a.pA_blink_asset, feet: 0.52 },
+  pB: { src: a.pB_asset, shut: a.pB_shut_asset, blink: a.pB_blink_asset, scale: 0.9, feet: 0.46 } };
+const beats = [{ at: 0, pose: "pA" }, { at: T("never") - 3, pose: "pB", dir: -1 }];
+const stress = [T("so"), T("egg", 0, 1)];         // nth counts from 0: 1 is the second "egg"
+const nudge = (k) => ({ rot: stress.reduce((s, at) => s + wob(k, at, 3), 0),
+  dy: stress.reduce((s, at) => s + wob(k, at, -14), 0) });
+const egg = toss(f, T("drop"), [520, 900], [250, 1150], 10, 120, 300);
+<Framing scene={[1080, 1920]} cuts={[{ at: T("drop") - 2, x: 300, y: 1100, z: 1.8 }, { at: T("never") - 3, x: 540, y: 960, z: 1 }]}>
+  <LineStyle color="#3A1F10" weight={10}>
+    <Photo src={a.wall_asset} x={540} y={0} w={1080} anchor={[0.5, 0]} />
+    <Performer poses={poses} beats={beats} x={640} y={1600} h={1250} nudge={nudge} />
+    <Photo src={a.pot_asset} x={250} y={1105} w={300} anchor={[0.5, 0]} />
+    <Photo src={a.egg_asset} x={egg.x} y={egg.y} w={86 * egg.sx} sy={egg.sy / egg.sx} r={egg.r} anchor={[0.5, 0.5]} />
+    <Splash x={250} y={1150} at={T("drop") + 10} color="#6B3A1C" />
+    <PopMark x={880} y={560} at={T("never") - 3} kind="!" />
+  </LineStyle>
+</Framing>
+```
+
+Its clip: `{"type": "component", "name": "Cook", "start": 0, "end": "end", "box": "full", "props": {"pics":
+{"pA_asset": "pA", "pA_shut_asset": "pA_shut", ...}}}`. Acting defaults (`ActOptions`): `antic` 3 frames,
+`anticSquash` 0.07, `anticLean` 3°, `anticDip` 6 px, `settle` 12 frames, `overSquash` 0.09, `overRot` 5°, `breath`
+0.012 over 2.8 s, `sway` 0.6° over 4.1 s. The mouth reads `useVoiceLevel()` (loudness 0..1 a frame, 0 without a
+voice) on twos; blinks run by themselves. `LineStyle` defaults: line #2A1A0E, 9 px at 1080 wide, paper #FFFBF2,
+spark #FFD45C. `Framing`: from each cut's `at` the scene shows `z` times larger with its point (`x`, `y`) at the frame
+centre, no easing; with `scene` [w, h] it is clamped so no edge shows (`framingAt` gives the framing at a frame).
+
+**Effects** (all in the LineStyle line colour and weight):
+- `Burst`: an impact flash (paper fill) and rays shooting out, centred on (x, y)
+- `ToonStar`: a four-point star centred on (x, y), filled with spark (or `color`)
+- `SteamCurls`: wavy curls in paper rising from (x, y), the base of the steam
+- `Splash`: a ring on the surface and drops thrown up, centred where the thing lands (x, y); drops filled with paper (or `color`)
+- `SpeedLines`: strokes trailing behind a move; (x, y) is the moving thing, the strokes start behind it
+- `SweatDrop`: a drop (`color`, default light blue) centred on (x, y), its tip up
+- `PopMark`: "!" or "?" filled with spark (or `color`), (x, y) its centre
+- `Cracks`: lines spreading from the hit point (x, y), kept inside `clip`
+- `DustPuff`: two clouds (`color`, default light sand) rolling out sideways from (x, y) on the ground
+
+**What reads as animation**: a new pose or action at least every 1.2 s of narration; anticipation before every move
+(give `dir`); arcs and gravity for props, a squash where they land; the pose 2 or 3 frames before its word; the face
+changes with the line; a close shot for a detail; never a picture slid to fake a camera; nothing held dead.
+
+- **Acting inside a hold**: a hold over 1.2 s needs something: a nod or a tilt through `nudge` on each stressed word
+  (`wob` as in the example), the same pose mirrored with `flip`, a second look through a twin.
+- **Prop hand-off**: a prop that moves as its own cut-out is not also drawn in the pose at that moment. On the frame
+  it leaves the hand, switch to a pose or twin with the hand empty, and start the cut-out from the hand's position.
+- **Judge it on sheets**: pacing on a 6-a-second sheet, `frames(p, "build/draft.mp4", every=0.1667, start=2.4,
+  end=7.2)`; each pose change on a 25-a-second sheet of the half second around it, `frames(p, "build/draft.mp4",
+  every=0.04, start=3.9, end=4.4)` (0.04 is the smallest `every`): the crouch, the snap and the settle must be visible.
+
+**On model**: the sheet as `style_ref_asset` every time, the outfit named every time, each new pose looked at beside
+the sheet and on a PoseSheet with the others.
+**Limits**: limbs jump between drawings (more poses smooth it, not tweening); two mouth shapes.
 
 ### Layered photographs
 

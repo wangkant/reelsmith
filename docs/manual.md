@@ -9,8 +9,8 @@ There is no pipeline and no template. Call any tool at any time. A good loop:
 
 1. `notes` (what you learned last time) and `manual(project)` once the project exists: this text, then the
    playbook of the project's platform. Without a project yet, `manual()`.
-2. `new_project` with the profile (the canvas and the platform) and the locale (the language) the film needs, unless
-   you were given a project.
+2. `new_project` with the profile (canvas and platform) and locale (language) the film needs, unless given a project.
+   A workspace is any folder holding `workspace.json` (`{}` is enough): create it before `new_project <workspace>/projects/<name>`.
 3. Bring in the material:
    - **Footage** (the user's recordings and clips): `import_asset`, then see Editing footage.
    - **A film from a script**: research and write `script.md` in the project folder (your scratchpad: sources,
@@ -290,8 +290,7 @@ back what the last undo took (all N as one batch), and any later edit clears it.
 - `add_asset` with an existing id replaces that asset. An asset still used by a clip (directly or through component
   props) cannot be removed; removing a clip others are timed from leaves them where they were (their anchors on it
   become numbers).
-- The last three are ripple edits for footage (next sections). `trim_clip` on a clip that is not media takes Times
-  for its new start and end.
+- The last three ripple-edit footage (next sections); `trim_clip` on a clip that is not media takes new start/end Times.
 
 ## Making a film people watch
 
@@ -451,6 +450,7 @@ Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); exam
 - **Layered photographs** (kit.md; `examples/layers/`): a drawn `Plate` per place with traced `fronts`, cut-outs with
   alpha (`Photo`, `Travel`), `Refract`/`Warp` not drawn rings, one `Lens`, a `Join` instead of a cut.
 - **Shots that look filmed**: the preset `Broll` cuts one plate and its baked clip per shot (kit.md, same title).
+- **A drawn character who acts**: key-pose drawings played by `Performer` (kit.md, "Drawn-pose animation").
 - **Motion in the picture**: for an action, draw key poses of one shot (`match_asset` = the first, prompt "Exactly the
   same photograph from exactly the same camera position, framing and light; nothing changes except one thing: ...")
   and `tween` them: two poses far apart ghost (it fades out and in instead of travelling), so add a pose between.
@@ -497,14 +497,14 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
 | `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["A T-shirt drinks 2,700 litres.", {"text": "Most of it in the field.", "pace": 0.9}])` |
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
-| `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `draw_many` 1–8 at once | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")`, `draw(p, "cup", "a paper coffee cup on the table, photo", cutout=true, match_asset="field")`, `draw_many(p, [{"id": "field", "prompt": "..."}, {"id": "cup", "prompt": "...", "cutout": true, "match_asset": "field"}])` |
+| `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?, twin_of?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `twin_of` the same cut-out drawing with one change (a closed mouth), registered onto its canvas; `draw_many` 1–8 at once | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")`, `draw(p, "cup", "a paper coffee cup on the table, photo", cutout=true, match_asset="field")`, `draw_many(p, [{"id": "field", "prompt": "..."}, {"id": "cup", "prompt": "...", "cutout": true, "match_asset": "field"}])`, `draw(p, "pA_shut", "the mouth is closed", twin_of="pA")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: the frames between key pictures of one shot (2–6, ≤ 12 s); a camera moving through one still by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`); both run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
 | `sound(project, id, kind, seconds, seed?, gain_db?)` | local and free: a bed that loops (room, street, wind, rain, kitchen, fire, water, crowd, night; −24 LUFS) or a one-shot (whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter), with its loudness and low/mid/high split | `sound(p, "amb", "street", 20)`, `sound(p, "hit", "thump", 0.5)` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL (at most `providers.import.max_mb`, default 200 MB) into assets | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
 | `probe(project, source)` | a source's streams, codecs, rotation and loudness | `probe(p, "talk")` |
-| `frames(project, asset, times?, every?, n=12)` | stills of a source at source seconds (at most 24) + a timed contact sheet; from a shell every tool's keyword arguments are flags (`-n 12`) and `--help` lists them | `frames(p, "talk", ["0:12", 41.2])` |
+| `frames(project, asset, times?, every?, n=12, start?, end?)` | stills of a source at source seconds (at most 24; `every` over `start`–`end` up to 48, e.g. a draft at 6 a second to judge motion) + a timed contact sheet; from a shell every tool's keyword arguments are flags (`-n 12`) and `--help` lists them | `frames(p, "talk", ["0:12", 41.2])`, `frames(p, "build/draft.mp4", every=0.1667, start=2.4, end=7.2)` |
 | `scenes(project, asset, threshold=0.3)` | shot cuts (source seconds) + each shot's first frame | `scenes(p, "trip")` |
 | `silences(project, asset, min_s=0.5, noise_db=-35)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
 | `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Ada Lovelace, reelsmith")` |
@@ -520,9 +520,9 @@ What you build stays in the workspace for every film; `note` what each piece is 
   `"calm"`) given to the voice as an instruction: listen before relying on it. Write the lines in the film's
   language (`"一件T恤，要喝2700升水。"` in a `zh-CN` film).
 - `draw`: `size` an aspect (`9:16`, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, `3:2`, `16:9`; default nearest the canvas) or
-  `"WxH"` (sides 256–4096). A cut-out is never enlarged; one without real alpha is refused. Batch in `draw_many`
-  (three at once; read its sheet). A plate and its cut-outs (`match_asset` = the plate: camera, light) may share a
-  call; the cut-outs wait for the new plate. A cut-out comes back at its own size: place it at its real size.
+  `"WxH"` (sides 256–4096). A cut-out is never enlarged, is refused without real alpha and comes back at its own
+  size: place it at its real size. `draw_many` runs three at once (read its sheet); a plate and its cut-outs
+  (`match_asset`: camera, light), or a pose and its `twin_of` twins, may share a call: they wait for the new picture.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
   limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
   crossed. Transcribing the same recording again with the same settings is free.

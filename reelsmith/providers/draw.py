@@ -73,13 +73,18 @@ CODEX_LOCKDOWN = ["--ignore-user-config", "--ignore-rules", "-s", "read-only",
                                 "goals", "tool_suggest", "skill_mcp_dependency_install")
                     for a in ("-c", f"features.{f}=false")],
                   "-c", "suppress_unstable_features_warning=true"]
+TWIN_PREFIX = ("Exactly the same drawing, in exactly the same style, size and position; nothing changes except one "
+               "thing: ")
+TWIN_NOTE = ("The attached image is the drawing to copy: the same character, pose, outline, line weight, colours, "
+             "proportions, framing and size, drawn again exactly; change only the one thing the description asks for.")
 CUTOUT_NOTE = ("Isolated object on a fully transparent background (PNG with alpha channel): no ground, no shadow, "
                "no background at all.")
 CLEAR_MIN = 0.05                # under this share of see-through pixels the alpha is not a cut-out
 CUT_PAD = 0.02                  # trim pad, as a share of the longer side
+FEET_BAND = 0.04                # the bottom share of a figure's height that its feet span
 BATCH_MAX = 8                   # pictures in one draw_many
 BATCH_THREADS = 3               # draws running at once in a draw_many
-BATCH_KEYS = {"id", "prompt", "size", "cutout", "style_ref_asset", "match_asset"}
+BATCH_KEYS = {"id", "prompt", "size", "cutout", "style_ref_asset", "match_asset", "twin_of"}
 SHEET_TILE_W = 360
 SHEET_COLS = 4
 SHEETS_KEPT = 5                 # contact sheets left under build/draws
@@ -365,6 +370,20 @@ def cut_out(src: Path, dst: Path, size: tuple[int, int]) -> dict:
     return {"kind": "ok", "width": img.width, "height": img.height, "clear": round(clear, 3), "edges": edges}
 
 
+def feet_of(path: Path, band: float = FEET_BAND) -> float | None:
+    """Where a cut-out stands: the x midway across its lowest opaque rows (the bottom `band` of its opaque height),
+    as a fraction of its width; None without opaque pixels."""
+    from PIL import Image
+    with Image.open(path) as im:
+        a = im.convert("RGBA").getchannel("A").point(lambda v: 255 if v >= 128 else 0)
+    box = a.getbbox()
+    if box is None:
+        return None
+    top = max(box[1], box[3] - max(1, round(band * (box[3] - box[1]))))
+    low = a.crop((0, top, a.width, box[3])).getbbox()
+    return round((low[0] + low[2]) / 2 / a.width, 3)
+
+
 def _flat_ref(ref: Path, workdir: Path) -> Path:
     """A reference with alpha laid on a light ground: its clear pixels would otherwise read as black."""
     try:
@@ -463,22 +482,41 @@ def _blocked(name: str) -> str:
 
 
 @safe_tool
-def draw(project, id, prompt, style_ref_asset=None, size=None, cutout=False, match_asset=None, *,
+def draw(project, id, prompt, style_ref_asset=None, size=None, cutout=False, match_asset=None, twin_of=None, *,
          provider: ImageProvider | None = None, fit=fit_image, measure=image_size, cut=cut_out):
     """(text, is_error): an original picture into assets/<id>.png, registered as an image asset; with cutout, an
-    isolated subject with a real alpha channel, trimmed to itself; with match_asset, made to sit in that plate."""
+    isolated subject with a real alpha channel, trimmed to itself; with match_asset, made to sit in that plate; with
+    twin_of, the same cut-out drawing with one change, registered onto that asset's canvas."""
     ctx = context(project)
     text, is_error, _ = _draw(ctx, provider or make_provider(ctx), id, prompt, style_ref_asset, size, cutout,
-                              match_asset, fit, measure, cut)
+                              match_asset, fit, measure, cut, twin_of)
     return text, is_error
 
 
-def _draw(ctx, provider, id, prompt, style_ref_asset, size, cutout, match_asset, fit, measure, cut):
+def _draw(ctx, provider, id, prompt, style_ref_asset, size, cutout, match_asset, fit, measure, cut, twin_of=None):
     """(text, is_error, made): made is {path, width, height, cut, seconds, edges, reg} for a picture that landed."""
     asset_id = check_id(id)
     prompt = str(prompt or "").strip()
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         return f"prompt must describe the picture in 1-{MAX_PROMPT_CHARS} characters", True, None
+    twin_base = None
+    if twin_of not in (None, ""):
+        if style_ref_asset not in (None, "") or match_asset not in (None, ""):
+            return ("twin_of already sends that drawing as the reference; leave style_ref_asset and match_asset "
+                    "out"), True, None
+        if size not in (None, ""):
+            return "twin_of takes its size from that drawing; leave size out", True, None
+        if str(twin_of).lower() == asset_id.lower():
+            return ("twin_of must name another asset: the twin is a new picture beside the drawing it copies "
+                    f"(say id {asset_id + '_shut'!r})"), True, None
+        twin_base = _style_ref(ctx, twin_of, "twin_of", ("image",))
+        bw, bh = measure(twin_base)
+        if not existing_asset(ctx, twin_of).get("alpha"):
+            return (f"twin_of {twin_of!r} must be a cut-out (drawn with cutout=true): twins are registered by their "
+                    "transparent silhouettes"), True, None
+        size, cutout, match_asset, prompt = nearest_aspect(bw, bh), True, twin_of, TWIN_PREFIX + prompt
+        if len(prompt) > MAX_PROMPT_CHARS:
+            return f"prompt must describe the change in under {MAX_PROMPT_CHARS - len(TWIN_PREFIX)} characters", True, None
     if style_ref_asset not in (None, "") and match_asset not in (None, ""):
         return ("style_ref_asset and match_asset do not go together: match_asset already carries the plate's look "
                 "(light, colour, camera); use one of them"), True, None
@@ -489,7 +527,7 @@ def _draw(ctx, provider, id, prompt, style_ref_asset, size, cutout, match_asset,
     if match_asset not in (None, ""):
         # a web capture has no camera or light to match
         ref = _style_ref(ctx, match_asset, "match_asset", ("image",))
-        note = MATCH_CUT_NOTE if cutout else MATCH_PLATE_NOTE
+        note = TWIN_NOTE if twin_base else MATCH_CUT_NOTE if cutout else MATCH_PLATE_NOTE
     check_replaceable(ctx, asset_id, "image")
     cfg = ctx.providers["image"]
     max_draws = int(cfg.get("max_draws") or 30)
@@ -509,18 +547,33 @@ def _draw(ctx, provider, id, prompt, style_ref_asset, size, cutout, match_asset,
                         cut if cutout else None, note)
         if last.kind == "ok":
             _reachable(provider.name)
+            twin_line, not_twin = "", None
+            if twin_base is not None and last.cut:
+                from .twin import register, report
+                fitted = register(twin_base, ctx.assets_dir / f"{asset_id}.png", ctx.assets_dir / f"{asset_id}.png")
+                if fitted["same"]:
+                    last.cut.update(width=fitted["width"], height=fitted["height"], edges=[])
+                else:
+                    not_twin = twin_of
+                twin_line = report(twin_of, fitted)
             entry = {"path": f"assets/{asset_id}.png", "kind": "image", "note": prompt[:200]}
+            feet = feet_of(ctx.assets_dir / f"{asset_id}.png") if last.cut else None
             if last.cut:
                 entry.update(alpha=True, width=last.cut["width"], height=last.cut["height"])
+                if feet is not None:
+                    entry["note"] = f"{prompt[:186]} (feet {feet:.2f})"
             reg = register_asset(ctx, asset_id, entry)
             w, h = (last.cut["width"], last.cut["height"]) if last.cut else out_size
-            placed = _placed_note(match_asset) if last.cut and match_asset not in (None, "") else ""
+            placed = twin_line or (_placed_note(match_asset) if last.cut and match_asset not in (None, "") else "")
+            stands = (f" It stands at feet {feet:.2f} (the x between its feet as a share of its width: a Pose's "
+                      "feet).") if feet is not None else ""
             made = {"path": entry["path"], "width": w, "height": h, "cut": bool(last.cut), "seconds": last.seconds,
-                    "edges": last.cut["edges"] if last.cut else [], "reg": reg, "placed": placed}
+                    "edges": last.cut["edges"] if last.cut else [], "reg": reg, "placed": placed + stands,
+                    "not_twin": not_twin, "feet": feet}
             if last.cut:
                 return (f"Drew {asset_id!r} as a cut-out: assets/{asset_id}.png, {w}x{h} with a real alpha channel "
                         f"({last.cut['clear']:.0%} of it transparent), in {last.seconds:.0f} s.{reg}"
-                        f"{_edge_note(last.cut['edges'])}{placed} Look at it once before using it."), False, made
+                        f"{_edge_note(last.cut['edges'])}{placed}{stands} Look at it once before using it."), False, made
             return (f"Drew {asset_id!r}: assets/{asset_id}.png, {w}x{h}, in {last.seconds:.0f} s."
                     f"{reg} Look at it once before using it."), False, made
         if last.kind in PROVIDER_DOWN:
@@ -566,7 +619,7 @@ def draw_many(project, pictures, *, provider: ImageProvider | None = None, fit=f
         try:
             text, err, made = _draw(ctx, provider, item.get("id"), item.get("prompt"), item.get("style_ref_asset"),
                                     item.get("size"), bool(item.get("cutout", False)), item.get("match_asset"),
-                                    fit, measure, cut)
+                                    fit, measure, cut, item.get("twin_of"))
         except ProviderError as exc:
             text, err, made = str(exc), True, None
         except Exception as exc:  # noqa: BLE001 - one picture's failure must not lose the others
@@ -582,7 +635,8 @@ def draw_many(project, pictures, *, provider: ImageProvider | None = None, fit=f
             lines.append(f"{n}. {aid}: failed: {text}")
             continue
         kind = " cut-out" if made["cut"] else ""
-        lines.append(f"{n}. {aid}: ok, {made['path']}, {made['width']}x{made['height']}{kind}, {secs:.0f} s."
+        status = f"drawn but NOT A TWIN of {made['not_twin']!r}" if made.get("not_twin") else "ok"
+        lines.append(f"{n}. {aid}: {status}, {made['path']}, {made['width']}x{made['height']}{kind}, {secs:.0f} s."
                      f"{made['reg']}{_edge_note(made['edges'])}{made.get('placed', '')}")
         tiles.append((f"{n} {aid}" + (" (cut-out)" if made["cut"] else ""), ctx.project / made["path"], made["cut"]))
     done = len(tiles)
@@ -610,7 +664,7 @@ def _in_waves(pictures: list[dict], seen: dict[str, int], one) -> list:
     it, and is not tried when that one failed."""
     deps = []
     for i, item in enumerate(pictures):
-        refs = {seen[r.lower()] - 1 for r in (item.get("match_asset"), item.get("style_ref_asset"))
+        refs = {seen[r.lower()] - 1 for r in (item.get("match_asset"), item.get("style_ref_asset"), item.get("twin_of"))
                 if isinstance(r, str) and r.lower() in seen}
         deps.append(refs - {i})
     results: list = [None] * len(pictures)

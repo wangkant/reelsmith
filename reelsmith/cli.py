@@ -98,8 +98,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--match", default="", dest="match_asset",
                    help="a plate (image asset) to match: camera angle, light and colour (a cut-out comes back at "
                         "its own size: place it at its real size)")
+    p.add_argument("--twin-of", default="", dest="twin_of",
+                   help="a cut-out this is the same drawing of with one change; registered onto its canvas")
     proj(cmd("draw-many", tools.draw_many, "draw_many")).add_argument(
-        "pictures", help="JSON list of {id, prompt, size?, cutout?, style_ref_asset?, match_asset?}, @file.json, or -")
+        "pictures", help="JSON list of {id, prompt, size?, cutout?, style_ref_asset?, match_asset?, twin_of?}, @file.json, "
+                    "or -")
     p = proj(cmd("animate", tools.animate))
     p.add_argument("id")
     p.add_argument("image_asset")
@@ -135,6 +138,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("times", nargs="*", help="source seconds or m:ss")
     p.add_argument("--every", type=float, default=0)
     p.add_argument("-n", type=int, default=0)
+    p.add_argument("--start", default="", help="with --every: first source second")
+    p.add_argument("--end", default="", help="with --every: last source second")
     p = proj(cmd("scenes", tools.scenes))
     p.add_argument("asset")
     p.add_argument("--threshold", type=float, default=0.3)
@@ -219,7 +224,7 @@ def _call(args) -> tools.ToolResult:
         return tools.capture(args.project, args.url, args.id, args.match, args.viewport)
     if c == "draw":
         return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size, args.cutout,
-                          args.match_asset)
+                          args.match_asset, args.twin_of)
     if c in ("draw-many", "draw_many"):
         return tools.draw_many(args.project, _text_arg(args.pictures))
     if c == "animate":
@@ -249,7 +254,7 @@ def _call(args) -> tools.ToolResult:
     if c == "probe":
         return tools.probe(args.project, args.source)
     if c == "frames":
-        return tools.frames(args.project, args.asset, args.times, args.every, args.n)
+        return tools.frames(args.project, args.asset, args.times, args.every, args.n, args.start, args.end)
     if c == "scenes":
         return tools.scenes(args.project, args.asset, args.threshold)
     if c == "silences":

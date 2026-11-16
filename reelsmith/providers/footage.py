@@ -15,6 +15,7 @@ from .config import Context, ProviderError, check_id, context, exe, number, prob
     run_tree, safe_tool, tail
 
 MAX_STILLS = 24
+MAX_RUN_STILLS = 48             # `every` over a stretch: 8 s at 6 a second, enough to judge motion
 DEFAULT_STILLS = 12
 STILL_EDGE = 960                # px: the long edge of a still, enough to read and cheap to look at
 TILE_EDGE = 360                 # px: the long edge of a contact sheet tile
@@ -280,12 +281,15 @@ def _video_facts(m: Media) -> tuple[float, float, tuple[int, int]]:
 
 
 @safe_tool
-def frames(project, asset, times=None, every=None, n=None):
-    """(text, is_error): stills of a source at source seconds, and a contact sheet with the times burned in."""
+def frames(project, asset, times=None, every=None, n=None, start=None, end=None):
+    """(text, is_error): stills of a source at source seconds, and a contact sheet with the times burned in; with
+    `every`, `start` and `end` bound the stretch."""
     ctx = context(project)
     m = _resolve(ctx, asset)
     dur, fps, size = _video_facts(m)
     last = max(0.0, dur - 1.0 / fps)
+    if (start is not None or end is not None) and (times or not every):
+        return "start and end bound a run of `every`; give every with them (or list the times instead)", True
     if times:
         wanted = [_when(t, "times") for t in (times if isinstance(times, list) else [times])]
         if len(wanted) > MAX_STILLS:
@@ -295,11 +299,15 @@ def frames(project, asset, times=None, every=None, n=None):
             return f"{', '.join(_secs(t) for t in late)} past the end of {m.rel} ({dur:.2f} s)", True
     elif every:
         step = number(every, 0.04, 1e6, "every")
-        count = int((dur - 1e-6) / step) + 1          # stills before the end, from 0
-        if count > MAX_STILLS:
-            return (f"every {step:g} s over {dur:.1f} s is {count} stills; at most {MAX_STILLS} per call: use a larger "
-                    f"every (at least {dur / (MAX_STILLS - 1):.1f}), n, or times"), True
-        wanted = [i * step for i in range(count)]
+        a = _when(start, "start") if start is not None else 0.0
+        b = min(dur, _when(end, "end")) if end is not None else dur
+        if b <= a:
+            return f"start {a:g} s must come before end {b:g} s (the source is {dur:.2f} s)", True
+        count = int((b - a - 1e-6) / step) + 1        # stills before the end, from the start
+        if count > MAX_RUN_STILLS:
+            return (f"every {step:g} s over {b - a:.1f} s is {count} stills; at most {MAX_RUN_STILLS} per call: "
+                    f"narrow start-end to {MAX_RUN_STILLS * step:.1f} s or use a larger every"), True
+        wanted = [a + i * step for i in range(count)]
     else:
         count = int(number(n if n else DEFAULT_STILLS, 1, MAX_STILLS, "n"))
         wanted = [dur * (i + 0.5) / count for i in range(count)]

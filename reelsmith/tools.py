@@ -1019,33 +1019,32 @@ def capture(project: str, url: str, id: str, match: str = "", viewport: str = ""
 
 @tool
 def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "", cutout: bool = False,
-         match_asset: str = "") -> str:
+         match_asset: str = "", twin_of: str = "") -> str:
     """Generate an original image asset `id` from `prompt` (optionally in the style of an image asset). size: an
-    aspect "9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9" (default: the one nearest the project's canvas),
-    or pixels "WxH" with sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes).
-    cutout=true: one isolated subject on a real transparent background, scaled down into size (never enlarged) and
-    trimmed to itself. match_asset: a plate (image asset) this picture goes into; the picture matches its camera
-    height and angle, light direction and colour temperature (with cutout, only the object, as if shot in that
-    plate; without, the same place from the camera the prompt describes). A matched cut-out comes back trimmed at
-    its own size, not at the plate's scale: place it at its real size in the plate. Not together with
-    style_ref_asset. Several pictures: draw_many runs them at the same time."""
+    aspect "9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9" (default: nearest the canvas) or "WxH" (sides
+    256-4096). Paid or rate-limited by provider; slow (minutes). cutout=true: one subject on a real transparent
+    background, scaled down into size (never enlarged), trimmed to itself. match_asset: a plate this picture goes
+    into, matching its camera, light and colour (with cutout only the object, trimmed at its own size: place it at
+    its real size; without, the same place). twin_of: a cut-out this is the same drawing of, with the one change the
+    prompt names (mouth closed, eyes shut); it comes back on that drawing's canvas so the two swap without a jump,
+    with the fit reported. Only one of style_ref_asset, match_asset, twin_of. Several: draw_many."""
     if not (prompt or "").strip():
         raise ToolInputError("prompt is empty: describe the picture")
     if not isinstance(cutout, bool):
         raise ToolInputError("cutout must be true or false")
     return _provider("draw", _project(project), id=_id_arg(id), prompt=prompt,
                      style_ref_asset=style_ref_asset or None, size=size or None, cutout=cutout,
-                     match_asset=match_asset or None)
+                     match_asset=match_asset or None, twin_of=twin_of or None)
 
 
 @tool
 def draw_many(project: str, pictures: list[dict]) -> str:
     """Draw 1-8 pictures at once (3 at a time): each item {"id", "prompt", "size"?, "cutout"?, "style_ref_asset"?,
-    "match_asset"?} with draw's meanings, each counted, checked and registered as draw does. Returns one line per
+    "match_asset"?, "twin_of"?} with draw's meanings, each counted, checked and registered as draw does. Returns one line per
     picture in the order given (ok with its path and seconds, or why not; one failure never loses the others) and
     a labelled contact sheet of the batch under build/draws/: look at the sheet, open a single picture only for
     fine detail. Several pictures for one film: send them here in one call, not as separate draws. A plate and the
-    cut-outs matched to it may go in the same call: an item whose match_asset or style_ref_asset names another
+    cut-outs matched to it may go in the same call: an item whose match_asset, style_ref_asset or twin_of names another
     item waits for that picture and uses the new one (and is not tried if it failed)."""
     pictures = _json_arg(pictures, "pictures")
     if not isinstance(pictures, list) or not pictures:
@@ -1157,11 +1156,12 @@ def probe(project: str, source: str) -> str:
 
 @tool
 def frames(project: str, asset: str, times: list[float | str] | float | str = [],  # noqa: B006 - never mutated
-           every: float = 0, n: int = 0) -> str:
+           every: float = 0, n: int = 0, start: float | str = "", end: float | str = "") -> str:
     """Stills of a SOURCE video (an asset id, or a file inside the project) at source seconds, not the film's:
-    `times` (seconds or m:ss, up to 24), or one every `every` seconds, or `n` evenly spaced (default 12). Returns
-    PNG paths (look at them with Read) and a contact sheet with each still's source time burned in. Use it to see
-    what a recording holds before you cut it."""
+    `times` (seconds or m:ss, up to 24), or one every `every` seconds (from `start` to `end` if given; up to 48), or
+    `n` evenly spaced (default 12). Returns PNG paths (look at them with Read) and a contact sheet with each still's
+    source time burned in. Use it to see what a recording holds before you cut it; on build/draft.mp4 or
+    out/film.mp4 with every=0.1667 over a stretch, to judge animation at 6 frames a second."""
     if isinstance(times, str) and times.strip().startswith("["):
         times = _json_arg(times, "times")
     if times in (None, "") or times == []:
@@ -1169,7 +1169,8 @@ def frames(project: str, asset: str, times: list[float | str] | float | str = []
     elif not isinstance(times, list):
         times = [times]
     return _provider("frames", _project(project), asset=_source_arg(asset, "asset"), times=times,
-                     every=every or None, n=n or None)
+                     every=every or None, n=n or None, start=None if start in (None, "") else start,
+                     end=None if end in (None, "") else end)
 
 
 @tool

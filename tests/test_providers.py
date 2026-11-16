@@ -210,7 +210,7 @@ def test_every_provider_takes_the_keywords_tools_sends():
     calls = {
         "speak": dict(lines=["一"], gap_s=0.22),
         "capture": dict(url="https://example.com", match="x", id="ev1"),
-        "draw": dict(id="a", prompt="p", style_ref_asset="b", size="9:16", cutout=True, match_asset="c"),
+        "draw": dict(id="a", prompt="p", style_ref_asset="b", size="9:16", cutout=True, match_asset="c", twin_of="d"),
         "animate": dict(id="a", image_asset="b", motion="m", seconds=4.0, camera="push"),
         "import_asset": dict(id="a", source="x.png", kind="image"),
         "assets": {},
@@ -1194,8 +1194,9 @@ def test_cutout_asks_for_transparency_after_the_callers_words_and_trims_to_the_s
         w, h = im.size
         assert im.getpixel((0, 0))[3] == 0 and im.getpixel((w // 2, h // 2))[3] == 255
     entry = read_project(env.project)["assets"]["cup"]
-    assert entry == {"path": "assets/cup.png", "kind": "image", "note": "一只纸杯，照片", "alpha": True,
+    assert entry == {"path": "assets/cup.png", "kind": "image", "note": "一只纸杯，照片 (feet 0.50)", "alpha": True,
                      "width": w, "height": h}
+    assert "It stands at feet 0.50" in text
     assert "as a cut-out" in text and f"{w}x{h}" in text and "real alpha channel" in text
     assert "% of it transparent" in text
 

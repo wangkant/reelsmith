@@ -26,6 +26,8 @@ export type ClipCtx = {
   progress: number;
   /** component clips: the voice lines overlapping the clip, in order; [] without a voice */
   lines: ClipLine[];
+  /** component clips: the narration's loudness 0..1 at each frame from the clip's start; absent without a voice */
+  level?: number[];
 };
 
 export const ClipContext = createContext<ClipCtx | null>(null);

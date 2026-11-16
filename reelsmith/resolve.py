@@ -1138,7 +1138,25 @@ class _Resolver:
                 if ref.get(k):
                     out[k] = ref[k]
             return out
-        return {"name": c.name, "props": self.props(c.props, start), "lines": self.clip_lines(start, dur)}
+        out = {"name": c.name, "props": self.props(c.props, start), "lines": self.clip_lines(start, dur)}
+        level = self.clip_level(start, dur)
+        if level:
+            out["level"] = level
+        return out
+
+    def clip_level(self, start: int, dur: int) -> list[float]:
+        """The narration's loudness (0..1) for each frame of the clip; [] without a voice or when it is silent."""
+        if not hasattr(self, "_level"):
+            self._level = []
+            audio = getattr(self.voice, "audio", None) if self.voice else None
+            if audio is not None and Path(audio).is_file():
+                try:
+                    from .voicelevel import voice_level
+                    self._level = voice_level(Path(audio), self.fps, project_paths(self.root).build)
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    self._level = []         # mouths stay shut; the film still renders
+        part = self._level[max(0, start):max(0, start + dur)]
+        return part if any(part) else []
 
     def clip_lines(self, start: int, dur: int) -> list[dict]:
         """The voice lines heard during frames [start, start + dur): {i, text, from, to} in frames from `start`, so a

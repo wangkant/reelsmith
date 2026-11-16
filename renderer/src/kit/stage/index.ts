@@ -52,3 +52,12 @@ export { Lens, useLens } from "./lens";
 export type { Grade, Kick, LensProps, LensState } from "./lens";
 export { Join } from "./join";
 export type { JoinProps } from "./join";
+export {
+  actAt, beatAt, blinkAt, Burst, checkTwins, Cracks, DustPuff, faceAt, Framing, framingAt, LineStyle, Performer, PopMark, poseBox,
+  PoseSheet, Splash, SpeedLines, SteamCurls, SweatDrop, talkAt, toss, ToonStar, useLineStyle, useVoiceLevel,
+} from "./drawn";
+export type {
+  Act, ActOptions, Beat, BurstProps, CracksProps, DustPuffProps, FramingCut, FramingProps, LineStyleValue, Nudge, PerformerProps, PopMarkProps,
+  Pose, PoseSheetProps, SplashProps,
+  SpeedLinesProps, SteamCurlsProps, SweatDropProps, Toss, ToonStarProps,
+} from "./drawn";

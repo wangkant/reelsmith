@@ -168,6 +168,15 @@ def test_frames_evenly_or_every_and_its_limits(ws):
     assert "no moving picture" in tools.frames(str(ws.project), "talk")
 
 
+
+def test_frames_every_over_a_stretch_for_judging_motion(ws):
+    r = tools.frames(str(ws.project), "two", every=1 / 6, start=1, end=2)
+    assert r.ok and "6 still(s)" in r and "- 1.00s" in r and "- 0.00s" not in r and "- 2.00s" not in r, r
+    assert not tools.frames(str(ws.project), "two", every=1 / 6, start=2, end=1).ok
+    assert "give every with them" in tools.frames(str(ws.project), "two", n=4, start=1)
+    assert "at most 48" in tools.frames(str(ws.project), "two", every=0.05, start=0, end=2.5)
+
+
 # ------------------------------------------------------------------ scenes
 def test_scenes_finds_the_cut_and_shows_first_frames(ws):
     r = tools.scenes(str(ws.project), "two")

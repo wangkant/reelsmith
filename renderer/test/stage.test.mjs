@@ -1,4 +1,4 @@
-// Unit tests for the stage kit's pure functions (cues, step, win, torn, motion, camera stations, photo optics, Broll's camera): bundles them
+// Unit tests for the stage kit's pure functions (cues, drawn-pose acting, step, win, torn, motion, camera stations, photo optics, Broll's camera): bundles them
 // with esbuild and runs them in Node, no browser and no render. A few seconds.
 //   node test/stage.test.mjs
 import assert from "node:assert/strict";
@@ -20,6 +20,7 @@ fs.writeFileSync(entry, [
   `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/optics.ts").replace(/\\/g, "/"))};`,
   `export { lightMatrix } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/photo.tsx").replace(/\\/g, "/"))};`,
   `export { softEllipse, softRing } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/warp.tsx").replace(/\\/g, "/"))};`,
+  `export { actAt, beatAt, blinkAt, checkTwins, faceAt, framingAt, poseBox, talkAt, toss } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/drawn.tsx").replace(/\\/g, "/"))};`,
   `export { handPan, keepInside } from ${JSON.stringify(path.join(ROOT, "src/presets/Broll.tsx").replace(/\\/g, "/"))};`,
 ].join("\n"));
 const bundle = path.join(OUT, "stage.mjs");
@@ -398,6 +399,118 @@ test("Broll's camera never shows past the plate's edge", () => {
       assert.ok(inside(fit, K.keepInside(x, y, 1, fit, w, h, 12, 10), w, h, 12, 10), `${iw}x${ih} on ${w}x${h}`);
     }
   }
+});
+
+test("beatAt and actAt: hold, anticipate against the move, snap, overshoot and settle", () => {
+  const beats = [{ at: 0, pose: "a" }, { at: 30, pose: "b", dir: 1, scale: 0.9 }, { at: 60, pose: "c", dir: -1 }];
+  assert.equal(K.beatAt(beats, -5), 0);
+  assert.equal(K.beatAt(beats, 29), 0);
+  assert.equal(K.beatAt(beats, 30), 1);
+  const still = { breath: 0, sway: 0 };
+  const held = K.actAt(beats, 10, still);
+  assert.deepEqual([held.pose, held.sx, held.sy, held.rot, held.dy], ["a", 1, 1, 0, 0]);
+  const crouch = K.actAt(beats, 29, still);              // last anticipation frame: deepest crouch, leaning left
+  assert.equal(crouch.pose, "a");
+  assert.ok(crouch.sy < 0.95 && crouch.sx > 1 && crouch.rot < 0 && crouch.dy > 0, JSON.stringify(crouch));
+  assert.ok(K.actAt(beats, 59, still).rot > 0, "a move to the left leans right first");
+  const snap = K.actAt(beats, 30, still);
+  assert.equal(snap.pose, "b");
+  assert.equal(snap.scale, 0.9);
+  assert.ok(snap.sy > 1.05 && snap.rot > 3, JSON.stringify(snap));
+  const settled = K.actAt(beats, 42, still);
+  assert.ok(Math.abs(settled.sy - 1) < 1e-9 && settled.rot === 0);
+  const first = K.actAt(beats, 0, still);                // the first pose does not overshoot
+  assert.equal(first.sy, 1);
+  assert.deepEqual(K.actAt(beats, 0, { ...still, antic: 0 }).sy, 1);
+});
+
+test("actAt: the moving hold breathes and sways, never dead", () => {
+  const beats = [{ at: 0, pose: "a" }];
+  const ys = Array.from({ length: 90 }, (_, f) => K.actAt(beats, f).sy);
+  const rs = Array.from({ length: 90 }, (_, f) => K.actAt(beats, f).rot);
+  assert.ok(Math.max(...ys) - Math.min(...ys) > 0.015 && Math.max(...ys) < 1.013);
+  assert.ok(Math.max(...rs) - Math.min(...rs) > 0.5);
+  assert.throws(() => K.actAt([], 0), /beats is empty/);
+});
+
+test("blinkAt: a deterministic blink every 2.5 to 5 s, len frames long", () => {
+  const on = Array.from({ length: 900 }, (_, f) => K.blinkAt(f, "cat"));
+  assert.deepEqual(on, Array.from({ length: 900 }, (_, f) => K.blinkAt(f, "cat")));
+  const starts = on.map((v, f) => v && !on[f - 1] ? f : -1).filter((f) => f >= 0);
+  assert.ok(starts.length >= 5 && starts.length <= 12, String(starts));
+  for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 75 && starts[i] - starts[i - 1] <= 150);
+  assert.equal(on.filter(Boolean).length, starts.length * 3);
+  assert.notDeepEqual(starts, Array.from({ length: 900 }, (_, f) => K.blinkAt(f, "dog")).map((v, f, a) => v && !a[f - 1] ? f : -1).filter((f) => f >= 0));
+  assert.equal(K.blinkAt(-3), false);
+});
+
+test("talkAt: on twos, opens above `open`, holds while above `hold`", () => {
+  const L = [0, 0, 0.5, 0.5, 0.1, 0.1, 0.1, 0.1, 0.02, 0.02, 0.1, 0.1, 0.3, 0.9];
+  assert.equal(K.talkAt(L, 0), false);
+  assert.equal(K.talkAt(L, 2), true);
+  assert.equal(K.talkAt(L, 3), true);                    // the odd frame repeats the even one
+  assert.equal(K.talkAt(L, 4), true);                    // 0.1 after an open frame stays open
+  assert.equal(K.talkAt(L, 6), true);
+  assert.equal(K.talkAt(L, 8), false);
+  assert.equal(K.talkAt(L, 10), false);                  // 0.1 after a closed frame stays shut
+  assert.equal(K.talkAt((f) => (f === 12 ? 0.3 : 0), 12), true);
+  assert.equal(K.talkAt([], 40), false);
+});
+
+test("toss: waits, flies on an arc above the line, lands and squashes", () => {
+  const from = [100, 500], to = [400, 600];
+  assert.deepEqual([K.toss(0, 10, from, to).x, K.toss(0, 10, from, to).y], from);
+  const mid = K.toss(19, 10, from, to, 18, 200);
+  assert.ok(mid.y < 550 - 150 && mid.x > 100 && mid.x < 400 && !mid.landed, JSON.stringify(mid));
+  const land = K.toss(28, 10, from, to, 18, 200);
+  assert.ok(land.landed && land.x === 400 && land.y === 600 && land.sx > 1.1 && land.sy < 0.9);
+  assert.ok(Math.abs(K.toss(80, 10, from, to).sy - 1) < 0.01);
+});
+
+test("faceAt: talking shows the open mouth, silence the shut one; a blink never opens the mouth", () => {
+  const full = { src: "open", shut: "shut", blink: "blink", blinkOpen: "blinkOpen" };
+  assert.equal(K.faceAt(full, true, false), "open");
+  assert.equal(K.faceAt(full, true, true), "blinkOpen");
+  assert.equal(K.faceAt(full, false, false), "shut");
+  assert.equal(K.faceAt(full, false, true), "blink");
+  const noOpenBlink = { src: "open", shut: "shut", blink: "blink" };
+  assert.equal(K.faceAt(noOpenBlink, true, true), "open");          // talking: the blink is skipped
+  assert.equal(K.faceAt(noOpenBlink, false, true), "blink");
+  assert.equal(K.faceAt({ src: "open", shut: "shut" }, false, true), "shut");
+  assert.equal(K.faceAt({ src: "open" }, false, true), "open");
+});
+
+test("checkTwins: a twin not on its pose's canvas is refused by name", () => {
+  const ref = (w, h) => ({ src: `a${w}.png`, size: [w, h] });
+  K.checkTwins({ pA: { src: ref(929, 1438), shut: ref(929, 1438), blink: ref(929, 1438) }, pB: { src: "x.png", shut: ref(5, 5) } });
+  assert.throws(() => K.checkTwins({ pA: { src: ref(929, 1438), shut: ref(951, 1440) } }),
+    /pose "pA": its shut picture is 951x1440 but the pose is 929x1438; redraw the twin with draw\(\.\.\., twin_of=<the pose>\).*jump/);
+  assert.throws(() => K.checkTwins({ pB: { src: ref(10, 20), imgW: 10, imgH: 20, blink: ref(11, 20) } }), /twin_of=<its shut twin>/);
+});
+
+test("actAt: beats in any order act as if sorted, ties kept in order", () => {
+  const still = { breath: 0, sway: 0 };
+  const sorted = [{ at: 0, pose: "a" }, { at: 30, pose: "b" }, { at: 60, pose: "c" }];
+  const shuffled = [sorted[2], sorted[0], sorted[1]];
+  for (const f of [0, 28, 30, 35, 59, 61, 90]) assert.deepEqual(K.actAt(shuffled, f, still), K.actAt(sorted, f, still));
+  assert.equal(shuffled[0].pose, "c", "the caller's list is not reordered");
+  assert.equal(K.actAt([{ at: 0, pose: "a" }, { at: 10, pose: "b" }, { at: 10, pose: "c" }], 12, still).pose, "c");
+});
+
+test("poseBox: h is the canvas height at scale 1; feet and scale applied", () => {
+  const b = K.poseBox({ src: { src: "p.png", size: [500, 1000] }, feet: 0.4, scale: 0.9 }, 1200);
+  assert.ok(Math.abs(b.hh - 1080) < 1e-9 && Math.abs(b.w - 540) < 1e-9 && Math.abs(b.fx - 216) < 1e-9, JSON.stringify(b));
+  assert.equal(K.poseBox({ src: "p.png", imgW: 400, imgH: 800 }, 800).fx, 200);
+});
+
+test("framingAt: hard cuts at their frames, clamped inside the scene", () => {
+  const cuts = [{ at: 40, x: 300, y: 1500, z: 2 }, { at: 10, x: 540, y: 960, z: 1.5 }];
+  assert.deepEqual(K.framingAt(cuts, 0, 1080, 1920), { x: 540, y: 960, z: 1 });
+  assert.deepEqual(K.framingAt(cuts, 10, 1080, 1920), { x: 540, y: 960, z: 1.5 });
+  assert.deepEqual(K.framingAt(cuts, 39, 1080, 1920), { x: 540, y: 960, z: 1.5 });   // no easing
+  assert.deepEqual(K.framingAt(cuts, 40, 1080, 1920), { x: 300, y: 1500, z: 2 });
+  assert.deepEqual(K.framingAt([{ at: 0, x: 100, y: 1900, z: 2 }], 5, 1080, 1920, [1080, 1920]), { x: 270, y: 1440, z: 2 });
+  assert.equal(K.framingAt([{ at: 0, x: 540, y: 960, z: 0.5 }], 5, 1080, 1920, [1080, 1920]).z, 1);   // never smaller than the frame
 });
 
 fs.rmSync(OUT, { recursive: true, force: true });

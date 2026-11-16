@@ -147,9 +147,11 @@ export type EvidenceContent = {
   highlight?: Highlight | null;
 };
 
-/** `lines`: the voice lines overlapping the clip, in frames from its start (useClip().lines). */
+/** `lines`: the voice lines overlapping the clip, in frames from its start (useClip().lines); `level`: the
+ *  narration's loudness 0..1 at each frame of the clip (useVoiceLevel()). */
 export type ComponentContent = {
   name: string; props?: Record<string, unknown>; lines?: { i: number; text: string; from: number; to: number }[];
+  level?: number[];
 };
 
 export type ClipType = "image" | "video" | "text" | "shape" | "evidence" | "component";
