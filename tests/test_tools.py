@@ -230,6 +230,47 @@ def test_manual_names_every_profile_and_stays_short():
     assert "always pass every line" in text and "re-speak only" not in text and "handover.md" in text
 
 
+def test_manual_for_a_project_leaves_out_what_cannot_apply(tmp_path, monkeypatch):
+    # a code-made Douyin film: no footage chapter, no Tools table (the tool schemas carry it), one canvas row
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    assert T.new_project(str(tmp_path / "d"), profile="douyin").ok
+    r = T.manual(str(tmp_path / "d"))
+    # measured 41.5-42.5k over the platform profiles once the notes under the Tools table came back
+    assert r.ok and len(r) < 44_000, len(r)
+    assert "\n## Editing footage" not in r and "| `douyin` (抖音)" in r
+    # the table goes, the notes under it stay: they are said nowhere else
+    assert "\n## Tools" in r and "| `draw(" not in r and "always pass every line" in r
+    assert "may share a" in r and "sweep=true" in r and "no music generator" in r and "8–20 characters" in r
+    assert "the Tools table (the tool descriptions carry it)" in r
+    assert "| `tiktok`" not in r and "## Performance films" in r and "# This film is for Douyin" in r
+    assert r.rstrip().splitlines()[-1].startswith("Left out for this project: ") and 'part="' in r
+    assert "## Editing footage" in T.manual() and "| `tiktok`" in T.manual()       # the full text stays
+    part = T.manual(str(tmp_path / "d"), part="tools")
+    assert part.ok and part.startswith("## Tools") and "\n## What blocks delivery" not in part
+    assert not T.manual(part="nope").ok and "Editing footage" in T.manual(part="nope")
+    # footage brings its chapter back
+    data = json.loads((tmp_path / "d" / "project.json").read_text(encoding="utf-8"))
+    data["assets"] = {"talk": {"path": "assets/talk.mp4", "kind": "video"}}
+    (tmp_path / "d" / "project.json").write_text(json.dumps(data), encoding="utf-8")
+    r = T.manual(str(tmp_path / "d"))
+    assert "\n## Editing footage" in r and "Editing footage\" (" not in r
+    assert len(r) < 50_000, len(r)          # measured 48.0k with footage
+
+
+def test_manual_keeps_the_canvas_row_another_row_points_to(tmp_path, monkeypatch):
+    # douyin-long's safe area is "as douyin", youtube's "as landscape": the row named must stay
+    monkeypatch.delenv("REELSMITH_ROOT", raising=False)
+    for profile, own, named, gone in (("douyin-long", "| `douyin-long`", "| `douyin` (抖音)", "| `tiktok`"),
+                                      ("youtube", "| `youtube`", "| `landscape` (default)", "| `shorts`")):
+        assert T.new_project(str(tmp_path / profile), profile=profile).ok
+        r = T.manual(str(tmp_path / profile))
+        assert own in r and named in r and gone not in r, profile
+
+
+def test_speak_says_to_pass_every_line():
+    assert "always pass every line" in T.speak.__doc__
+
+
 def test_cli_manual_takes_a_project(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("REELSMITH_ROOT", raising=False)
     assert T.new_project(str(tmp_path / "x"), profile="xiaohongshu").ok
@@ -321,6 +362,29 @@ def test_notes_and_note(project, tmp_path):
     assert not T.notes(str(lonely)).ok and not T.note(str(lonely), "x").ok
 
 
+def test_long_notes_keep_their_head_and_tail(project):
+    # the standing rules sit at the head, the newest notes at the tail: the middle goes
+    path = T.find_workspace(project.path).notes_path
+    body = "".join(f"- old note {n}: {'x' * 80}\n" for n in range(600))
+    path.write_text("# Notes\n\n## Who this channel is\n- the owner's rule\n\n" + body + "- newest note\n",
+                    encoding="utf-8")
+    text = T.notes(str(project.path))
+    assert len(text) <= T.MAX_NOTES_SHOWN + 200
+    assert text.startswith("# Notes\n\n## Who this channel is\n- the owner's rule") and text.endswith("- newest note\n")
+    assert "characters (" in text and "lines) left out here; the whole file is " + str(path) in text
+    assert "- old note 300:" not in text
+
+
+def test_notes_just_over_the_limit_come_back_whole(project):
+    # a cut smaller than its own marker would make the reply longer than the file
+    path = T.find_workspace(project.path).notes_path
+    body = "".join(f"- note {n}: {'y' * 60}\n" for n in range(1000))
+    body = body[: T.MAX_NOTES_SHOWN + 1]
+    path.write_text(body, encoding="utf-8")
+    text = T.notes(str(project.path))
+    assert text == body and "left out here" not in text
+
+
 def test_providers_delegation(project, monkeypatch):
     calls = []
 
@@ -365,6 +429,18 @@ def test_draw_passes_cutout_through_the_tool_and_the_cli(project, monkeypatch):
     assert not T.draw(str(project.path), "cup", "a cup", cutout="yes").ok and len(seen) == 2
     assert cli.main(["draw", str(project.path), "cup", "a cup", "--cutout"]) == 0 and seen[-1]["cutout"] is True
     assert cli.main(["draw", str(project.path), "cup", "a cup"]) == 0 and seen[-1]["cutout"] is False
+    assert cli.main(["draw", str(project.path), "cup", "a cup", "--match", "desk"]) == 0
+    assert seen[-1]["match_asset"] == "desk"
+
+
+def test_draw_many_takes_a_list_or_json_through_the_tool_and_the_cli(project, monkeypatch):
+    seen = []
+    fake_module(monkeypatch, "providers", draw_many=lambda pr, **kw: (seen.append(kw) or "drew 2", False))
+    pics = [{"id": "a", "prompt": "x"}, {"id": "b", "prompt": "y", "cutout": True, "match_asset": "a"}]
+    assert T.draw_many(str(project.path), pics).ok and seen[-1]["pictures"] == pics
+    assert T.draw_many(str(project.path), json.dumps(pics)).ok and seen[-1]["pictures"] == pics
+    assert not T.draw_many(str(project.path), []).ok and len(seen) == 2
+    assert cli.main(["draw-many", str(project.path), json.dumps(pics)]) == 0 and seen[-1]["pictures"] == pics
 
 
 # ------------------------------------------------------------------ preview / render / review with a fake render.mjs

@@ -29,8 +29,12 @@ export { Clouds, Leaves, PendantLamp, Desk, Outdoors, Room, Street, useSet } fro
 export type { DeskProps, OutdoorsProps, RoomProps, SetInfo, SetProps, StreetProps } from "./sets";
 export { coverFit, distanceAt, dofBlur, handheld, hazeBand, joinAt, lookAt, onScreen, pointAt, shadeRamp, swayAngle, travelAt } from "./optics";
 export type { Ease, Fit, TravelOptions, TravelState } from "./optics";
-export { Hold, lightMatrix, Photo, pictureSize, SvgImage, Travel } from "./photo";
-export type { PhotoProps, TravelProps } from "./photo";
+export { Hold, lightMatrix, Photo, PictureContext, pictureSize, SvgImage, Travel, usePicture, wipeBand } from "./photo";
+export type { PhotoProps, Picture, TravelProps, Wipe } from "./photo";
+export { Droplet, Embers, Glow, Pour, Vapor } from "./matter";
+export type { DropletProps, EmbersProps, GlowProps, PourProps, VaporProps } from "./matter";
+export { quadMatrix, Surface } from "./surface";
+export type { SurfaceProps } from "./surface";
 export { Occluder, Plate, usePlate } from "./plate";
 export type { OccluderProps, PlateProps, Sway } from "./plate";
 export { Haze, Motes, Rays } from "./air";

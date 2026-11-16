@@ -3,12 +3,13 @@ what it made in project.json and returns (text, is_error); none raises, none ech
 from .animate import animate
 from .capture import capture
 from .config import Context, ProviderError, context, redact
-from .draw import draw
+from .draw import draw, draw_many
 from .footage import frames, probe, scenes, silences
 from .importer import assets, import_asset
 from .ledger import BudgetRefused, Ledger, spent_usd
 from .transcribe import transcribe
 from .tts import speak
 
-__all__ = ["speak", "capture", "draw", "animate", "import_asset", "assets", "probe", "frames", "scenes", "silences",
-           "transcribe", "Ledger", "BudgetRefused", "ProviderError", "Context", "context", "redact", "spent_usd"]
+__all__ = ["speak", "capture", "draw", "draw_many", "animate", "import_asset", "assets", "probe", "frames", "scenes",
+           "silences", "transcribe", "Ledger", "BudgetRefused", "ProviderError", "Context", "context", "redact",
+           "spent_usd"]

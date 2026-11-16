@@ -45,6 +45,11 @@ LOCK_WAIT_S = 60.0                  # how long a render, preview or draft waits 
 LAYOUT_GRID_MAX = 600               # grid stills of the layout pass; a longer film's grid is spaced out evenly
 LAYOUT_BATCH = 200                  # stills per render.mjs call (it takes 600); each batch is pruned before the next
 TEXT_TYPES = ("text", "component")  # clips that get a measured still of their own when no grid still lands on them
+SWEEP_TILE_W = 120                  # a sweep sheet tile's width; its height follows the canvas
+SWEEP_COLS, SWEEP_ROWS = 10, 6      # tiles per sweep sheet: a minute of film at one still a second
+SAME_PICTURE_BITS = 15              # of 64 hash bits: one picture moving drifts up to ~11 a second, two differ by 18+
+BLANK_STD = 4.0                     # a still this flat (a fade, a black) matches anything: never a return
+MAX_RETURNS_LISTED = 4
 DRAFT_SCALE = 0.5
 # One bundle or render at a time (they share the CPU and webpack's cache). Reentrant: render holds it from resolve
 # to film, so a preview in between waits instead of changing what is rendered.
@@ -301,6 +306,8 @@ def _fresh_stills(folder: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     for name in ("inspect.json", "contact.png"):
         (folder / name).unlink(missing_ok=True)
+    for old in folder.glob("sweep-*.jpg"):
+        old.unlink(missing_ok=True)
     stills = sorted(folder.glob("still_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in stills[KEEP_STILLS:]:
         old.unlink(missing_ok=True)
@@ -437,12 +444,13 @@ def _film_listener(progress):
 
 
 def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profile: Profile, resolved: dict,
-            keep: set[int] | None = None, progress=None) -> dict:
+            keep: set[int] | None = None, progress=None, look=None) -> dict:
     """Stills of `frames`, measured (section 12), LAYOUT_BATCH a render.mjs call. With `keep` (a sweep or render's
     layout pass) each batch's stills with no problem on them, other than the frames in `keep`, are deleted before
     the next batch, so disk and memory stay bounded however long the film; without it every still stays.
     {ok, layout, frames: [{frame, png}], measured, crashes, res (the calls' results merged)}; a failure is
-    {ok: false, node: render.mjs's result}. `progress(fraction)` hears how far it is."""
+    {ok: false, node: render.mjs's result}. `progress(fraction)` hears how far it is; `look(stills)` sees each
+    batch's stills before any is deleted."""
     fps = float(resolved.get("fps") or profile.fps)
     total = max(1, len(frames))
     check = LayoutCheck(profile, resolved)
@@ -470,6 +478,8 @@ def measure(json_path: Path, root: Path, out_dir: Path, frames: list[int], profi
         got = [{"frame": fr.get("frame") or 0, "png": fr["png"], "items": fr.get("items") or []}
                for fr in inspect.get("frames") or [] if fr.get("png")]
         measured += len(got)
+        if look:
+            look(got)
         shots = _prune(shots + got, check.first_frames(), fps, keep) if keep is not None else shots + got
     layout = check.issues()
     if keep is not None:
@@ -555,6 +565,105 @@ def _kept_layout(paths, key: str) -> dict | None:
             "measured": data["measured"], "crashes": {}, "res": data["res"]}
 
 
+# ------------------------------------------------------------------ the sweep's sheet of every second
+def picture_hash(im) -> int:
+    """A 64-bit difference hash: brightness steps on a 9x8 grid survive a slow push, a caption, a grade."""
+    from PIL import Image
+    g = im.convert("L").resize((9, 8), Image.Resampling.BOX)
+    px = g.tobytes()
+    bits = 0
+    for y in range(8):
+        for x in range(8):
+            bits = (bits << 1) | (px[y * 9 + x] < px[y * 9 + x + 1])
+    return bits
+
+
+def hash_distance(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def glance(frame: int, png, fps: float, width: int = SWEEP_TILE_W) -> dict | None:
+    """One swept still, small: its tile, its hash and whether it is flat (kept after the full PNG is deleted)."""
+    from PIL import Image, ImageStat
+    try:
+        with Image.open(png) as im:
+            im = im.convert("RGB")
+            gray = im.convert("L")
+            tile = im.resize((width, max(1, round(im.height * width / im.width))), Image.Resampling.BILINEAR)
+            return {"t": round(frame / fps, 2), "tile": tile, "hash": picture_hash(gray),
+                    "blank": ImageStat.Stat(gray.resize((64, 64))).stddev[0] < BLANK_STD}
+    except OSError:
+        return None
+
+
+def sweep_sheets(seen: list[dict], folder: Path) -> list[str]:
+    """Every swept still on sheets of SWEEP_COLS x SWEEP_ROWS small tiles, each with its second printed."""
+    from PIL import Image, ImageDraw, ImageFont
+    if not seen:
+        return []
+    tw, th = seen[0]["tile"].size
+    try:
+        font = ImageFont.load_default(size=max(10, tw // 7))
+    except TypeError:                       # an older Pillow: its one bitmap font
+        font = ImageFont.load_default()
+    out, per = [], SWEEP_COLS * SWEEP_ROWS
+    for n, i in enumerate(range(0, len(seen), per), 1):
+        page = seen[i:i + per]
+        rows = -(-len(page) // SWEEP_COLS)
+        sheet = Image.new("RGB", (SWEEP_COLS * (tw + 2), rows * (th + 2)), (24, 24, 24))
+        draw = ImageDraw.Draw(sheet)
+        for k, s in enumerate(page):
+            x, y = (k % SWEEP_COLS) * (tw + 2), (k // SWEEP_COLS) * (th + 2)
+            sheet.paste(s["tile"].resize((tw, th)), (x, y))
+            label = f"{s['t']:g}s"
+            box = draw.textbbox((x + 3, y + 3), label, font=font)
+            draw.rectangle((box[0] - 2, box[1] - 1, box[2] + 2, box[3] + 1), fill=(0, 0, 0))
+            draw.text((x + 3, y + 3), label, fill=(255, 230, 90), font=font)
+        path = folder / f"sweep-{n}.jpg"
+        sheet.save(path, quality=85)
+        out.append(str(path))
+    return out
+
+
+def _span(run: list[dict]) -> str:
+    a, b = run[0]["t"], run[-1]["t"]
+    return f"{a:g} s" if a == b else f"{a:g}-{b:g} s"
+
+
+def picture_runs(seen: list[dict]) -> list[list[dict]]:
+    """Consecutive stills that show one picture (a slow push on one plate stays one run)."""
+    runs: list[list[dict]] = []
+    for s in seen:
+        if runs and hash_distance(runs[-1][-1]["hash"], s["hash"]) < SAME_PICTURE_BITS:
+            runs[-1].append(s)
+        else:
+            runs.append([s])
+    return runs
+
+
+def picture_repeats(seen: list[dict]) -> tuple[str, str]:
+    """Two lines of information: the longest hold of one picture, and stretches where an earlier picture returns."""
+    runs = picture_runs(seen)
+    if not runs:
+        return "", ""
+    longest = max(runs, key=lambda r: (r[-1]["t"] - r[0]["t"], -r[0]["t"]))
+    held = longest[-1]["t"] - longest[0]["t"]
+    hold = (f"longest hold: one picture holds {_span(longest)} ({held:g} s)" if len(longest) > 1
+            else "longest hold: no picture holds from one still to the next")
+    back = []
+    for k, run in enumerate(runs):
+        mine = [s for s in run if not s["blank"]]
+        for earlier in runs[:max(0, k - 1)]:
+            if any(hash_distance(a["hash"], b["hash"]) < SAME_PICTURE_BITS
+                   for a in mine for b in earlier if not b["blank"]):
+                back.append(f"{_span(run)} looks like {_span(earlier)}")
+                break
+    more = f" (+{len(back) - MAX_RETURNS_LISTED} more)" if len(back) > MAX_RETURNS_LISTED else ""
+    returns = (f"returns: {'; '.join(back[:MAX_RETURNS_LISTED])}{more}" if back
+               else "returns: no earlier picture comes back")
+    return hold, returns
+
+
 # ------------------------------------------------------------------ preview
 @_one_at_a_time
 def preview(project: str | Path, times: list | None, sweep: bool = False, progress=_quiet) -> dict:
@@ -586,8 +695,12 @@ def preview(project: str | Path, times: list | None, sweep: bool = False, progre
         _fresh_stills(paths.stills)
         stage = "sweep" if sweep else "stills"
         progress(stage, 0.0)
+        seen: list[dict] = []
+
+        def look(stills: list[dict]) -> None:
+            seen.extend(g for s in stills for g in [glance(s["frame"], s["png"], fps)] if g)
         got = measure(json_path, root, paths.stills, frames, profile, resolved, keep=asked if sweep else None,
-                      progress=lambda f: progress(stage, f))
+                      progress=lambda f: progress(stage, f), look=look if sweep else None)
         if sweep and got["ok"] and frames == layout_frames(resolved):
             _keep_layout(paths, layout_key(root, resolved, frames, profile), got)
     if not got["ok"]:
@@ -608,8 +721,10 @@ def preview(project: str | Path, times: list | None, sweep: bool = False, progre
     out["notes"] = [f"{f'{t:g} s' if isinstance(t, (int, float)) else t} is past the film's end at "
                     f"{out['duration_s']:.2f} s: showing the last frame" for t in past] + out["notes"]
     if sweep:
+        seen.sort(key=lambda g: g["t"])
         out["sweep"] = {"measured": got["measured"], "kept": len(shots),
-                        "every_s": round(layout_step(resolved) / fps, 2)}
+                        "every_s": round(layout_step(resolved) / fps, 2),
+                        "sheets": sweep_sheets(seen, paths.stills), "pictures": [r for r in picture_repeats(seen) if r]}
     return out
 
 

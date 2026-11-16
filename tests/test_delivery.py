@@ -258,6 +258,72 @@ def test_preview_sweep_of_a_long_film_is_batched_too(tmp_path, monkeypatch):
     assert all(len(c["frames"]) <= R.LAYOUT_BATCH for c in node.calls) and len(node.calls) >= 3
     # 21000 frames: 600 grid stills 35 frames apart, the last frame and the asked one
     assert "sweep: measured 602 still(s), one every 1.17 s" in r and "kept 1 (asked or flagged)" in r
+    # every swept still on small-tile sheets, a minute of stills each, and the hold line (all stills alike here)
+    sheets = sorted((root / "build" / "stills").glob("sweep-*.jpg"))
+    assert len(sheets) == 11 and all(str(s) in r for s in sheets)
+    assert "longest hold: one picture holds 0-" in r and "returns: no earlier picture comes back" in r
+
+
+def scene(seed: int, size=(270, 480)):
+    """A synthetic picture: a gradient ground and seeded shapes."""
+    import random
+
+    from PIL import Image, ImageDraw
+    rnd = random.Random(seed)
+    im = Image.linear_gradient("L").resize(size).convert("RGB")
+    d = ImageDraw.Draw(im)
+    for _ in range(14):
+        x, y = rnd.randrange(size[0]), rnd.randrange(size[1])
+        w, h = rnd.randrange(20, 140), rnd.randrange(20, 200)
+        shape = d.ellipse if rnd.random() < 0.5 else d.rectangle
+        shape((x, y, x + w, y + h), fill=tuple(rnd.randrange(256) for _ in range(3)))
+    return im
+
+
+def pushed(im, zoom: float, caption: str = ""):
+    """The picture `zoom` times closer around its centre, with a caption plate, as a slow push renders it."""
+    from PIL import ImageDraw
+    w, h = im.size
+    cw, ch = w / zoom, h / zoom
+    out = im.crop(((w - cw) / 2, (h - ch) / 2, (w + cw) / 2, (h + ch) / 2)).resize(im.size)
+    if caption:
+        d = ImageDraw.Draw(out)
+        d.rectangle((30, h - 80, w - 30, h - 50), fill=(20, 20, 20))
+        d.text((40, h - 75), caption, fill=(255, 255, 255))
+    return out
+
+
+def test_picture_hash_sees_one_picture_through_a_slow_push_and_tells_pictures_apart():
+    for seed in range(6):
+        a = scene(seed)
+        steps = [R.picture_hash(pushed(a, 1 + 0.02 * i, f"line {i}")) for i in range(8)]
+        near = [R.hash_distance(x, y) for x, y in zip(steps, steps[1:])]
+        apart = [R.hash_distance(R.picture_hash(a), R.picture_hash(scene(other))) for other in range(6, 12)]
+        assert R.picture_hash(a) == R.picture_hash(a.copy())
+        assert max(near) < R.SAME_PICTURE_BITS <= min(apart), (seed, near, apart)
+
+
+def test_picture_repeats_name_the_longest_hold_and_a_returning_picture(tmp_path):
+    from PIL import Image
+    a, b, c = scene(1), scene(2), scene(3)
+    plan = [(a, 1 + 0.015 * t) for t in range(4)] + [(b, 1.0)] * 2 + [(c, 1 + 0.01 * t) for t in range(6)] + \
+        [(a, 1.02), (a, 1.03)]
+    seen = []
+    for t, (im, zoom) in enumerate(plan):
+        png = tmp_path / f"s{t}.png"
+        pushed(im, zoom).save(png)
+        seen.append(R.glance(t * 30, png, 30))
+    hold, back = R.picture_repeats(seen)
+    assert hold == "longest hold: one picture holds 6-11 s (5 s)"
+    assert back == "returns: 12-13 s looks like 0-3 s"
+    sheets = R.sweep_sheets(seen, tmp_path)
+    with Image.open(sheets[0]) as sheet:
+        assert len(sheets) == 1 and sheet.width == R.SWEEP_COLS * (R.SWEEP_TILE_W + 2)
+    # a flat still (a fade to black) is never called a return
+    black = tmp_path / "black.png"
+    Image.new("RGB", (270, 480)).save(black)
+    seen = [R.glance(0, black, 30), R.glance(30, png, 30), R.glance(60, black, 30)]
+    assert R.picture_repeats(seen)[1] == "returns: no earlier picture comes back"
 
 
 @pytest.mark.skipif(not os.environ.get("REELSMITH_SLOW_TESTS"), reason="slow: set REELSMITH_SLOW_TESTS=1 (minutes)")
@@ -290,6 +356,20 @@ def test_layout_check_in_batches_drops_a_clip_found_crashed_later():
     assert {i.where for i in check.issues()} == {"k @ 0.0s", "t @ 1.0s"} and check.first_frames() == {0, 30}
     check.ignore.add("k")
     assert [i.where for i in check.issues()] == ["t @ 1.0s"] and check.first_frames() == {30}
+
+
+def test_a_refused_layout_names_every_offending_text_of_a_clip_at_once():
+    # one word component, a different word out each time: one report, so one fix round
+    check = LayoutCheck(LANDSCAPE)
+    words = [(30, "麦", 1950), (31, "麦芽", 2000), (32, "麦芽酚", 2085), (360, "香精", 1990), (390, "香精", 2000)]
+    words += [(400 + n, f"w{n}", 1960 + n) for n in range(10)]
+    for frame, word, right in words:
+        check.add({"frames": [{"frame": frame, "items": [text_item("words", [right - 200, 400, 200, 60], word)]}]})
+    (cut,) = [i for i in check.issues() if "canvas edge" in i.msg]
+    assert cut.level == "error" and cut.where == "words @ 1.0s" and "text \"麦芽酚\"" in cut.msg
+    assert "[12 texts: \"麦芽酚\" 165 px right @ 1.1s, \"香精\" 80 px right @ 12.0s, \"w9\" 49 px right" in cut.msg
+    assert "\"麦\" " not in cut.msg and "\"麦芽\" " not in cut.msg      # a word still revealing is the word
+    assert ", +4 more]" in cut.msg and "\"w0\"" not in cut.msg           # capped: the eight worst are named
 
 
 # ------------------------------------------------------------------ #23 sidecar captions

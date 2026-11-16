@@ -9,7 +9,8 @@ import { Layer, useDepth } from "./Stage";
 import { useLens } from "./lens";
 import { coverFit, dofBlur, swayAngle } from "./optics";
 import type { Fit } from "./optics";
-import { Hold, pictureSize, SvgImage } from "./photo";
+import { checkSameAspect, Hold, pictureSize, PictureContext, SvgImage, wipeBand } from "./photo";
+import type { Wipe } from "./photo";
 import type { Pt } from "./geom";
 
 const PlateContext = createContext<Fit | null>(null);
@@ -54,6 +55,13 @@ export type PlateProps = {
   /** a CSS filter on the plate and its fronts (a local grade) */
   photo?: string;
   f?: number;
+  /** the same place from the same camera in another state (lights on, rain, night), over the first by progress `p`
+   *  0..1: a dissolve, or a `wipe` with a `soft` edge; `wipeAt` (picture fractions) is where an "out" wipe starts */
+  to?: AssetRef | string;
+  p?: number;
+  wipe?: Wipe;
+  soft?: number;
+  wipeAt?: Pt;
   /** what stands in the plate (stage px; usePlate().at maps traced points), drawn between the plate and its fronts */
   children?: React.ReactNode;
 };
@@ -63,32 +71,68 @@ export function Plate({ depth = 0.9, ...p }: PlateProps) {
   return <Layer depth={depth}><PlateBody {...p} /></Layer>;
 }
 
-function PlateBody({ src, imgW, imgH, pad = 0.06, focus, drift = 0, sway, fronts = [], feather = 3, blur = 0, photo, f: fIn, children }: PlateProps) {
+function PlateBody({ src, imgW, imgH, pad = 0.06, focus, drift = 0, sway, fronts = [], feather = 3, blur = 0, photo, f: fIn, to, p = 0, wipe,
+  soft = 0.3, wipeAt = [0.5, 0.5], children }: PlateProps) {
   const now = useCurrentFrame();
   const f = fIn ?? now;
   const { w, h, fps } = useClip();
   const depth = useDepth();
   const lens = useLens();
   const [IW, IH] = pictureSize(src, imgW, imgH, "Plate");
+  if (to) checkSameAspect(to, IW, IH, "Plate");
   const fit = coverFit(IW, IH, w, h, pad, focus);
   const b = dofBlur(depth, lens.focus, lens.aperture) + blur;
   const filter = [b > 0.3 ? `blur(${b.toFixed(2)}px)` : "", photo ?? ""].join(" ").trim() || undefined;
   const sec = f / (fps || 30);
   const life = drift ? `translate(${(Math.sin(sec * 0.37) * drift).toFixed(2)}px, ${(Math.cos(sec * 0.29) * drift * 0.6).toFixed(2)}px) scale(${(1 + (drift / w) * (1 + Math.sin(sec * 0.21))).toFixed(5)})` : undefined;
-  const img = (style?: React.CSSProperties) => (
-    <Img src={assetSrc(src)} style={{ position: "absolute", left: fit.x, top: fit.y, width: fit.w, height: fit.h, maxWidth: "none", filter, ...style }} />
+  const k = to ? Math.max(0, Math.min(1, p)) : 0;
+  const mask = to && k > 0 && k < 1 && wipe ? wipeCss(fit, k, wipe, soft, wipeAt) : undefined;
+  const veil: React.CSSProperties = mask ? { WebkitMaskImage: mask, maskImage: mask } : k < 1 ? { opacity: k } : {};
+  const one = (pic: AssetRef | string, style?: React.CSSProperties) => (
+    <Img src={assetSrc(pic)} style={{ position: "absolute", left: fit.x, top: fit.y, width: fit.w, height: fit.h, maxWidth: "none", filter, ...style }} />
+  );
+  const img = () => (
+    <>
+      {k >= 1 ? null : one(src)}
+      {to && k > 0 ? <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, ...veil }}>{one(to)}</div> : null}
+    </>
   );
   return (
     <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, transform: life, transformOrigin: "50% 50%" }}>
       {img()}
       {sway ? <SwayStrip fit={fit} sway={sway} f={f} fps={fps || 30} img={img} /> : null}
-      <PlateContext.Provider value={fit}>{children}</PlateContext.Provider>
-      {fronts.map((poly, i) => <Front key={i} fit={fit} poly={poly} feather={feather} src={src} filter={filter} />)}
+      <PlateContext.Provider value={fit}>
+        <PictureContext.Provider value={{ at: fit.at, s: fit.s, r: 0, blur: b > 0.3 ? b : 0 }}>{children}</PictureContext.Provider>
+      </PlateContext.Provider>
+      {k >= 1 ? null : fronts.map((poly, i) => <Front key={i} fit={fit} poly={poly} feather={feather} src={src} filter={filter} />)}
+      {to && k > 0 && fronts.length ? (
+        <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, ...veil }}>
+          {fronts.map((poly, i) => <Front key={i} fit={fit} poly={poly} feather={feather} src={to} filter={filter} />)}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function SwayStrip({ fit, sway, f, fps, img }: { fit: Fit; sway: Sway; f: number; fps: number; img: (s?: React.CSSProperties) => React.ReactNode }) {
+/** The CSS mask for a plate's wipe, in stage px of the plate's layer. */
+const wipeCss = (fit: Fit, p: number, wipe: Wipe, soft: number, at: Pt): string => {
+  const [e0, e1] = wipeBand(p, soft);
+  if (wipe === "out") {
+    const cx = fit.x + at[0] * fit.w, cy = fit.y + at[1] * fit.h;
+    const R = Math.max(...[[fit.x, fit.y], [fit.x + fit.w, fit.y], [fit.x, fit.y + fit.h], [fit.x + fit.w, fit.y + fit.h]].map(([a, b]) => Math.hypot(a - cx, b - cy)));
+    return `radial-gradient(circle ${R.toFixed(1)}px at ${cx.toFixed(1)}px ${cy.toFixed(1)}px, black ${(e0 * R).toFixed(1)}px, transparent ${(e1 * R).toFixed(1)}px)`;
+  }
+  const horiz = wipe === "left" || wipe === "right";
+  const a = horiz ? fit.x : fit.y, len = horiz ? fit.w : fit.h;
+  const rev = wipe === "left" || wipe === "up";
+  const pos = (e: number) => (rev ? a + len * (1 - e) : a + len * e).toFixed(1);
+  const dir = horiz ? "to right" : "to bottom";
+  return rev
+    ? `linear-gradient(${dir}, transparent ${pos(e1)}px, black ${pos(e0)}px)`
+    : `linear-gradient(${dir}, black ${pos(e0)}px, transparent ${pos(e1)}px)`;
+};
+
+function SwayStrip({ fit, sway, f, fps, img }: { fit: Fit; sway: Sway; f: number; fps: number; img: () => React.ReactNode }) {
   const top = fit.y + sway.y * fit.s, fe = (sway.feather ?? 60) * fit.s;
   const deg = swayAngle(f, fps, sway.amp ?? 1.2, sway.hz ?? 0.35, sway.gust, sway.gustAmp ?? 3);
   // a strip at rest would only draw the plate a second time

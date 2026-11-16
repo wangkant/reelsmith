@@ -257,12 +257,15 @@ def _seconds(root: Path, value) -> float:
 
 # ------------------------------------------------------------------ reading
 @tool
-def manual(project: str = "") -> str:
+def manual(project: str = "", part: str = "") -> str:
     """The reelsmith manual: how the editor works, the project format, Times, every tool, edit ops, components,
     making a film people watch and what blocks delivery. With `project`, the playbook of its profile's platform
-    follows (Douyin, Bilibili, YouTube, TikTok, Reels, Xiaohongshu, WeChat Channels): how a film is made there.
-    Read it once before your first edit."""
+    follows (Douyin, Bilibili, YouTube, TikTok, Reels, Xiaohongshu, WeChat Channels): how a film is made there,
+    and chapters that cannot apply to the project are left out (the last line names them). `part` gives one
+    chapter by its title ("Tools", "Editing footage"). Read it once before your first edit."""
     text = MANUAL.read_text(encoding="utf-8")
+    if part and part.strip():
+        return _manual_part(text, part)
     if not project:
         books = {}
         for name, book in PLAYBOOKS.items():
@@ -270,15 +273,86 @@ def manual(project: str = "") -> str:
         listed = "; ".join(f"{', '.join(names)} → {_book_title(book)}" for book, names in books.items())
         return (f"{text}\n---\nPlatform playbooks, one per platform profile: {listed}. Call manual(project) once the "
                 f"project exists to get its profile's playbook after this text (files in {PLATFORMS}).\n")
-    name = platform_of(_project(project))
+    root = _project(project)
+    name = platform_of(root)
+    text, left = _manual_for(text, root, name)
     book = PLAYBOOKS.get(name)
     if not book:
-        return f"{text}\n---\nThis project's canvas ({name}) is not a platform profile: no playbook.\n"
+        return f"{text}\n---\nThis project's canvas ({name}) is not a platform profile: no playbook.\n{left}"
     lines = (PLATFORMS / f"{book}.md").read_text(encoding="utf-8").splitlines()
     body = lines[1:lines.index("## Sources")] if "## Sources" in lines else lines[1:]
     return (f"{text}\n# This film is for {_book_title(book)}\n\nThe playbook of profile `{name}`; its rules win "
             f"over the general chapters above. Sources for every [^note]: {PLATFORMS / f'{book}.md'}.\n"
-            + "\n".join(body).rstrip() + "\n")
+            + "\n".join(body).rstrip() + f"\n\n---\n{left}")
+
+
+def _chapters(text: str) -> list[str]:
+    return re.split(r"(?m)^(?=## )", text)
+
+
+def _chapter_title(chapter: str) -> str:
+    return chapter.splitlines()[0].lstrip("#").strip() if chapter.startswith("## ") else ""
+
+
+def _manual_part(text: str, part: str) -> ToolResult:
+    want = part.strip().lower()
+    chapters = [c for c in _chapters(text) if _chapter_title(c)]
+    found = [c for c in chapters if _chapter_title(c).lower() == want] or \
+        [c for c in chapters if _chapter_title(c).lower().startswith(want)]
+    if not found:
+        return _fail(f"no chapter {part!r}; the chapters are: {', '.join(map(_chapter_title, chapters))}")
+    return _ok(found[0].rstrip() + "\n")
+
+
+def _has_footage(root: Path) -> bool:
+    """Imported video, a video clip or a transcript: the footage chapter applies."""
+    try:
+        data = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return True
+    assets = data.get("assets") if isinstance(data.get("assets"), dict) else {}
+    if any(isinstance(a, dict) and a.get("kind") == "video" for a in assets.values()):
+        return True
+    clips = [c for t in data.get("tracks") or [] if isinstance(t, dict) for c in t.get("clips") or []]
+    return any(isinstance(c, dict) and c.get("type") == "video" for c in clips) or \
+        any((root / "assets").glob("*.transcript.json"))
+
+
+def _manual_for(text: str, root: Path, platform: str) -> tuple[str, str]:
+    """The manual without what cannot apply to this project, and the line naming what was left out."""
+    left, kept = [], []
+    footage = _has_footage(root)
+    for chapter in _chapters(text):
+        title = _chapter_title(chapter)
+        if title == "Tools":
+            # the schemas carry the table; the notes under it are said nowhere else
+            notes = "".join(r for r in chapter.splitlines(keepends=True) if not r.startswith("|"))
+            kept.append(re.sub(r"\n{3,}", "\n\n", notes))
+            left.append("the Tools table (the tool descriptions carry it)")
+        elif title == "Editing footage" and not footage:
+            left.append('"Editing footage" (no video or transcript here)')
+        elif title == "The canvas and the platform":
+            mine = _one_profile_row(chapter, profile_for(root).name, platform)
+            if mine != chapter:
+                left.append("other profiles' canvas rows")
+            kept.append(mine)
+        else:
+            kept.append(chapter)
+    line = (f"Left out for this project: {'; '.join(left)}. manual(project, part=\"<chapter title>\") gives one "
+            "chapter, manual() all.\n") if left else ""
+    return "".join(kept), line
+
+
+def _one_profile_row(chapter: str, *names: str) -> str:
+    """The canvas table cut to the project's own profile, and any row its cells point to ("as douyin")."""
+    rows = chapter.split("\n")
+    table = [i for i, r in enumerate(rows) if r.startswith("| `")]
+    mine = [i for i in table if any(f"`{n}`" in rows[i].split("|")[1] for n in names if n)]
+    if not mine:
+        return chapter
+    named = {m for i in mine for m in re.findall(r"\bas ([a-z][\w-]*)", "|".join(rows[i].split("|")[2:]))}
+    mine += [i for i in table if any(f"`{n}`" in rows[i].split("|")[1] for n in named)]
+    return "\n".join(r for i, r in enumerate(rows) if i not in table or i in mine)
 
 
 def _book_title(book: str) -> str:
@@ -322,7 +396,8 @@ def library(project: str, name: str = "") -> str:
     import (the renderer's and the workspace's own, added with add_package)."""
     root = _project(project)
     comps = _mod("library").components(root)
-    kit = f"@reelsmith/kit (what a component can import) is documented in {KIT_DOC}"
+    kit = (f"@reelsmith/kit (what a component can import) is documented in {KIT_DOC}: its Exports block lists every "
+           "export with its props; read that and the one section the film needs")
     if name:
         comp = comps.get(name)
         if comp is None:
@@ -375,10 +450,20 @@ def notes(project: str) -> str:
         return _fail("this project is outside a workspace (no workspace.json above it): there are no notes")
     if not ws.notes_path.is_file() or not ws.notes_path.read_text(encoding="utf-8").strip():
         return "no notes yet: add what you learn with note"
-    text = ws.notes_path.read_text(encoding="utf-8")
-    if len(text) > MAX_NOTES_SHOWN:
-        text = f"(showing the last {MAX_NOTES_SHOWN} characters)\n" + text[-MAX_NOTES_SHOWN:]
-    return text
+    return _head_and_tail(ws.notes_path.read_text(encoding="utf-8"), ws.notes_path)
+
+
+def _head_and_tail(text: str, path: Path, limit: int = MAX_NOTES_SHOWN) -> str:
+    """Long notes lose their middle: standing rules sit at the head, the newest notes at the tail."""
+    if len(text) <= limit:
+        return text
+    head_end = text.rfind("\n", 0, limit // 2) + 1 or limit // 2
+    tail_from = len(text) - (limit - head_end)
+    tail_start = text.find("\n", tail_from) + 1 or tail_from
+    cut = text[head_end:tail_start]
+    shown = (text[:head_end] + f"\n[... {len(cut)} characters ({cut.count(chr(10))} lines) left out here; the whole "
+             f"file is {path} ...]\n\n" + text[tail_start:])
+    return text if len(shown) >= len(text) else shown       # a cut smaller than its marker saves nothing
 
 
 @tool
@@ -587,7 +672,8 @@ def preview(project: str, times: list[float | str] | float | str = [],  # noqa: 
     at them with Read), a contact sheet with the platform's UI bands darkened and the safe area outlined, and
     measured layout problems. sweep=true also measures the whole film as render does before it encodes (a still
     every second, spread out on films over 10 minutes, plus one in any text or caption between them; no film is
-    made): every layout problem that would stop render shows now, with stills of the flagged moments."""
+    made): every layout problem that would stop render shows now, with stills of the flagged moments, sheets of every
+    swept still and where one picture holds longest or an earlier picture returns."""
     root = _project(project)
     if isinstance(times, str) and times.strip().startswith("["):
         times = _json_arg(times, "times")
@@ -607,6 +693,9 @@ def preview(project: str, times: list[float | str] | float | str = [],  # noqa: 
         every = "one a second" if sw.get("every_s", 1) <= 1 else f"one every {sw['every_s']:g} s"
         rows.append(f"sweep: measured {sw['measured']} still(s), {every} and one in any text or caption between them; "
                     f"kept {sw['kept']} (asked or flagged)")
+        if sw.get("sheets"):
+            rows.append(f"every swept still, small, its second printed (look with Read): {', '.join(sw['sheets'])}")
+        rows += [f"{p} (information, not a rule)" for p in sw.get("pictures") or []]
     rows.append(f"{len(res['frames'])} still(s) of a {res['duration_s']} s film at {res['fps']:g} fps (look with Read):")
     rows += [f"- {f['t']:.2f}s (frame {f['frame']}): {f['png']}" for f in res["frames"]]
     if res.get("contact"):
@@ -904,8 +993,9 @@ def speak(project: str, lines: list[str | dict], gap_s: float = 0.22) -> str:
     "faster" or a speed factor 0.5-2 relative to normal (1.0 normal, 0.9 a little slower, 1.1 a little faster).
     emotion: a word or two (at most 20 characters, e.g. "surprised", "calm") passed to the voice as an
     instruction; how much it changes depends on the voice model. gap_s: silence between lines. Writes
-    voice/voice.wav and voice/voice.json (line times), sets the project's voice if unset. Only changed lines cost
-    money (cached). Paid: estimates first and refuses over budget."""
+    voice/voice.wav and voice/voice.json (line times) from exactly these lines, sets the project's voice if unset:
+    always pass every line, changed or not; unchanged lines come from the cache and cost nothing. Paid: estimates
+    first and refuses over budget."""
     lines = _json_arg(lines, "lines")
     if not isinstance(lines, list) or not lines:
         raise ToolInputError('lines must be a non-empty list, e.g. ["First line.", {"text": "Second line.", '
@@ -928,18 +1018,43 @@ def capture(project: str, url: str, id: str, match: str = "", viewport: str = ""
 
 
 @tool
-def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "", cutout: bool = False) -> str:
+def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "", cutout: bool = False,
+         match_asset: str = "") -> str:
     """Generate an original image asset `id` from `prompt` (optionally in the style of an image asset). size: an
     aspect "9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9" (default: the one nearest the project's canvas),
     or pixels "WxH" with sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes).
     cutout=true: one isolated subject on a real transparent background, scaled down into size (never enlarged) and
-    trimmed to itself."""
+    trimmed to itself. match_asset: a plate (image asset) this picture goes into; the picture matches its camera
+    height and angle, light direction and colour temperature (with cutout, only the object, as if shot in that
+    plate; without, the same place from the camera the prompt describes). A matched cut-out comes back trimmed at
+    its own size, not at the plate's scale: place it at its real size in the plate. Not together with
+    style_ref_asset. Several pictures: draw_many runs them at the same time."""
     if not (prompt or "").strip():
         raise ToolInputError("prompt is empty: describe the picture")
     if not isinstance(cutout, bool):
         raise ToolInputError("cutout must be true or false")
     return _provider("draw", _project(project), id=_id_arg(id), prompt=prompt,
-                     style_ref_asset=style_ref_asset or None, size=size or None, cutout=cutout)
+                     style_ref_asset=style_ref_asset or None, size=size or None, cutout=cutout,
+                     match_asset=match_asset or None)
+
+
+@tool
+def draw_many(project: str, pictures: list[dict]) -> str:
+    """Draw 1-8 pictures at once (3 at a time): each item {"id", "prompt", "size"?, "cutout"?, "style_ref_asset"?,
+    "match_asset"?} with draw's meanings, each counted, checked and registered as draw does. Returns one line per
+    picture in the order given (ok with its path and seconds, or why not; one failure never loses the others) and
+    a labelled contact sheet of the batch under build/draws/: look at the sheet, open a single picture only for
+    fine detail. Several pictures for one film: send them here in one call, not as separate draws. A plate and the
+    cut-outs matched to it may go in the same call: an item whose match_asset or style_ref_asset names another
+    item waits for that picture and uses the new one (and is not tried if it failed)."""
+    pictures = _json_arg(pictures, "pictures")
+    if not isinstance(pictures, list) or not pictures:
+        raise ToolInputError('pictures must be a non-empty list, e.g. [{"id": "kitchen", "prompt": "...", "size": '
+                             '"9:16"}, {"id": "pan", "prompt": "...", "cutout": true, "match_asset": "kitchen"}]')
+    if hasattr(_mod("providers"), "draw_many"):
+        return _provider("draw_many", _project(project), pictures=pictures)
+    text, is_error = _mod("providers.draw").draw_many(_project(project), pictures=pictures)
+    return ToolResult(str(text), not is_error)
 
 
 @tool
@@ -1033,6 +1148,6 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
 
 
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, redo, check, library, preview, render,
-                                 review, export_captions, speak, capture, draw, animate, import_asset, assets, probe,
-                                 frames, scenes, silences, transcribe, notes, note, typecheck, add_package,
+                                 review, export_captions, speak, capture, draw, draw_many, animate, import_asset, assets,
+                                 probe, frames, scenes, silences, transcribe, notes, note, typecheck, add_package,
                                  run_script)}

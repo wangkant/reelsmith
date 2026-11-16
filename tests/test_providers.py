@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import shutil
+import re
 import socket
 import struct
 import subprocess
@@ -209,7 +210,7 @@ def test_every_provider_takes_the_keywords_tools_sends():
     calls = {
         "speak": dict(lines=["一"], gap_s=0.22),
         "capture": dict(url="https://example.com", match="x", id="ev1"),
-        "draw": dict(id="a", prompt="p", style_ref_asset="b", size="9:16"),
+        "draw": dict(id="a", prompt="p", style_ref_asset="b", size="9:16", cutout=True, match_asset="c"),
         "animate": dict(id="a", image_asset="b", motion="m", seconds=4.0, camera="push"),
         "import_asset": dict(id="a", source="x.png", kind="image"),
         "assets": {},
@@ -2279,3 +2280,234 @@ def test_speak_openai_endpoint_errors_and_keys(env, speech_server):
     env.config(providers={"tts": {"key_env": None, "base_url": "ftp://example.com"}})
     text, err = P.speak(env.project, lines=["Other key."])
     assert err and "base_url must be an http(s) address" in text and len(speech_server.seen) == 5
+
+
+# ------------------------------------------------------------------ draw: batches and matched plates
+class SlowCutPainter(FakePainter):
+    """Cut-outs that each take `delay` seconds; a prompt holding one of `fail` makes the provider raise."""
+    def __init__(self, tmp: Path, delay=0.0, fail=()):
+        super().__init__(tmp)
+        self.delay, self.fail, self.lock = delay, tuple(fail), threading.Lock()
+        self.live = self.peak = 0
+
+    def draw(self, prompt, gen_size, workdir, ref, timeout, **kw):
+        with self.lock:
+            self.calls.append(dict(prompt=prompt, gen=gen_size, ref=ref, workdir=Path(workdir), timeout=timeout,
+                                   ref_bytes=Path(ref).read_bytes() if ref else b"", **kw))
+            n = len(self.calls)
+            self.live += 1
+            self.peak = max(self.peak, self.live)
+        try:
+            time.sleep(self.delay)
+            if any(f in prompt for f in self.fail):
+                raise RuntimeError("provider broke")
+            return D.Shot("ok", subject_png(self.tmp / f"gen-{n}.png"), self.delay, detail="done", thread="t-ok")
+        finally:
+            with self.lock:
+                self.live -= 1
+
+
+def batch(*ids, cutout=True, **extra):
+    return [{"id": i, "prompt": f"picture {i}", "cutout": cutout, **extra} for i in ids]
+
+
+def test_draw_many_runs_three_at_once_and_registers_every_picture(env):
+    painter = SlowCutPainter(env.tmp, delay=1.0)
+    started = time.monotonic()
+    text, err = D.draw_many(env.project, pictures=batch("a", "b", "c"), provider=painter)
+    took = time.monotonic() - started
+    assert not err, text
+    assert took < 2.4 and painter.peak == 3            # about one sleep, not the sum of three
+    assets = read_project(env.project)["assets"]
+    assert set(assets) == {"a", "b", "c"} and all(assets[k]["alpha"] for k in assets)
+    lines = text.splitlines()
+    assert lines[0].startswith("Drew 3 of 3 pictures")
+    assert [ln.split(":")[0] for ln in lines[1:4]] == ["1. a", "2. b", "3. c"]
+    assert all("ok, assets/" in ln and "cut-out" in ln for ln in lines[1:4])
+    rows = [r for r in ledger_rows(env.ws) if r["tool"] == "draw"]
+    assert sorted(r["status"] for r in rows) == ["ok"] * 3 + ["reserved"] * 3
+    log = (env.ws / ".cache" / "draw.log").read_text(encoding="utf-8").splitlines()
+    assert sorted(json.loads(ln)["id"] for ln in log) == ["a", "b", "c"]
+
+
+def test_draw_many_writes_a_labelled_contact_sheet(env):
+    from PIL import Image
+    text, err = D.draw_many(env.project, pictures=batch("cup", "pan"), provider=SlowCutPainter(env.tmp))
+    assert not err, text
+    rel = re.search(r"Contact sheet: (build/draws/\S+\.png)", text).group(1)
+    assert "open a single picture only for fine detail" in text
+    with Image.open(env.project / rel) as im:
+        assert im.width == 8 + 2 * (D.SHEET_TILE_W + 8)
+        assert im.getpixel((8 + 2, im.height - 12)) in ((204, 204, 204), (150, 150, 150))   # checkerboard shows
+
+
+def test_draw_many_keeps_the_others_when_one_fails(env):
+    painter = SlowCutPainter(env.tmp, fail=("picture b",))
+    text, err = D.draw_many(env.project, pictures=batch("a", "b", "c"), provider=painter)
+    assert not err, text
+    lines = text.splitlines()
+    assert lines[0].startswith("Drew 2 of 3") and "2. b: failed:" in lines[2] and "ok," in lines[1] + lines[3]
+    assert set(read_project(env.project)["assets"]) == {"a", "c"}
+
+
+def test_draw_many_respects_max_draws_across_threads(env):
+    env.config(providers={"image": {"max_draws": 2}})
+    painter = SlowCutPainter(env.tmp, delay=0.3)
+    text, err = D.draw_many(env.project, pictures=batch("a", "b", "c", "d"), provider=painter)
+    assert not err and len(painter.calls) == 2 and text.count("used its 2 drawing tries") == 2
+    assert len(read_project(env.project)["assets"]) == 2
+
+
+def test_draw_many_all_failing_is_an_error(env):
+    text, err = D.draw_many(env.project, pictures=batch("a", "b"), provider=FakePainter(env.tmp, kinds=("auth",)))
+    assert err and "Drew 0 of 2" in text and "Contact sheet" not in text
+
+
+@pytest.mark.parametrize("pictures, says", [
+    ([], "1-8 objects"),
+    (batch(*"abcdefghi"), "1-8 objects"),
+    (["a"], "must be an object"),
+    ([{"id": "a", "prompt": "x", "colour": "red"}], "unknown key(s) colour"),
+    ([{"id": "a", "prompt": "x"}, {"id": "A", "prompt": "y"}], "both draw"),
+    ([{"id": "a b", "prompt": "x"}], "must be 1-64"),
+    ([{"id": "a", "prompt": "x", "cutout": "yes"}], "cutout must be true or false"),
+])
+def test_draw_many_refuses_a_malformed_batch_before_any_try(env, pictures, says):
+    painter = SlowCutPainter(env.tmp)
+    text, err = D.draw_many(env.project, pictures=pictures, provider=painter)
+    assert err and says in text and painter.calls == []
+
+
+def test_match_asset_sends_the_plate_with_a_placement_note(env):
+    write_png(env.project / "assets" / "drum.png", 512, 768, rgb=(10, 120, 200))
+    env.set_project(assets={"drum": {"path": "assets/drum.png", "kind": "image"}})
+    painter = SlowCutPainter(env.tmp)
+    text, err = P.draw(env.project, id="bottle", prompt="a glass bottle", cutout=True, match_asset="drum",
+                       size="1:1", provider=painter)
+    assert not err, text
+    call = painter.calls[0]
+    assert call["ref_note"] == D.MATCH_CUT_NOTE and call["ref"] is not None and call["ref_bytes"]
+    assert call["prompt"].endswith(D.CUTOUT_NOTE) and call["gen"] == (1024, 1024)
+    assert "camera height and angle" in D.draw_prompt("x", (1024, 1024), ref=True, ref_note=D.MATCH_CUT_NOTE)
+    text, err = D.draw_many(env.project, pictures=[{"id": "drum2", "prompt": "the drum from above",
+                                                    "match_asset": "drum"}],
+                            provider=painter, fit=lambda src, dst, size: shutil.copy(src, dst))
+    assert not err, text
+    assert painter.calls[1]["ref_note"] == D.MATCH_PLATE_NOTE and painter.calls[1]["ref_bytes"]
+
+
+def test_draw_many_draws_a_plate_before_the_cut_outs_matched_to_it(env, monkeypatch):
+    # the cut-out must see the NEW plate, even when an older picture under that id exists
+    monkeypatch.setattr(D, "_ref_jpeg", lambda ref, workdir: ref)
+    write_png(env.project / "assets" / "kitchen.png", 512, 768, rgb=(10, 120, 200))
+    env.set_project(assets={"kitchen": {"path": "assets/kitchen.png", "kind": "image"}})
+    old = (env.project / "assets" / "kitchen.png").read_bytes()
+    painter = SlowCutPainter(env.tmp, delay=0.2)
+    pics = [{"id": "pan", "prompt": "picture pan", "cutout": True, "match_asset": "kitchen"},
+            {"id": "kitchen", "prompt": "picture kitchen", "size": "9:16"},
+            {"id": "cup", "prompt": "picture cup", "cutout": True}]
+    text, err = D.draw_many(env.project, pictures=pics, provider=painter,
+                            fit=lambda src, dst, size: shutil.copy(src, dst))
+    assert not err and text.startswith("Drew 3 of 3"), text
+    order = [c["prompt"].split("\n")[0] for c in painter.calls]
+    assert order.index("picture kitchen") < order.index("picture pan")
+    pan = next(c for c in painter.calls if c["prompt"].startswith("picture pan"))
+    new = (env.project / "assets" / "kitchen.png").read_bytes()
+    assert pan["ref_bytes"] == new != old
+    assert "1. pan: ok" in text and "place it at its real size" in text.splitlines()[1]
+
+
+def test_draw_many_does_not_try_a_cut_out_whose_plate_failed(env):
+    painter = SlowCutPainter(env.tmp, fail=("picture kitchen",))
+    pics = [{"id": "kitchen", "prompt": "picture kitchen"},
+            {"id": "pan", "prompt": "picture pan", "cutout": True, "match_asset": "kitchen"},
+            {"id": "lid", "prompt": "picture lid", "cutout": True, "style_ref_asset": "pan"}]
+    text, err = D.draw_many(env.project, pictures=pics, provider=painter)
+    assert err and "Drew 0 of 3" in text, text
+    assert painter.calls and all(c["prompt"].startswith("picture kitchen") for c in painter.calls)
+    assert "2. pan: failed: not tried: it refers to 'kitchen' (pictures[1])" in text
+    assert "3. lid: failed: not tried: it refers to 'pan' (pictures[2])" in text
+    assert not [r for r in ledger_rows(env.ws) if r.get("asset") in ("pan", "lid")]
+
+
+def test_draw_many_refuses_items_that_refer_to_each_other(env):
+    painter = SlowCutPainter(env.tmp)
+    pics = [{"id": "a", "prompt": "picture a", "cutout": True, "style_ref_asset": "b"},
+            {"id": "b", "prompt": "picture b", "cutout": True, "style_ref_asset": "a"},
+            {"id": "c", "prompt": "picture c", "cutout": True}]
+    text, err = D.draw_many(env.project, pictures=pics, provider=painter)
+    assert not err and "Drew 1 of 3" in text and text.count("'a', 'b' refer to each other") == 2, text
+    assert len(painter.calls) == 1 and painter.calls[0]["prompt"].startswith("picture c")
+
+
+def test_draw_many_keeps_only_the_last_contact_sheets(env):
+    painter = SlowCutPainter(env.tmp)
+    for n in range(D.SHEETS_KEPT + 2):
+        text, err = D.draw_many(env.project, pictures=batch(f"p{n}"), provider=painter)
+        assert not err, text
+    sheets = list((env.project / "build" / "draws").glob("sheet-*.png"))
+    last = re.search(r"Contact sheet: (build/draws/\S+\.png)", text).group(1)
+    assert len(sheets) == D.SHEETS_KEPT and (env.project / last).is_file()
+
+
+def test_a_matched_cut_out_is_told_to_be_placed_at_its_real_size(env):
+    write_png(env.project / "assets" / "drum.png", 512, 768)
+    env.set_project(assets={"drum": {"path": "assets/drum.png", "kind": "image"}})
+    text, err = P.draw(env.project, id="b", prompt="a bottle", cutout=True, match_asset="drum",
+                       provider=SlowCutPainter(env.tmp))
+    assert not err and "trimmed at its own size" in text and "place it at its real size" in text
+    assert "real size" in D.MATCH_CUT_NOTE and "the size it would have there" not in D.MATCH_CUT_NOTE
+    from reelsmith import tools as T
+    assert "scale" not in T.draw.__doc__.split("match_asset:")[1].split("A matched")[0]
+
+
+def test_match_asset_takes_only_an_image_not_evidence(env):
+    write_png(env.project / "assets" / "ev.png", 512, 768)
+    env.set_project(assets={"ev": {"path": "assets/ev.png", "kind": "evidence"}})
+    painter = SlowCutPainter(env.tmp)
+    text, err = P.draw(env.project, id="b", prompt="a bottle", cutout=True, match_asset="ev", provider=painter)
+    assert err and "match_asset 'ev' must be an image asset" in text and painter.calls == []
+    assert not P.draw(env.project, id="c", prompt="p", cutout=True, style_ref_asset="ev", provider=painter)[1]
+
+
+def test_block_helpers_survive_a_parallel_clear(monkeypatch):
+    monkeypatch.setattr(D, "_BLOCKED", {})
+    D._reachable("ghost")                                # nothing to clear: no KeyError
+    D._BLOCKED["ghost"] = ("network", time.monotonic() + 60)
+    D._reachable("ghost")
+    D._reachable("ghost")                                # a second thread clearing the same entry
+    assert "ghost" not in D._BLOCKED
+    assert "Try again in about" in D._down("x", "ghost", "network")   # cleared before it was read
+
+
+def test_a_style_reference_still_reaches_the_provider_the_old_way(env):
+    write_png(env.project / "assets" / "host.png", 512, 768)
+    env.set_project(assets={"host": {"path": "assets/host.png", "kind": "image"}})
+    painter = SlowCutPainter(env.tmp)
+    assert not P.draw(env.project, id="x", prompt="p", cutout=True, style_ref_asset="host", provider=painter)[1]
+    assert "ref_note" not in painter.calls[0] and painter.calls[0]["ref"] is not None
+
+
+@pytest.mark.parametrize("kwargs, says", [
+    (dict(style_ref_asset="drum", match_asset="drum"), "do not go together"),
+    (dict(match_asset="ghost"), "match_asset 'ghost' must be an image asset"),
+])
+def test_match_asset_refusals(env, kwargs, says):
+    write_png(env.project / "assets" / "drum.png", 512, 768)
+    env.set_project(assets={"drum": {"path": "assets/drum.png", "kind": "image"}})
+    painter = SlowCutPainter(env.tmp)
+    text, err = P.draw(env.project, id="b", prompt="a bottle", cutout=True, provider=painter, **kwargs)
+    assert err and says in text and painter.calls == []
+    text, err = D.draw_many(env.project, pictures=[{"id": "b", "prompt": "a bottle", **kwargs}], provider=painter)
+    assert err and says in text and painter.calls == []
+
+
+def test_codex_tells_the_model_how_to_use_a_matched_plate(tmp_path):
+    seen = {}
+
+    def run(cmd, cwd=None, timeout=None, stdin=None, no_window=False):
+        seen["stdin"] = stdin.decode("utf-8")
+        return 0, "", "", False
+    D.Codex(exe_path=tmp_path / "codex.exe", home=tmp_path, run=run, model="m").draw(
+        "a bottle", (1024, 1024), tmp_path / "w", tmp_path / "ref.jpg", 60, ref_note=D.MATCH_CUT_NOTE)
+    assert D.MATCH_CUT_NOTE in seen["stdin"] and D.STYLE_REF_NOTE not in seen["stdin"]

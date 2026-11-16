@@ -31,6 +31,8 @@ OVERLAP_OPACITY = 0.35         # fainter text under other text is a backdrop, no
 HELD_CUT = 0.02                # a text this much hidden by its own component's edges is cut ...
 HELD_CUT_SAME = 0.01           # ... and when it is hidden by the same share (within this) ...
 HELD_CUT_S = 0.5               # ... in samples this far apart, it is not passing an edge but kept cut
+EACH_TEXT = {"cut", "unsafe", "overflow", "tiny", "small"}     # every offending text of a clip is named at once
+MAX_TEXTS_LISTED = 8
 EVIDENCE_MIN_PX = 40           # the house minimum for anything a viewer must read
 EVIDENCE_SAFE_SLACK_PX = 6     # an evidence panel may poke this far past the safe area (its fading margin)
 EVIDENCE_MAX_ZOOM = 2.0        # EvidenceCrop.tsx MAX_ZOOM
@@ -943,6 +945,10 @@ class LayoutCheck:
     def note(self, kind, who, frame, px, side, text, worst=max, **extra):
         entry = self.found.setdefault((kind, who), {"frames": [], "px": px, "side": side, "text": text, **extra})
         entry["frames"].append(frame)
+        if text and kind in EACH_TEXT:
+            mine = entry.setdefault("texts", {}).setdefault(text, {"frame": frame, "px": px, "side": side})
+            if worst(px, mine["px"]) != mine["px"]:
+                mine.update(px=px, side=side)
         if worst(px, entry["px"]) != entry["px"] or not entry["text"]:
             entry.update(px=px, side=side, text=text or entry["text"], **extra)
 
@@ -1016,6 +1022,26 @@ class LayoutCheck:
                         note(f"overlap:{b}", a, frame, 0.0, "", ta, other=b, other_text=tb)
 
 
+def _each_text(e: dict, fps: float) -> str:
+    """Every distinct text of one finding, worst first; a text that only reveals a longer one is left out."""
+    texts = e.get("texts") or {}
+    if len(texts) < 2:
+        return ""
+    names = [t for t in texts if not any(o != t and o.startswith(t) for o in texts)]
+    sized = not e["side"]                   # a size finding: smaller is worse
+    names.sort(key=lambda t: (texts[t]["px"] if sized else -texts[t]["px"], texts[t]["frame"]))
+    if len(names) < 2:
+        return ""
+
+    def one(t: str) -> str:
+        d = texts[t]
+        how = f"{d['px']:g} px" if sized else f"{round(d['px'])} px {d['side']}"
+        return f"\"{t}\" {how} @ {d['frame'] / fps:.1f}s"
+    shown = names[:MAX_TEXTS_LISTED]
+    more = f", +{len(names) - len(shown)} more" if len(names) > len(shown) else ""
+    return f" [{len(names)} texts: {', '.join(map(one, shown))}{more}]"
+
+
 def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
     fps, s = profile.fps, profile.safe
     frames = sorted(set(e["frames"]))
@@ -1023,6 +1049,7 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
     also = ""
     if len(frames) > 1:
         also = f" (also at {', '.join(f'{f / fps:.1f}s' for f in frames[1:6])}{' ...' if len(frames) > 6 else ''})"
+    also += _each_text(e, fps)
     quote = f"text \"{e['text']}\"" if e["text"] else "text"
     px, side = round(e["px"]), e["side"]
     if kind == "cut":

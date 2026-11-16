@@ -50,8 +50,9 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("app", help="Open the application on this workspace: every film, requests in several at once, the "
                                "library and the settings (also `reelsmith` alone in a terminal)", add_help=False)
     sub.add_parser("chat", help="Work in this terminal: open a film and ask the agent for changes", add_help=False)
-    cmd("manual", tools.manual).add_argument("project", nargs="?", default="",
-                                             help="a project folder: its platform's playbook follows the manual")
+    p = cmd("manual", tools.manual)
+    p.add_argument("project", nargs="?", default="", help="a project folder: its platform's playbook follows the manual")
+    p.add_argument("--part", default="", help='one chapter by its title, e.g. "Tools"')
     proj(cmd("describe", tools.describe)).add_argument("--at", help="seconds or a Time, e.g. line:3")
     p = proj(cmd("new", tools.new_project, "new_project"))
     p.add_argument("--profile", default="", help="a profile name (default: the workspace's, else landscape)")
@@ -94,6 +95,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--size", default="", help="9:16, 2:3, 3:4, 4:5, 1:1, 4:3, 3:2, 16:9 or WxH pixels "
                                               "(default: the aspect nearest the canvas)")
     p.add_argument("--cutout", action="store_true", help="an isolated subject with a real alpha channel, trimmed")
+    p.add_argument("--match", default="", dest="match_asset",
+                   help="a plate (image asset) to match: camera angle, light and colour (a cut-out comes back at "
+                        "its own size: place it at its real size)")
+    proj(cmd("draw-many", tools.draw_many, "draw_many")).add_argument(
+        "pictures", help="JSON list of {id, prompt, size?, cutout?, style_ref_asset?, match_asset?}, @file.json, or -")
     p = proj(cmd("animate", tools.animate))
     p.add_argument("id")
     p.add_argument("image_asset")
@@ -168,7 +174,7 @@ def command_parser(name: str) -> argparse.ArgumentParser:
 def _call(args) -> tools.ToolResult:
     c = args.cmd
     if c == "manual":
-        return tools.manual(args.project)
+        return tools.manual(args.project, args.part)
     if c == "describe":
         return tools.describe(args.project, args.at)
     if c in ("new", "new_project"):
@@ -194,7 +200,10 @@ def _call(args) -> tools.ToolResult:
     if c == "capture":
         return tools.capture(args.project, args.url, args.id, args.match, args.viewport)
     if c == "draw":
-        return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size, args.cutout)
+        return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size, args.cutout,
+                          args.match_asset)
+    if c in ("draw-many", "draw_many"):
+        return tools.draw_many(args.project, _text_arg(args.pictures))
     if c == "animate":
         return tools.animate(args.project, args.id, args.image_asset, args.motion, args.seconds, args.camera)
     if c in ("import", "import_asset"):
