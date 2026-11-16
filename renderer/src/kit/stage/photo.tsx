@@ -7,9 +7,20 @@ import { assetSrc, isAsset } from "../helpers";
 import type { AssetRef } from "../helpers";
 import { Layer, useDepth } from "./Stage";
 import { useLens } from "./lens";
-import { dofBlur, travelAt } from "./optics";
-import type { TravelOptions } from "./optics";
+import { castMatrix, dofBlur, silhouette, travelAt } from "./optics";
+import type { Light, TravelOptions, View } from "./optics";
 import type { Pt } from "./geom";
+
+const LightContext = createContext<Light | null>(null);
+/** Provides the light that casts the shadows of the photos inside (Plate's `light` does this). */
+export const LightProvider = LightContext.Provider;
+/** The light the enclosing Plate gives, or null. */
+export const useLight = (): Light | null => useContext(LightContext);
+
+const ViewContext = createContext<View | null>(null);
+// a Plate's punch, so footage inside can tell whether it is on screen
+export const ViewProvider = ViewContext.Provider;
+export const useView = (): View | null => useContext(ViewContext);
 
 /** Where a point of the enclosing picture lands: `at([px, py])` maps picture px to stage px, `s` is stage px per
  *  picture px and `r` the picture's rotation in degrees; `blur` (depth of field) and `smear` along `smearAng`
@@ -101,9 +112,16 @@ export type PhotoProps = {
   tintA?: number;
   haze?: number;
   hazeColor?: string;
-  /** contact shadow strength 0..1 where it stands; its width as a fraction of the drawn width; lift 0..1 off the ground */
+  /** ground shadow 0..1, made from the picture's own alpha: a soft contact patch under its lowest pixels and, when a
+   *  light is known (the Plate's `light` or this `light`), a cast shadow away from it that fades with distance */
   shadow?: number;
+  /** the cast shadow's strength (default 0.6 of `shadow`); the contact patch's width factor */
+  cast?: number;
   shadowW?: number;
+  light?: Light;
+  /** stage y of the ground under it (default its lowest opaque pixel), or `lift`: its height off the ground as a
+   *  fraction of its drawn height (the shadow drops by that much, spreads and fades) */
+  ground?: number;
   lift?: number;
   opacity?: number;
   /** a second picture of the same thing from the same angle and size (raw then cooked, off then on), shown over
@@ -129,12 +147,14 @@ export function Photo(p: PhotoProps) {
 }
 
 function PhotoBody({ src, imgW, imgH, x, y, w, s = 1, sy = 1, anchor = [0.5, 1], r = 0, flip = false, blur = 0, smear = 0, smearAng = 0,
-  shade = 0, tint = "#FFFFFF", tintA = 0, haze = 0, hazeColor, shadow = 0, shadowW = 0.8, lift = 0, opacity = 1, to, p = 0, wipe, soft = 0.3,
-  wipeAt = [0.5, 0.5], children }: PhotoProps) {
+  shade = 0, tint = "#FFFFFF", tintA = 0, haze = 0, hazeColor, shadow = 0, cast, shadowW = 1, light: lightIn, ground, lift = 0, opacity = 1,
+  to, p = 0, wipe, soft = 0.3, wipeAt = [0.5, 0.5], children }: PhotoProps) {
   const id = "ph" + useId().replace(/[^A-Za-z0-9_-]/g, "");
   const { w: cw, h: ch } = useClip();
   const depth = useDepth();
   const lens = useLens();
+  const plateLight = useLight();
+  const light = lightIn ?? plateLight;
   const [IW, IH] = pictureSize(src, imgW, imgH);
   if (to) checkSameAspect(to, IW, IH, "Photo");
   const dw = w ?? IW * s, dh = ((dw * IH) / IW) * sy;
@@ -144,12 +164,16 @@ function PhotoBody({ src, imgW, imgH, x, y, w, s = 1, sy = 1, anchor = [0.5, 1],
   const lit = shade > 0 || tintA > 0 || haze > 0;
   const filtered = bx > 0.3 || lit;
   const rel = smearAng - r;
-  const sw = dw * shadowW * (1 + lift * 0.6), so = shadow * 0.6 * (1 - 0.6 * lift);
   const k = to ? Math.max(0, Math.min(1, p)) : 0;
   const onlyTo = k >= 1;
   const ox = -anchor[0] * dw, oy = -anchor[1] * dh;
   const img = (href: string, extra?: React.SVGProps<SVGImageElement>) => (
     <SvgImage key={href} href={href} x={ox} y={oy} width={dw} height={dh} preserveAspectRatio="none" {...extra} />
+  );
+  // during a change both silhouettes' shadows cross-fade with the pictures, so nothing pops at p = 1
+  const shadowOf = (pic: AssetRef | string, key: string) => (
+    <GroundShadow key={assetSrc(pic)} id={id + key} href={assetSrc(pic)} x={x} y={y} ox={ox} oy={oy} dw={dw} dh={dh} r={r} flip={flip}
+      strength={shadow} cast={cast ?? shadow * 0.6} spread={shadowW} light={light} ground={ground} lift={lift} soft={dof} smear={sm} />
   );
   const pic = (
     <g transform={flip ? "scale(-1 1)" : undefined}>
@@ -166,17 +190,11 @@ function PhotoBody({ src, imgW, imgH, x, y, w, s = 1, sy = 1, anchor = [0.5, 1],
             {lit ? <feColorMatrix type="matrix" values={lightMatrix(shade, tint, tintA, haze, hazeColor)} /> : null}
           </filter>
         ) : null}
-        {so > 0 ? (
-          <radialGradient id={id + "s"}>
-            <stop offset="0" stopColor="#000" stopOpacity={so} />
-            <stop offset="0.55" stopColor="#000" stopOpacity={so * 0.45} />
-            <stop offset="1" stopColor="#000" stopOpacity={0} />
-          </radialGradient>
-        ) : null}
         {to && k > 0 && !onlyTo && wipe ? <WipeMask id={id + "w"} x={ox} y={oy} w={dw} h={dh} p={k} soft={soft} at={wipeAt}
           wipe={flip && wipe === "left" ? "right" : flip && wipe === "right" ? "left" : wipe} /> : null}
       </defs>
-      {so > 0 ? <ellipse cx={x + sm * 0.2} cy={y + dh * 0.01} rx={sw / 2 + sm} ry={sw * (0.06 + lift * 0.05)} fill={`url(#${id}s)`} /> : null}
+      {shadow > 0 && !onlyTo ? <g opacity={to && k > 0 ? 1 - k : undefined}>{shadowOf(src, "s")}</g> : null}
+      {shadow > 0 && to && k > 0 ? <g opacity={onlyTo ? undefined : k}>{shadowOf(to, "t")}</g> : null}
       <g transform={`translate(${x} ${y}) rotate(${r})`}>
         <g transform={`rotate(${rel})`} filter={filtered ? `url(#${id})` : undefined}>
           <g transform={`rotate(${-rel})`}>{pic}</g>
@@ -198,6 +216,147 @@ function PhotoBody({ src, imgW, imgH, x, y, w, s = 1, sy = 1, anchor = [0.5, 1],
       <PictureContext.Provider value={{ at, s: sc, r, blur: dof, smear: sm, smearAng }}>
         <div style={{ position: "absolute", left: 0, top: 0, width: cw, height: ch, opacity, pointerEvents: "none" }}>{children}</div>
       </PictureContext.Provider>
+    </>
+  );
+}
+
+type ShadowProps = {
+  id: string; href: string; x: number; y: number; ox: number; oy: number; dw: number; dh: number; r: number; flip: boolean;
+  strength: number; cast: number; spread: number; light: Light | null; ground?: number; lift: number; soft: number; smear: number;
+};
+
+const BOX: Pt[] = [[0, 0], [1, 0], [0, 1], [1, 1]];
+const OPAQUE = new Map<string, Pt[]>();
+const MEASURING = new Map<string, Promise<void>>();
+
+/** The corners of each row's opaque run, as picture fractions on a coarse grid: every convex-hull point of the
+ *  silhouette is among them, so its lowest point is found under any rotation. The box when it cannot be read. */
+const measureOpaque = (href: string): Promise<void> => {
+  let job = MEASURING.get(href);
+  if (!job) {
+    job = new Promise<void>((done) => {
+      const im = new Image();
+      im.crossOrigin = "anonymous";
+      im.onload = () => {
+        try {
+          const N = 96, iw = im.naturalWidth || 1, ih = im.naturalHeight || 1;
+          const cw = Math.max(1, Math.round(iw >= ih ? N : (N * iw) / ih)), chh = Math.max(1, Math.round(ih >= iw ? N : (N * ih) / iw));
+          const cv = document.createElement("canvas");
+          cv.width = cw; cv.height = chh;
+          const g = cv.getContext("2d", { willReadFrequently: true });
+          if (!g) throw new Error("no 2d context");
+          g.drawImage(im, 0, 0, cw, chh);
+          const a = g.getImageData(0, 0, cw, chh).data, pts: Pt[] = [];
+          for (let j = 0; j < chh; j++) {
+            let lo = -1, hi = -1;
+            for (let i = 0; i < cw; i++) if (a[(j * cw + i) * 4 + 3] > 26) { if (lo < 0) lo = i; hi = i; }
+            if (lo >= 0) pts.push([lo / cw, j / chh], [lo / cw, (j + 1) / chh], [(hi + 1) / cw, j / chh], [(hi + 1) / cw, (j + 1) / chh]);
+          }
+          OPAQUE.set(href, pts.length ? pts : BOX);
+        } catch {
+          OPAQUE.set(href, BOX);
+        }
+        done();
+      };
+      im.onerror = () => { OPAQUE.set(href, BOX); done(); };
+      im.src = href;
+    });
+    MEASURING.set(href, job);
+  }
+  return job;
+};
+
+/** A picture's opaque outline points (measured once per picture, the render held until then). */
+function useOpaque(href: string): Pt[] {
+  const [, bump] = useState(0);
+  const [handle] = useState(() => (OPAQUE.has(href) ? null : delayRender(`Measuring ${href.slice(0, 80)}`)));
+  useEffect(() => {
+    if (handle === null) return;
+    measureOpaque(href).then(() => { bump((n) => n + 1); continueRender(handle); });
+  }, [href, handle]);
+  return OPAQUE.get(href) ?? BOX;
+}
+
+/** A photo's ground shadow from its own alpha, built in stage space so rotation, flip and squash are all honoured:
+ *  the silhouette's lowest band squashed flat under its real lowest pixels (contact), and the whole silhouette laid
+ *  on the ground away from the light (cast), sharper near the foot and fading out. */
+function GroundShadow({ id, href, x, y, ox, oy, dw, dh, r, flip, strength, cast, spread, light, ground, lift, soft, smear }: ShadowProps) {
+  const opaque = useOpaque(href);
+  const { foot, top, left, w: W, cx } = silhouette(opaque, x, y, ox, oy, dw, dh, r, flip);
+  const H = Math.max(1, foot - top);
+  const G = ground ?? foot + Math.max(0, lift) * dh;
+  const gap = Math.max(0, G - foot);
+  const fade = Math.exp(-gap / Math.max(1, 0.35 * H));
+  // the patch is about a tenth of the width deep, made from the bottom quarter of the silhouette; alpha gains
+  // above 1 make the masked silhouette solid where it is dense
+  const t = 0.1 * W * (1 + gap / H);
+  const kq = Math.max(0.04, Math.min(0.6, t / (0.28 * H)));
+  const sx = spread * (1 + 0.5 * gap / H);
+  const patch = `matrix(${sx} 0 0 ${kq} ${cx * (1 - sx)} ${G - foot * kq + t * 0.45})`;
+  // a thin dark core where it touches: the ground it hides from the sky
+  const kc = kq * 0.35;
+  const core = `matrix(${sx * 0.96} 0 0 ${kc} ${cx * (1 - sx * 0.96)} ${G - foot * kc + t * 0.08})`;
+  const x0 = left - W, bw = 3 * W;
+  const body = (mask: string) => (
+    <g mask={`url(#${mask})`}>
+      <g transform={`translate(${x} ${y}) rotate(${r})`}>
+        <g transform={flip ? "scale(-1 1)" : undefined}>
+          <SvgImage href={href} x={ox} y={oy} width={dw} height={dh} preserveAspectRatio="none" />
+        </g>
+      </g>
+    </g>
+  );
+  // a band of the silhouette in stage space, measured up from its foot: offset 0 = foot, 1 = its top
+  const band = (key: string, stops: [number, number][]) => (
+    <>
+      <linearGradient id={id + key + "g"} gradientUnits="userSpaceOnUse" x1={0} y1={foot} x2={0} y2={top}>
+        {stops.map(([o, a], i) => <stop key={i} offset={o} stopColor="#fff" stopOpacity={a} />)}
+      </linearGradient>
+      <mask id={id + key + "m"} maskUnits="userSpaceOnUse" x={x0} y={top - 2} width={bw} height={H + 4}>
+        <rect x={x0} y={top - 2} width={bw} height={H + 4} fill={`url(#${id + key}g)`} />
+      </mask>
+    </>
+  );
+  const ink = (a: number) => `0 0 0 0 0.05  0 0 0 0 0.035  0 0 0 0 0.02  0 0 0 ${a.toFixed(3)} 0`;
+  const blurOf = (b: number) => `${(b + smear).toFixed(2)} ${b.toFixed(2)}`;
+  const cm = light && cast > 0 ? castMatrix(light, G) : null;
+  const castA = Math.min(1, cast) * (0.75 + 0.25 * fade);
+  const reach = cm ? cm.len * H : 0;
+  return (
+    <>
+      <defs>
+        {band("p", [[0, 1], [0.28, 0]])}
+        <filter id={id + "p"} x="-50%" y="-200%" width="200%" height="500%" colorInterpolationFilters="sRGB">
+          <feColorMatrix type="matrix" values={ink(Math.min(1, strength) * 2.2 * fade)} />
+          <feGaussianBlur stdDeviation={blurOf(t * 0.3 + soft)} />
+        </filter>
+        <filter id={id + "c"} x="-50%" y="-200%" width="200%" height="500%" colorInterpolationFilters="sRGB">
+          <feColorMatrix type="matrix" values={ink(Math.min(1, strength) * 3)} />
+          <feGaussianBlur stdDeviation={blurOf(t * 0.06 + soft + 0.6)} />
+        </filter>
+        {cm ? (
+          <>
+            {band("n", [[0, 1], [0.45, 0]])}
+            {band("f", [[0, 0.55], [1, 0]])}
+            <filter id={id + "n"} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+              <feColorMatrix type="matrix" values={ink(castA * 1.4)} />
+              <feGaussianBlur stdDeviation={blurOf(1 + 0.012 * reach + soft + gap * 0.05)} />
+            </filter>
+            <filter id={id + "f"} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+              <feColorMatrix type="matrix" values={ink(castA * 0.9)} />
+              <feGaussianBlur stdDeviation={blurOf(2 + 0.05 * reach + soft + gap * 0.1)} />
+            </filter>
+          </>
+        ) : null}
+      </defs>
+      {cm ? (
+        <>
+          <g filter={`url(#${id}f)`}><g transform={`matrix(${cm.m.map((v) => +v.toFixed(5)).join(" ")})`}>{body(id + "fm")}</g></g>
+          <g filter={`url(#${id}n)`}><g transform={`matrix(${cm.m.map((v) => +v.toFixed(5)).join(" ")})`}>{body(id + "nm")}</g></g>
+        </>
+      ) : null}
+      <g filter={`url(#${id}p)`}><g transform={patch}>{body(id + "pm")}</g></g>
+      {gap < 0.05 * H ? <g filter={`url(#${id}c)`}><g transform={core}>{body(id + "pm")}</g></g> : null}
     </>
   );
 }
@@ -265,18 +424,21 @@ export type TravelProps = Omit<PhotoProps, "x" | "y" | "smear" | "smearAng" | "s
   shadeAt?: (x: number, y: number) => number;
   /** rotate with the line's direction */
   turn?: boolean;
+  /** stage y of the ground under a point (a hop or a throw keeps its shadow on the floor) */
+  groundAt?: (x: number, y: number) => number;
   f?: number;
 };
 
 /** A photo moving along a traced line: perspective scale (`sizes`), a smear that grows with speed, a shadow that
  *  follows and shading by where it is. */
-export function Travel({ line, at, dur, sizes, ease, smearK = 0.7, maxSmear = 60, shadeAt, turn = false, f: fIn, w, s = 1, r = 0, ...rest }: TravelProps) {
+export function Travel({ line, at, dur, sizes, ease, smearK = 0.7, maxSmear = 60, shadeAt, turn = false, groundAt, f: fIn, w, s = 1, r = 0, ...rest }: TravelProps) {
   const now = useCurrentFrame();
   const st = travelAt(line, fIn ?? now, at, dur, { sizes, ease });
   const [IW] = pictureSize(rest.src, rest.imgW, rest.imgH, "Travel");
   const base = w ?? IW * s;
   return (
     <Photo {...rest} x={st.x} y={st.y} w={base * st.s} r={r + (turn ? st.ang : 0)}
-      smear={Math.min(maxSmear, st.speed * smearK)} smearAng={st.ang} shade={shadeAt ? shadeAt(st.x, st.y) : 0} />
+      smear={Math.min(maxSmear, st.speed * smearK)} smearAng={st.ang} shade={shadeAt ? shadeAt(st.x, st.y) : 0}
+      ground={groundAt ? groundAt(st.x, st.y) : rest.ground} />
   );
 }

@@ -226,6 +226,7 @@ export default {
   "shot.footage": "動画素材",
   "shot.still": "静止画",
   "shot.inset": "インセット画像",
+  "shot.broll": "撮影風ショット",
   "shot.speed": "{rate} 倍速",
   "shot.reversed": "逆再生",
   "shot.held": "フリーズフレーム",

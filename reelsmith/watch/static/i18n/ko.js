@@ -226,6 +226,7 @@ export default {
   "shot.footage": "동영상 소재",
   "shot.still": "정지 이미지",
   "shot.inset": "삽입 이미지",
+  "shot.broll": "촬영풍 장면",
   "shot.speed": "{rate}배속",
   "shot.reversed": "역재생",
   "shot.held": "정지 프레임",

@@ -226,6 +226,7 @@ export default {
   "shot.footage": "影片畫面",
   "shot.still": "靜態圖片",
   "shot.inset": "子母畫面",
+  "shot.broll": "實拍感鏡頭",
   "shot.speed": "{rate} 倍速",
   "shot.reversed": "倒轉播放",
   "shot.held": "凍結影格",

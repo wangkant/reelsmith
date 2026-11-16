@@ -241,6 +241,7 @@ export default {
   "shot.footage": "Footage",
   "shot.still": "Still image",
   "shot.inset": "Inset picture",
+  "shot.broll": "Filmed shots",
   "shot.speed": "{rate}× speed",
   "shot.reversed": "Reversed",
   "shot.held": "Held frame",

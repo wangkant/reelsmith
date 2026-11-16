@@ -258,6 +258,61 @@ def master(src: Path, dst: Path, lufs: float, peak: float = -1.0, timeout: float
     return round(lufs - float(s["input_i"]), 1)
 
 
+GRAIN_BPP = 0.09           # bitrate cap with grain on, bits a pixel: noise would otherwise take any bitrate given
+
+
+def grain_filter(grain: float, width: int, height: int) -> str:
+    """Moving luma grain drawn at a quarter of the picture's size (soft particles a platform's re-encode keeps,
+    where pixel noise is stripped) and laid over the picture by overlay blend."""
+    div = max(2, round(min(width, height) / 270))
+    strength = max(1, round(24 * grain))
+    return (f"split[pic][g];[g]scale=iw/{div}:ih/{div},format=gray,lut=c0=128,noise=c0s={strength}:c0f=t,"
+            f"scale={width}:{height}:flags=bicubic,format=yuv420p[n];"
+            "[pic][n]blend=c0_mode=overlay")
+
+
+def grain_cap(info: dict, max_mb: float | None = None) -> int:
+    """The video bitrate cap under grain: GRAIN_BPP a pixel, and with `max_mb` what fits 90% of it after the sound."""
+    streams = info.get("streams") or []
+    video = next(s for s in streams if s.get("codec_type") == "video")
+    cap = GRAIN_BPP * int(video["width"]) * int(video["height"]) * (frame_rate(video.get("r_frame_rate")) or 30)
+    try:
+        length = float(video.get("duration") or (info.get("format") or {}).get("duration") or 0)
+    except ValueError:
+        length = 0.0
+    if max_mb and length > 0:
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        audio_bps = float(audio.get("bit_rate") or 192_000) if audio else 0.0
+        fit = 0.9 * max_mb * 8e6 / length - audio_bps
+        if fit <= 0:
+            raise RuntimeError(f"no room for grain under {max_mb:g} MB")
+        cap = min(cap, fit)
+    return round(cap)
+
+
+def add_grain(src: Path, dst: Path, grain: float, timeout: float = 600, max_mb: float | None = None) -> None:
+    """`src` with moving film grain (0..1) over its picture, re-encoded H.264 under a bitrate cap that also keeps it
+    inside `max_mb`; sound copied. Any failure, a timeout included, is a RuntimeError and leaves no `dst`."""
+    info = probe(src)
+    video = next((v for v in info.get("streams") or [] if v.get("codec_type") == "video"), None)
+    if not video:
+        raise RuntimeError("no picture to grain")
+    w, h = int(video["width"]), int(video["height"])
+    cap = grain_cap(info, max_mb)
+    try:
+        r = run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0",
+                 "-map", "0:a?", "-vf", grain_filter(grain, w, h), "-c:v", "libx264", "-crf", "18", "-maxrate",
+                 str(cap), "-bufsize", str(2 * cap), "-pix_fmt", "yuv420p", "-colorspace", "bt709",
+                 "-color_primaries", "bt709", "-color_trc", "bt709", "-c:a", "copy", "-movflags", "+faststart",
+                 str(dst)], timeout)
+    except subprocess.TimeoutExpired:
+        Path(dst).unlink(missing_ok=True)
+        raise RuntimeError(f"grain ran over {timeout:.0f} s") from None
+    if r.returncode != 0 or not Path(dst).is_file() or Path(dst).stat().st_size == 0:
+        Path(dst).unlink(missing_ok=True)
+        raise RuntimeError(f"grain failed: {tail(r.stderr or '', 5, 300)}")
+
+
 def add_chapters(path: Path, meta: str, timeout: float = 600) -> None:
     """Chapter marks (the text of an ffmpeg metadata file) into an mp4, in place; the streams are copied."""
     path = Path(path)

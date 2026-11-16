@@ -186,26 +186,35 @@ type SetProps = {cam?: Key[], grain?, grainFps?, light?, vignette?, drift?, pale
 // kit/stage/set-street.tsx
 <Street road = true, awning?: [string, string], ...StageProps (without ground), ...SetProps>
 // kit/stage/optics.ts
+castMatrix(light: Light, ground) → { m: [n, n, n, n, n, n]; len: number }
 coverFit(imgW, imgH, w, h, pad = 0.06, focus = [0.5, 0.5]) → Fit
 distanceAt(f, speed: (frame: number) => number) → number
 dofBlur(depth, focus = 1, aperture = 10, max = 40) → number
+filmFrame(t: FilmTiming, f, fps, duration?: number | null) → { state: "before" | "play" | "after"; frame: number | null }
 handheld(f, amp = 6, seed = "hand", fps = 30) → [n, n, n]
 joinAt(f, at, len) → number
 lookAt(pt: Pt, depth, w, h) → { x: number; y: number }
 onScreen(cam: Cam, depth, w, h, pt: Pt) → { x: number; y: number; s: number }
 pointAt(line: Pt[], t) → { x: number; y: number; ang: number }
+punchAt(punches: Punch[], f) → Punch | null
+punchView(p: Punch, fit: Fit, w, h) → View
 shadeRamp(from: Pt, to: Pt, max = 0.6) → (x: number, y: number) => number
 travelAt(line: Pt[], f, at, dur, o = {}) → TravelState
 type Ease = "linear" | "in" | "out" | "inOut" | ((t: number) => number)
+type FilmTiming = {at?, rate?, from?, len?, loop?: boolean, hold?: boolean | "before" | "after"}
 type Fit = {s, x, y, w, h, at: (pt: Pt) => Pt}
+type Light = {from?: number | "left" | "right" | "upper-left" | "upper-right" | "back" | "front" | "lower-left" | "lower-right", height?}
+type Punch = {at, end?, to: Pt, z?, focus?, aperture?}
 type TravelOptions = {sizes?: [n, n], ease?: Ease}
 type TravelState = {x, y, ang, t, s, speed}
+type View = {z, cx, cy}
 // kit/stage/photo.tsx
 <Hold src: Asset>
-<Photo src: Asset, imgW?, imgH?, x, y, w?, s = 1, sy = 1, anchor = [0.5, 1], r = 0, flip = false, depth?, blur = 0, smear = 0, smearAng = 0, shade = 0, tint = "#FFFFFF", tintA = 0, haze = 0, hazeColor?: string, shadow = 0, shadowW = 0.8, lift = 0, opacity = 1, to?: Asset, p = 0, wipe?: Wipe, soft = 0.3, wipeAt = [0.5, 0.5], children?: ReactNode>
+<Photo src: Asset, imgW?, imgH?, x, y, w?, s = 1, sy = 1, anchor = [0.5, 1], r = 0, flip = false, depth?, blur = 0, smear = 0, smearAng = 0, shade = 0, tint = "#FFFFFF", tintA = 0, haze = 0, hazeColor?: string, shadow = 0, cast?, shadowW = 1, light?: Light, ground?, lift = 0, opacity = 1, to?: Asset, p = 0, wipe?: Wipe, soft = 0.3, wipeAt = [0.5, 0.5], children?: ReactNode>
 pictureSize(src: Asset, w?, h?, who = "Photo") → [n, n]
 <SvgImage href: string, ...element attributes>
-<Travel line: Pt[], at, dur, smearK = 0.7, maxSmear = 60, shadeAt?: ((x: number, y: number) => number), turn = false, ...PhotoProps (without x, y, smear, smearAng, shade), ...TravelOptions>
+<Travel line: Pt[], at, dur, smearK = 0.7, maxSmear = 60, shadeAt?: ((x: number, y: number) => number), turn = false, groundAt?: ((x: number, y: number) => number), ...PhotoProps (without x, y, smear, smearAng, shade), ...TravelOptions>
+useLight() → Light | null
 usePicture() → Picture
 type Picture = {at: (pt: Pt) => Pt, s, r, blur?, smear?, smearAng?}
 type Wipe = "left" | "right" | "up" | "down" | "out"
@@ -219,9 +228,14 @@ type Wipe = "left" | "right" | "up" | "down" | "out"
 <Surface quad: Pt[], at?: ((pt: Pt) => Pt), w?, h?, ink = "print", rough?, blur = 0.4, color?: string, pad = 0.08, opacity = 1, children?: ReactNode>
 // kit/stage/plate.tsx
 <Occluder src: Asset, imgW?, imgH?, poly: Pt[], pad = 0.06, focus?: Pt, feather = 3, filter?: string>
-<Plate src: Asset, imgW?, imgH?, depth = 0.9, pad = 0.06, focus?: Pt, drift = 0, sway?: Sway, fronts = [], feather = 3, blur = 0, photo?: string, to?: Asset, p = 0, wipe?: Wipe, soft = 0.3, wipeAt = [0.5, 0.5], children?: ReactNode>
+<Plate src: Asset, imgW?, imgH?, depth = 0.9, pad = 0.06, focus?: Pt, drift = 0, sway?: Sway, fronts = [], feather = 3, blur = 0, photo?: string, to?: Asset, p = 0, wipe?: Wipe, soft = 0.3, wipeAt = [0.5, 0.5], film?: Film, light?: Light, punch?: Punch | Punch[], children?: ReactNode>
 usePlate() → Fit
 type Sway = {y, amp?, hz?, feather?, gust?, gustAmp?}
+// kit/stage/footage.tsx
+<FilmFrame src: Asset, frame, fit = "fill", style?: CSSProperties>
+<Footage still?: Asset, imgW?, imgH?, x, y, w?, h?, s = 1, fit = "fill", anchor = [0.5, 0.5], r = 0, flip = false, depth?, blur = 0, shade = 0, tint = "#FFFFFF", tintA = 0, haze = 0, hazeColor?: string, opacity = 1, ...FilmTiming, ...Film>
+isFilm(src: Asset) → boolean
+type Film = {at?, rate?, from?, len?, loop?: boolean, hold?: boolean | "before" | "after", src: Asset}
 // kit/stage/air.tsx
 <Haze y0, y1, tail = 0.35, color = "#E6EEF3", amount = 0.35, drift = 6>
 <Motes box: [n, n, n, n], n = 40, size = 4, wind = [10, -4], color = "#FFF6DF", opacity = 0.7, light?: [n, n]>
@@ -621,10 +635,9 @@ Every picture on screen is a generated photo-real image, moved by code as separa
 again in front so things pass behind them. Light, air, matter (steam, glow, liquid), lens and motion are added in
 code, things change state in place, and text is printed on the objects themselves. `examples/layers/` is a film.
 
-Use it when the subject is a real place or a real object; use the drawn sets when the idea is abstract (money, a
-rule, a count) or the picture would need people's faces. The standard is detail and plausibility, not photo-realism
-for its own sake: every thing where it belongs, sizes, light and angles that agree between layers, and motion that
-follows how the thing behaves (a balloon drifts and bobs, a flame flares and settles, a door swings on its hinge).
+Use it for a real place or object; use the drawn sets for an abstract idea or a picture that would need faces.
+The standard is detail and plausibility: every thing where it belongs, sizes, light and angles that agree between
+layers, and motion that follows how the thing behaves (a flame flares and settles, a door swings on its hinge).
 
 **Plan the pictures of a scene** before drawing any:
 
@@ -636,22 +649,21 @@ follows how the thing behaves (a balloon drifts and bobs, a flame flares and set
 3. Write down what passes behind what: each answer is a front polygon you will trace on the plate.
 4. A second place (inside the object, a close-up) is its own plate; joins carry the camera into it.
 
-Three to five pictures carry 10 to 15 s. Keep plates near 1024 px wide and cut-outs at the size they are seen;
-WebP keeps both small (`.webp` with alpha works as an image asset).
+Three to five pictures carry 10 to 15 s; plates near 1024 px wide (wider if you will `punch` in), cut-outs at
+the size they are seen, WebP for both. A plate is an ordinary `draw`; a cut-out is `draw(..., cutout=true)` (an
+isolated, trimmed object with alpha): look at it over a coloured ground for a halo, a drawn shadow or a cropped edge.
 
-**Ask for them**: a plate is an ordinary `draw`. A cut-out is `draw(project, id, prompt, cutout=true)`, which asks
-for an isolated object with a transparent background and trims it. Look at every cut-out over a coloured ground
-before using it: a halo, a cast shadow or a cropped edge shows at once.
+**Trace** on an `AssetGrid` preview of the plate (20 columns): fronts along the edge that hides things, closed round
+the frame's bottom (10 to 25 points), travel lines (2 to 4 points), effect origins; in picture px, which
+`usePlate().at(pt)` (or `coverFit(...).at(pt)`) turns into stage px.
 
-**Trace** on an `AssetGrid` preview of the plate (`{"asset": "<id>"}`, 20 columns for detail): the front polygon
-along the edge that hides things, closed down round the frame's bottom (10 to 25 points); a travel line along the
-ground or the path (2 to 4 points); the points effects start from (a burner, a vent, the sun). All in the picture's
-own pixels; inside a `Plate`, `usePlate().at(pt)` (or `coverFit(...).at(pt)` outside) turns them into stage px.
-
-- `Plate`: the plate on its own parallax layer, covering the frame with `pad` to spare. `drift` is a slow breathing move in px; `sway` (type `Sway`) `{y, amp = 1.2, hz = 0.35, feather = 60, gust?, gustAmp = 3}` bends the strip below picture row `y` (grass, water) with an optional gust at a frame. Children stand in the plate (stage px of its layer); `fronts` (polygons in picture px, type `Pt[][]`) are drawn again over them with a soft edge
+- `Plate`: the plate on its own parallax layer, covering the frame with `pad` to spare. `drift` is a slow breathing move in px; `sway` (type `Sway`) `{y, amp = 1.2, hz = 0.35, feather = 60, gust?, gustAmp = 3}` bends the strip below picture row `y` (grass, water) with an optional gust at a frame. Children stand in the plate (stage px of its layer); `fronts` (polygons in picture px, type `Pt[][]`) are drawn again over them with a soft edge. `light` (type `Light`, `{from: "upper-left", height: 0.5}`; `from` is also `left right upper-right back front lower-left lower-right` or degrees) is where the light comes from: the photos inside cast their shadows away from it
+- **A moving plate**: `film` (type `Film`) is a clip baked from the plate (a tween between key pictures of the shot, a camera travelling through it), played over the still from frame `film.at` (a frame on the Plate's own clock: its `f` if given, else the clip's frame), with `from` and `len` in seconds, `rate` a speed factor, `loop` (needs `len` or an asset ref, whose length is known) and `hold`. Before it the still shows (clip frame `from` when `from` > 0, as `Footage` does), after it the last frame holds (`hold: "before"` returns to the still: seamless when the clip ends where it began). A video `src` (its asset ref gives the size, else `imgW`, `imgH`) plays from frame 0, and wherever it is not running its first frame stands in for the still. Fronts, sway, the children and their shadows keep working; fronts are cut from the moving picture, but each copy (the plate, the sway strip, every front) decodes the clip again, so keep fronts few on a filmed plate. A `punch` of 1.7x on a 1080 px plate is soft: draw the plate wider if you will punch in. `<Plate src={a.stall} film={{ src: a.lift, at: T("lifts") }} fronts={[COUNTER]} light={{ from: "upper-left" }}>`
+- **Punch**: `punch` (type `Punch`, one or a list) is a second camera on the same plate: from frame `at` (until `end`) a hard cut to `to` (picture px) `z` times closer (1.3 to 1.8), with its own lens `focus` and `aperture`; the crop stays inside the picture and everything in the plate follows. Cut in and out on words: `punch={[{ at: T("crack"), end: T("inside"), to: YAM, z: 1.6, focus: 0.9 }]}`. `punchAt`, `punchView` give the cue in force and its view
+- `Footage`: a video clip standing in the world like a `Photo` (`x`, `y`, `w` or `h`, `anchor`, `r`, `flip`, `fit`, lens blur and grade, `shade`, `tint`, `haze`), timed by `at` (a frame), `rate` (a factor), `from`, `len` (seconds), `loop` (needs `len` or an asset ref) and `hold` (both ends by default); `still` is the picture it was made from, shown while the clip is not running and not held (before the start unless `from` > 0, and after the end with `hold: "before"` or `false`; the default holds the last frame), and gives the size (else `imgW`, `imgH`). Frame-exact at any concurrency and free off screen or unseen; a video has no alpha, so a clip is a whole shot, a window or a screen, never a cut-out. `<Footage src={a.pour} still={a.cup} at={T("pour")} x={540} y={900} w={600} />`. `filmFrame` gives the clip frame at a frame; `FilmFrame` draws one; `isFilm` tells a video ref
 - `Occluder`: one front placed by hand, in a `Layer` of the plate's depth with the plate's `pad` and `focus`
-- `Photo`: a picture standing with its `anchor` (fractions of the picture) on (x, y). `depth` gives it its own parallax layer; inside a `Layer` or `Plate` it takes theirs. Depth of field comes from the enclosing `Lens`; `smear` is motion blur in px along `smearAng`; `shade` darkens, `tint` at `tintA` multiplies in the plate's light, `haze` mixes toward the air; `shadow` is a soft contact shadow where it stands; `sy` stretches it from the anchor
-- `Travel`: a photo moving along `line` (stage px) from frame `at` for `dur`: perspective scale `sizes` [start, end], a smear that grows with its speed (one blur along the motion, never ghost copies), its shadow along with it, `shadeAt(x, y)` darkening it where it is, `turn` to follow the line's direction
+- `Photo`: a picture standing with its `anchor` (fractions of the picture) on (x, y). `depth` gives it its own parallax layer; inside a `Layer` or `Plate` it takes theirs. Depth of field comes from the enclosing `Lens`; `smear` is motion blur in px along `smearAng`; `shade` darkens, `tint` at `tintA` multiplies in the plate's light, `haze` mixes toward the air; `sy` stretches it from the anchor. `shadow` 0..1 grounds it from its own alpha: a dark contact patch under its lowest pixels and, with a `light` (its own or the Plate's), a cast shadow laid away from the light that softens and fades with distance (`cast` its strength, `shadowW` the patch width; `ground` is the stage y of the floor under a thing in the air, or `lift` its height off the floor as a fraction of its drawn height: the shadow drops by that much, spreads and fades). Both are built in stage space from the measured alpha, so rotation, `flip`, `sy` and empty rows at the bottom of a cut-out are honoured, the shadow fades with `opacity`, and during a change (`to`, `p`) the two silhouettes' shadows cross-fade with the pictures. `castMatrix` is the geometry; `useLight` the Plate's light
+- `Travel`: a photo moving along `line` (stage px) from frame `at` for `dur`: perspective scale `sizes` [start, end], a smear that grows with its speed (one blur along the motion, never ghost copies), its shadow along with it (`groundAt(x, y)` keeps it on the floor during a hop), `shadeAt(x, y)` darkening it where it is, `turn` to follow the line's direction
 - `travelAt`, `pointAt`: the state a `Travel` draws; a point and direction at a fraction of a line
 - `shadeRamp`: a `shadeAt` function: 0 at `from`, `max` at `to` and beyond (into a doorway's shade)
 - `pictureSize`, `Hold`, `SvgImage`: a picture's size from its ref; a hidden `<Img>` that holds the render until a picture has loaded; an SVG `<image>` that holds it until it has decoded (key it by `href`)
@@ -730,19 +742,59 @@ moves between them with a `push` `Join` into the envelope and a `whip` back out.
   `Droplet` or `Pour`, dust as `Motes`, words on things with `Surface`. `Wisps`, `Drips` and `Sparks` are for the
   drawn sets.
 - **A sticker sliding**: a cut-out moving at constant size with no shadow, no blur and the wrong light. Give it a
-  `shadow` where it stands, `tint` from the plate, `shade` where it passes into shadow, perspective `sizes` and the
+  `shadow` and the plate a `light`, `tint` from the plate, `shade` where it passes into shadow, perspective `sizes` and the
   `Travel` smear; let it pass behind a front.
 - **Hard cuts** between places: use a `Join` (push into the thing the next scene is inside, whip with the
   camera's direction, match a shape).
 - **Nothing deforming**: something inside a picture should give: a flame that flares (`sy`), fabric that swells, a
   pane that bows (`Warp`), a shake on impact (`Lens` `kick`).
-- **A still plate with a push**: the plate needs life of its own (`drift`, `sway`, `Haze` wisps) and something must
-  happen in the first second: start the camera already moving and the subject already in frame.
+- **A still plate with a push**: the plate needs life of its own (a `film`, `drift`, `sway`, `Haze` wisps) and
+  something must happen in the first second; one place gives several shots with `punch`.
 
-**Cost.** Plates, fronts and cut-outs are images under CSS transforms, cheap to draw. An effect costs a second
-draw of what it wraps (`Refract`, `Warp`, a `sway` strip) or a filter over its area (`Haze` wisps, `Rays`, `Vapor`,
-the `Lens` grade and fringe, a lit or blurred `Photo`). Every effect is free when idle: at strength, amount, opacity
-or `n` 0, an identity `Warp`, a `sway` of `amp` 0, a neutral `Photo`, `p` 0 on a state change and a `Join` outside its
-frames draw nothing extra; a `Lens` adds no fringe, depth blur or grain at 0. So give an effect strength only around
-its word, wrap the smallest subtree that must bend, and keep one or two active at a time. The example renders 12.2 s
-at 1080 x 1920 in about a minute; `Rays` and the lens grade each cost 4 to 5 s of that.
+**Cost.** Plates, fronts and cut-outs are images under CSS transforms, cheap. An effect costs a second draw of what
+it wraps (`Refract`, `Warp`, a `sway` strip, a front of a moving plate) or a filter over its area (`Haze`, `Rays`,
+`Vapor`, the `Lens` grade, a lit, blurred or shadowed `Photo`); each is free when idle (strength 0, `p` 0, a `Join`
+outside its frames, `Footage` off screen). Give an effect strength only around its word and keep one or two active.
+The example renders 12.2 s at 1080 x 1920 in about a minute; `Rays` and the lens grade cost 4 to 5 s each.
+
+### Shots that look filmed
+
+The other form: footage, not a staged scene. Each shot is one plate plus one clip baked from it, two or three
+seconds, hard cuts (cuts are right here: filmed footage cuts). The built-in preset `Broll` plays a list of shots on a
+full-canvas component clip; it eases each pan like a hand turning a phone, adds a hand-held wobble, keeps the frame on
+the plate (a pan asked past the edge stops there), and draws steam, snow or dust and small crossings live:
+
+```json
+{"type": "component", "name": "Broll", "start": 0, "end": 7.8, "box": "full", "props": {"hand": 8, "shots": [
+  {"plate_asset": "street", "film_asset": "street_mv", "at": 0, "pan": [520, 1100], "zoom": [1.03, 1.1]},
+  {"plate_asset": "pour", "film_asset": "pour_mv", "at": 2.6, "zoom": [1.05, 1.08]},
+  {"plate_asset": "yard", "film_asset": "yard_mv", "at": 5.2, "tilt": [1000, 900], "air": {"n": 90, "wind": [20, 150]},
+   "steam": [{"p": [1300, 620], "w": 30, "color": "#8A8D91", "amount": 0.7, "blend": "normal"}],
+   "movers": [{"asset": "bike", "line": [[200, 1500], [900, 1200]], "w": 140, "sizes": [1, 0.6]}]}]}}
+```
+
+- **Where things are**: every position and length in a shot (`pan`, `tilt`, steam `p`, `w`, `size`, `rise`, a mover's
+  `line` and `w`) is in the plate's own px. Read them off a preview of the preset `AssetGrid` on that plate
+  (`{"asset": "<plate id>"}`), not off a Broll still, where the camera is panned and zoomed.
+- **Plates**: open the prompt with "A single frame grabbed from an ordinary phone video (not a professional
+  photograph): ..." ("ordinary consumer drone video" from the air) and close it with "plain colours, compression
+  softness, slightly crooked, cluttered and unposed, no face, no letters". Documentary, cinematic or food-photography
+  wording comes back too perfect. Overcast flat light and a few ugly everyday things (a blue tarp, plastic buckets,
+  tangled wires) read as filmed; sunrise and golden light read as generated. Say "No smoke, no steam, no mist":
+  painted smoke stays frozen while the camera moves; add it live with `steam`. Live smoke must differ from what is
+  behind it: against a pale sky a grey darker than the sky (`"color": "#8A8D91", "blend": "normal"`), steam over
+  something dark the default pale `screen`; look at a still to see that it reads.
+- **Camera**: `parallax` bakes a travel through the plate's depth (`film_asset`). A 3:2 plate on a 9:16 canvas leaves
+  room to `pan`; a far scene needs a larger `dolly`. A slow push over one picture is the first thing a viewer spots.
+- **Things that move**: draw the first pose, then the others with `match_asset` on it and "Exactly the same
+  photograph from exactly the same camera position, framing and light; nothing changes except one thing: ...", each
+  one small step from its neighbour, three poses about 0.9 s apart, then `tween`. A change of look without a change of
+  place reads as a dissolve. When the tween ends the picture is still: cut there. Keep faces out; hands and backs are
+  fine. A shot without `film_asset` is a still plate that still pans and wobbles.
+- **Fire, boiling liquid, running water**: painted into a plate they are frozen, and a flame with the same shape in
+  three frames gives the shot away. Keep them out of the plate and add them live, or treat them as an action: three
+  pictures from the same position in which only the flame (or the bubbles) differs, tweened round (a, b, c, a) and
+  played with the shot's `"loop": true`.
+- **Subtitles**: large, plain, at the bottom of the safe area; no fixed title chip. Do not give every subtitle its own
+  shot: let a line run across a cut.
+- **Sound**: one `sound` bed per place and an effect on each action.

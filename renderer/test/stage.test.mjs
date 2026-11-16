@@ -1,4 +1,4 @@
-// Unit tests for the stage kit's pure functions (cues, step, win, torn, motion, camera stations, photo optics): bundles them
+// Unit tests for the stage kit's pure functions (cues, step, win, torn, motion, camera stations, photo optics, Broll's camera): bundles them
 // with esbuild and runs them in Node, no browser and no render. A few seconds.
 //   node test/stage.test.mjs
 import assert from "node:assert/strict";
@@ -20,11 +20,13 @@ fs.writeFileSync(entry, [
   `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/optics.ts").replace(/\\/g, "/"))};`,
   `export { lightMatrix } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/photo.tsx").replace(/\\/g, "/"))};`,
   `export { softEllipse, softRing } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/warp.tsx").replace(/\\/g, "/"))};`,
+  `export { handPan, keepInside } from ${JSON.stringify(path.join(ROOT, "src/presets/Broll.tsx").replace(/\\/g, "/"))};`,
 ].join("\n"));
 const bundle = path.join(OUT, "stage.mjs");
 await build({
   entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile: bundle, logLevel: "error",
   absWorkingDir: ROOT, nodePaths: [path.join(ROOT, "node_modules")],
+  alias: { "@reelsmith/kit": path.join(ROOT, "src/kit/index.ts") },
   loader: { ".css": "empty", ".woff": "empty", ".woff2": "empty", ".ttf": "empty", ".otf": "empty" },
   banner: { js: "import { createRequire as __cr } from 'module'; const require = __cr(import.meta.url);" },
 });
@@ -283,6 +285,119 @@ test("swayAngle is zero at rest, bounded by amp, and a gust decays", () => {
   assert.equal(K.swayAngle(40, 30, 0, 0.35, 50, 3), 0, "no gust before its frame");
   assert.ok(Math.abs(K.swayAngle(52, 30, 0, 0.35, 50, 3)) > 0.1);
   assert.ok(Math.abs(K.swayAngle(50 + 30 * 6, 30, 0, 0.35, 50, 3)) < 1e-3, "gone after a few seconds");
+});
+
+test("filmFrame holds, plays at its rate, ends on its last frame, loops and releases", () => {
+  assert.deepEqual(K.filmFrame({ at: 30 }, 10, 30, 2), { state: "before", frame: 0 });
+  assert.deepEqual(K.filmFrame({ at: 30 }, 45, 30, 2), { state: "play", frame: 15 });
+  assert.deepEqual(K.filmFrame({ at: 30 }, 89, 30, 2), { state: "play", frame: 59 });
+  assert.deepEqual(K.filmFrame({ at: 30 }, 200, 30, 2), { state: "after", frame: 59 });
+  assert.equal(K.filmFrame({ at: 30, hold: "before" }, 200, 30, 2).frame, null);
+  assert.equal(K.filmFrame({ at: 30, hold: false }, 0, 30, 2).frame, null);
+  assert.equal(K.filmFrame({ at: 0, rate: 2, from: 0.5 }, 10, 30, 2).frame, 35);
+  assert.equal(K.filmFrame({ at: 0, loop: true }, 65, 30, 2).frame, 5);
+  assert.equal(K.filmFrame({ at: 0, len: 1 }, 50, 30, 2).frame, 29);
+});
+
+test("punchAt picks the cue in force and punchView keeps the crop inside the picture", () => {
+  const cues = [{ at: 10, end: 20, to: [500, 500], z: 1.5 }, { at: 30, to: [0, 0], z: 2 }];
+  assert.equal(K.punchAt(cues, 5), null);
+  assert.equal(K.punchAt(cues, 12), cues[0]);
+  assert.equal(K.punchAt(cues, 25), null);
+  assert.equal(K.punchAt(cues, 99), cues[1]);
+  const fit = K.coverFit(1080, 1620, 1080, 1920, 0.02);
+  const v = K.punchView(cues[1], fit, 1080, 1920);
+  const [l, t] = [v.cx - 1080 / (2 * v.z), v.cy - 1920 / (2 * v.z)];
+  assert.ok(Math.abs(l - fit.x) < 1e-6 && Math.abs(t - fit.y) < 1e-6, "a corner point is clamped to the picture's corner");
+  assert.deepEqual(K.viewed(v, 1080, 1920, [v.cx, v.cy]), [540, 960]);
+});
+
+test("castMatrix keeps the foot on the ground and lays the top away from the light", () => {
+  const { m, len } = K.castMatrix({ from: "upper-left", height: 0.5 }, 800);
+  const ap = ([x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  const foot = ap([300, 800]), top = ap([300, 600]);
+  assert.ok(Math.abs(foot[0] - 300) < 1e-9 && Math.abs(foot[1] - 800) < 1e-9);
+  assert.ok(top[0] > 300 && top[1] > 800, "falls right and toward the camera");
+  assert.ok(len > 0.5 && len < 1.5);
+  const front = K.castMatrix({ from: "front" }, 800).m;
+  assert.ok(front[3] * 600 + front[5] < 800, "a light behind the camera puts the shadow behind the thing");
+  assert.ok(K.castMatrix({ from: "left", height: 0.9 }, 0).len < K.castMatrix({ from: "left", height: 0.2 }, 0).len);
+});
+
+test("filmFrame refuses loop when the clip's length is unknown, and loops with len", () => {
+  assert.throws(() => K.filmFrame({ at: 0, loop: true }, 100, 24, null), /pass `len`.*asset ref/);
+  assert.equal(K.filmFrame({ at: 0, loop: true, len: 1 }, 30, 24, null).frame, 6);
+  assert.equal(K.filmFrame({ at: 0, loop: true }, 60, 24, 2).frame, 12);
+});
+
+test("showsFilm: before the start the still shows unless the clip starts past its first frame", () => {
+  const show = (t, f) => K.showsFilm(t, K.filmFrame(t, f, 24, 2));
+  assert.equal(show({ at: 10 }, 5), false, "frame 0 is the still");
+  assert.equal(show({ at: 10, from: 0.5 }, 5), true, "frame `from` holds before, as Footage does");
+  assert.equal(show({ at: 10 }, 12), true);
+  assert.equal(show({ at: 0, hold: "before" }, 200), false, "past the end with hold before");
+  assert.equal(show({ at: 0 }, 200), true, "the last frame holds by default");
+});
+
+test("silhouette finds the real lowest pixels under rotation, flip, squash and empty rows", () => {
+  const box = [[0, 0], [1, 0], [0, 1], [1, 1]];
+  const up = K.silhouette(box, 500, 800, -200, -100, 400, 100);
+  assert.ok(Math.abs(up.foot - 800) < 1e-9 && Math.abs(up.top - 700) < 1e-9 && Math.abs(up.cx - 500) < 1e-9);
+  // an oval at r -8, anchor 0.92: its foot is the ellipse's, not the rotated box's lower corner
+  const oval = Array.from({ length: 360 }, (_, i) => [0.5 + 0.5 * Math.cos((i * Math.PI) / 180), 0.5 + 0.5 * Math.sin((i * Math.PI) / 180)]);
+  const ox = -200, oy = -0.92 * 300;
+  const rot = K.silhouette(oval, 500, 800, ox, oy, 400, 300, -8), corner = K.silhouette(box, 500, 800, ox, oy, 400, 300, -8);
+  const s8 = Math.sin((8 * Math.PI) / 180), c8 = Math.cos((8 * Math.PI) / 180);
+  const want = 800 - 126 * c8 + Math.sqrt(200 * 200 * s8 * s8 + 150 * 150 * c8 * c8);
+  assert.ok(Math.abs(rot.foot - want) < 1, `oval foot ${rot.foot} want ${want}`);
+  assert.ok(rot.foot < corner.foot - 20, `${rot.foot} vs box ${corner.foot}`);
+  // a quarter turn: the picture's right edge becomes its bottom
+  const q = K.silhouette([[0.9, 0.2], [0.9, 0.8], [0.1, 0.5]], 0, 0, -50, -50, 100, 100, 90);
+  assert.ok(Math.abs(q.foot - 40) < 1e-9 && Math.abs(q.top + 40) < 1e-9, `${q.foot} ${q.top}`);
+  // flip mirrors x around the anchor; empty bottom rows do not count
+  const f = K.silhouette([[0.1, 0], [0.3, 0.6]], 100, 0, -50, -100, 100, 100, 0, true);
+  assert.ok(Math.abs(f.foot + 40) < 1e-9 && Math.abs(f.cx - 120) < 1e-9, `${f.foot} ${f.cx}`);
+  assert.ok(Math.abs(K.silhouette(box, 0, 0, -50, -200, 100, 200).foot) < 1e-9, "sy is in dh");
+});
+
+test("Broll's pan eases in and out, a little unevenly, and lands exactly", () => {
+  for (const seed of [1, 2, 7]) {
+    assert.equal(K.handPan(0, seed), 0);
+    assert.equal(K.handPan(1, seed), 1);
+    const steps = [];
+    let prev = 0;
+    for (let i = 1; i <= 200; i++) {
+      const v = K.handPan(i / 200, seed);
+      assert.ok(v >= prev, `monotone at ${i / 200}`);
+      steps.push(v - prev);
+      prev = v;
+    }
+    const mid = steps.slice(60, 140);
+    assert.ok(steps[0] < 0.004 && steps[199] < 0.004, `slow at the ends: ${steps[0]} ${steps[199]}`);
+    assert.ok(Math.max(...mid) / Math.min(...mid) > 1.1, "uneven in the middle");
+  }
+  assert.notEqual(K.handPan(0.5, 1), K.handPan(0.5, 2));
+});
+
+test("Broll's camera never shows past the plate's edge", () => {
+  const inside = (fit, c, w, h, ax, ay) => c.x - w / (2 * c.z) - ax >= fit.x - 1e-9 && c.x + w / (2 * c.z) + ax <= fit.x + fit.w + 1e-9
+    && c.y - h / (2 * c.z) - ay >= fit.y - 1e-9 && c.y + h / (2 * c.z) + ay <= fit.y + fit.h + 1e-9;
+  const W = 1080, H = 1920;
+  const wide = K.coverFit(1536, 1024, W, H, 0);
+  const left = K.keepInside(-500, H / 2, 1.04, wide, W, H, 9, 8);
+  assert.ok(inside(wide, left, W, H, 9, 8) && left.z === 1.04, JSON.stringify(left));
+  assert.ok(Math.abs(left.x - (wide.x + W / 2.08 + 9)) < 1e-9, "a pan past the edge stops at the edge");
+  assert.equal(K.keepInside(W / 2 + 100, H / 2, 1.04, wide, W, H, 9, 8).x, W / 2 + 100);
+  // a plate of exactly the canvas aspect at zoom 1: the zoom rises just enough for the wobble
+  const same = K.coverFit(1080, 1920, W, H, 0);
+  const tight = K.keepInside(W / 2, H / 2, 1, same, W, H, 9, 8);
+  assert.ok(inside(same, tight, W, H, 9, 8) && tight.z > 1 && tight.z < 1.02, JSON.stringify(tight));
+  for (const [iw, ih, w, h] of [[1024, 1024, 1920, 1080], [1920, 1080, 1080, 1080], [1080, 1920, 1920, 1080]]) {
+    const fit = K.coverFit(iw, ih, w, h, 0);
+    for (const [x, y] of [[-1e4, -1e4], [1e4, 1e4], [w / 2, h / 2]]) {
+      assert.ok(inside(fit, K.keepInside(x, y, 1, fit, w, h, 12, 10), w, h, 12, 10), `${iw}x${ih} on ${w}x${h}`);
+    }
+  }
 });
 
 fs.rmSync(OUT, { recursive: true, force: true });

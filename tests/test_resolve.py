@@ -704,3 +704,20 @@ def test_describe_at_uses_the_safe_size_for_safe_boxes(demo):
     text = R.describe(demo, "line:5")
     assert "close image" in text and "pan_x 25.8" in text                # 0.034 x 760, not x 1080
     assert rclip(R.resolve(demo), "close")["keyframes"]["pan_x"][0]["v"] == 25.8
+
+
+def test_video_size_follows_display_rotation(monkeypatch, tmp_path):
+    from reelsmith import media
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    stream = {"codec_type": "video", "width": 160, "height": 90}
+    cases = [({}, (160, 90)), ({"side_data_list": [{"rotation": 90}]}, (90, 160)),
+             ({"side_data_list": [{"rotation": -90}]}, (90, 160)), ({"side_data_list": [{"rotation": 180}]}, (160, 90)),
+             ({"tags": {"rotate": "270"}}, (90, 160))]
+    for extra, want in cases:
+        monkeypatch.setattr(media, "probe", lambda path, extra=extra: {"streams": [{**stream, **extra}]})
+        R._VIDEO_SIZES.clear()
+        assert R.video_size(clip) == want, extra
+    monkeypatch.setattr(media, "probe", lambda path: (_ for _ in ()).throw(RuntimeError("no ffprobe")))
+    R._VIDEO_SIZES.clear()
+    assert R.video_size(clip) is None

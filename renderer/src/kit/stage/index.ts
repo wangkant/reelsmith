@@ -27,9 +27,12 @@ export { Canvas, Gloss, Shadow, Solid } from "./material";
 export type { Box, GlossProps, ShadowProps, SolidProps } from "./material";
 export { Clouds, Leaves, PendantLamp, Desk, Outdoors, Room, Street, useSet } from "./sets";
 export type { DeskProps, OutdoorsProps, RoomProps, SetInfo, SetProps, StreetProps } from "./sets";
-export { coverFit, distanceAt, dofBlur, handheld, hazeBand, joinAt, lookAt, onScreen, pointAt, shadeRamp, swayAngle, travelAt } from "./optics";
-export type { Ease, Fit, TravelOptions, TravelState } from "./optics";
-export { Hold, lightMatrix, Photo, PictureContext, pictureSize, SvgImage, Travel, usePicture, wipeBand } from "./photo";
+export {
+  castMatrix, coverFit, distanceAt, dofBlur, filmFrame, handheld, hazeBand, joinAt, lookAt, onScreen, pointAt, punchAt, punchView, shadeRamp, swayAngle,
+  travelAt,
+} from "./optics";
+export type { Ease, FilmTiming, Fit, Light, Punch, TravelOptions, TravelState, View } from "./optics";
+export { Hold, lightMatrix, Photo, PictureContext, pictureSize, SvgImage, Travel, useLight, usePicture, wipeBand } from "./photo";
 export type { PhotoProps, Picture, TravelProps, Wipe } from "./photo";
 export { Droplet, Embers, Glow, Pour, Vapor } from "./matter";
 export type { DropletProps, EmbersProps, GlowProps, PourProps, VaporProps } from "./matter";
@@ -37,6 +40,8 @@ export { quadMatrix, Surface } from "./surface";
 export type { SurfaceProps } from "./surface";
 export { Occluder, Plate, usePlate } from "./plate";
 export type { OccluderProps, PlateProps, Sway } from "./plate";
+export { FilmFrame, Footage, isFilm } from "./footage";
+export type { Film, FootageProps } from "./footage";
 export { Haze, Motes, Rays } from "./air";
 export type { HazeProps, MotesProps, RaysProps } from "./air";
 export { Refract, softEllipse, softRing, Warp } from "./warp";

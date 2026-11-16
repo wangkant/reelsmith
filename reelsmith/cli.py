@@ -106,6 +106,24 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("motion")
     p.add_argument("--seconds", type=float, default=4)
     p.add_argument("--camera", default="", choices=["", "push", "pull", "pan_left", "pan_right", "rise", "still"])
+    p = proj(cmd("tween", tools.tween))
+    p.add_argument("id")
+    p.add_argument("keys", nargs="+", metavar="frame@seconds", help="key pictures in order: pose_a@0 pose_b@1.2")
+    p.add_argument("--fps", type=float, default=0)
+    p.add_argument("--hold-first", type=float, default=0, dest="hold_first")
+    p.add_argument("--hold-last", type=float, default=0, dest="hold_last")
+    p = proj(cmd("parallax", tools.parallax))
+    p.add_argument("id")
+    p.add_argument("asset")
+    p.add_argument("seconds", type=float)
+    p.add_argument("move", help='JSON, e.g. {"dolly": 0.08, "truck": 0.02, "ease": "in-out"}')
+    p.add_argument("--fps", type=float, default=0)
+    p = proj(cmd("sound", tools.sound))
+    p.add_argument("id")
+    p.add_argument("kind", help="a bed (room, street, wind, rain, kitchen, fire, water, crowd, night) or a one-shot")
+    p.add_argument("seconds", type=float)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--gain-db", type=float, default=0, dest="gain_db")
     p = proj(cmd("import", tools.import_asset, "import_asset"))
     p.add_argument("id")
     p.add_argument("source")
@@ -206,6 +224,20 @@ def _call(args) -> tools.ToolResult:
         return tools.draw_many(args.project, _text_arg(args.pictures))
     if c == "animate":
         return tools.animate(args.project, args.id, args.image_asset, args.motion, args.seconds, args.camera)
+    if c == "tween":
+        keys = [k.rpartition("@") for k in args.keys]
+        if any(not sep for _, sep, _ in keys):
+            return tools.ToolResult("each key is frame@seconds, e.g. pose_a@0 pose_b@1.2", False)
+        try:
+            times = [float(t) for _, _, t in keys]
+        except ValueError:
+            return tools.ToolResult("each key's seconds must be a number, e.g. pose_b@1.2", False)
+        return tools.tween(args.project, args.id, [f for f, _, _ in keys], times, args.fps, args.hold_first,
+                           args.hold_last)
+    if c == "parallax":
+        return tools.parallax(args.project, args.id, args.asset, args.seconds, args.move, args.fps)
+    if c == "sound":
+        return tools.sound(args.project, args.id, args.kind, args.seconds, args.seed, args.gain_db)
     if c in ("import", "import_asset"):
         return tools.import_asset(args.project, args.id, _source_arg(args.source), args.kind)
     if c == "note":

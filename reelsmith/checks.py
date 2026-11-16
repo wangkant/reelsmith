@@ -39,6 +39,7 @@ EVIDENCE_MAX_ZOOM = 2.0        # EvidenceCrop.tsx MAX_ZOOM
 INK_PER_EM = 0.85              # a CJK glyph's ink is about this much of its font size
 SILENT_LUFS = -45.0
 LUFS_TOLERANCE = 3.0
+PEAK_ALLOWANCE_DB = 1.0        # true peak past the profile's ceiling by more than this is noted
 MAX_LIST = 25
 HOLE_S = 0.5                   # an empty stretch this long is called out
 BLACK_MIN_S = 0.2              # media.BLACK_FILTER's d: shorter black is not counted
@@ -1089,9 +1090,10 @@ def _layout_issue(kind: str, who: str, e: dict, profile: Profile) -> Issue:
 
 
 # ------------------------------------------------------------------ the delivered film
-def check_film(path: str | Path, profile: Profile, resolved: dict | None = None) -> dict:
+def check_film(path: str | Path, profile: Profile, resolved: dict | None = None,
+               motion_from: str | Path | None = None) -> dict:
     """Delivery checks on a rendered film: frame, fps, codecs, length, size, loudness, black and frozen stretches
-    (with `resolved`, the clips on screen in them)."""
+    (with `resolved`, the clips on screen in them), those two on `motion_from` when given: the film before grain."""
     path = Path(path)
     out: dict = {"ok": False, "path": str(path), "problems": [], "notes": []}
     problems = out["problems"]
@@ -1129,7 +1131,7 @@ def check_film(path: str | Path, profile: Profile, resolved: dict | None = None)
         problems.append(f"{out['size_mb']:.0f} MB; the upload limit is {profile.max_mb:g} MB (a shorter film, or less "
                         "noise and grain in the picture)")
     if video and length > 0:
-        _check_motion(path, length, profile, out, resolved)
+        _check_motion(Path(motion_from or path), length, profile, out, resolved)
     out["ok"] = not problems
     out["why"] = "; ".join(problems)
     return out
@@ -1163,6 +1165,10 @@ def _check_audio(path: Path, audio: dict, profile: Profile, out: dict) -> None:
             out["notes"].append("the audio is silent (this profile allows a silent film)")
     elif abs(lufs - profile.lufs) > LUFS_TOLERANCE:
         out["notes"].append(f"loudness {lufs:.1f} LUFS; mastered for {profile.lufs:g}")
+    if peak is not None and peak > profile.peak_db + PEAK_ALLOWANCE_DB:
+        out["notes"].append(f"true peak {peak:+.1f} dBTP, over the {profile.peak_db:g} dBTP ceiling: likely a mix "
+                            "with no voice (a bed and one-shots) raised a long way by mastering; it may clip on "
+                            "playback")
 
 
 def _spans_text(spans: list, resolved: dict | None, least: float = 0.0) -> str:

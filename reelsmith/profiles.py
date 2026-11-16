@@ -69,6 +69,7 @@ class Profile:
     require_audio: bool = True          # False: a silent film is delivered as it is
     ui: bool = True                     # outside the safe area is the platform's UI (False: a title-safe margin)
     cover: tuple[Cover, ...] = ()       # the covers the playbook asks for; generic canvases have none
+    grain: float = 0.0                  # moving film grain over the finished picture, 0 (off) to 1
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -167,7 +168,7 @@ PLAYBOOKS = {"youtube": "youtube", "shorts": "youtube", "douyin": "douyin", "dou
              "xiaohongshu": "xiaohongshu", "channels": "channels"}
 DEFAULT_PROFILE = "landscape"
 FIELDS = ("width", "height", "fps", "safe", "captions", "min_s", "max_s", "target_s", "max_mb", "lufs", "peak_db",
-          "max_still_s", "max_black_ratio", "require_audio", "ui", "cover")
+          "max_still_s", "max_black_ratio", "require_audio", "ui", "cover", "grain")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _CANVAS = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*(?:@\s*(\d+(?:\.\d+)?(?:/\d+)?)\s*)?$")
 NTSC = Fraction(1000, 1001)
@@ -313,6 +314,7 @@ def make_profile(spec, custom: dict | None = None, name: str = "custom", where: 
                    target_s=_target(spec, base.target_s, where), lufs=_number(spec, "lufs", base.lufs, -70, -1, where),
                    peak_db=_number(spec, "peak_db", base.peak_db, -12, 0, where),
                    max_black_ratio=_number(spec, "max_black_ratio", base.max_black_ratio, 0, 1, where),
+                   grain=_number(spec, "grain", base.grain, 0, 1, where),
                    require_audio=_flag(spec, "require_audio", base.require_audio, where),
                    ui=_flag(spec, "ui", base.ui, where), cover=cover, **values)
 

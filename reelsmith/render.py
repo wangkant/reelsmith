@@ -957,16 +957,38 @@ def render(project: str | Path, progress=_quiet) -> dict:
         return finish("master", str(exc))
     finally:
         raw.unlink(missing_ok=True)
-    chapters = sidecar.chapters(root, fps)
-    if chapters:
-        try:
-            media.add_chapters(mastered, sidecar.ffmetadata(chapters, length), timeout=media.scaled_timeout(length))
-        except RuntimeError as exc:
-            report.setdefault("notes", []).append(f"the chapters could not be put in the mp4 ({exc}); chapters.txt "
-                                                  "still has them")
-    lap("master")
-    progress("film check")
-    report["film_check"] = check_film(mastered, profile, resolved)
+    clean = None
+    try:
+        if profile.grain > 0:
+            clean = paths.build / "film.clean.mp4"     # the stills check reads this: grain would hide a frozen picture
+            _replace(mastered, clean)
+            try:
+                media.add_grain(clean, mastered, profile.grain, timeout=media.scaled_timeout(length, per_s=4.0),
+                                max_mb=profile.max_mb)
+                grained_mb, clean_mb = (round(p.stat().st_size / 1e6, 1) for p in (mastered, clean))
+                if profile.max_mb is not None and grained_mb > profile.max_mb >= clean_mb:
+                    raise RuntimeError(f"with it the film is {grained_mb:g} MB, over the {profile.max_mb:g} MB "
+                                       "upload limit")
+                report["grain"] = profile.grain
+            except RuntimeError as exc:
+                _replace(clean, mastered)
+                clean = None
+                report.setdefault("notes", []).append(f"the grain could not be added ({exc}): the film goes "
+                                                      "without it")
+        chapters = sidecar.chapters(root, fps)
+        if chapters:
+            try:
+                media.add_chapters(mastered, sidecar.ffmetadata(chapters, length),
+                                   timeout=media.scaled_timeout(length))
+            except RuntimeError as exc:
+                report.setdefault("notes", []).append(f"the chapters could not be put in the mp4 ({exc}); "
+                                                      "chapters.txt still has them")
+        lap("master")
+        progress("film check")
+        report["film_check"] = check_film(mastered, profile, resolved, motion_from=clean)
+    finally:
+        if clean is not None:
+            clean.unlink(missing_ok=True)
     lap("film_check")
     if not report["film_check"]["ok"]:
         rejected = paths.build / "film.rejected.mp4"

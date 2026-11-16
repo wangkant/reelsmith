@@ -232,6 +232,7 @@ export default {
   "shot.footage": "Vidéo",
   "shot.still": "Image fixe",
   "shot.inset": "Image incrustée",
+  "shot.broll": "Plans filmés",
   "shot.speed": "vitesse {rate}×",
   "shot.reversed": "Inversé",
   "shot.held": "Image figée",

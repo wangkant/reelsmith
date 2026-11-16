@@ -47,10 +47,11 @@ project.json `"profile"`, else workspace.json's, else `landscape`:
 | `xiaohongshu` (小红书) | 1080×1920 | x 120–960, y 240–1480 | ≤ 300 s (30–90) | 1000 MB | −14 |
 | `channels` (视频号) | 1080×1920 | x 120–960, y 200–1500 | ≤ 3600 s (60–180) | 2000 MB | −14 |
 
-All run at 30 fps with a true peak of −1 dBTP. On the generic canvases (`landscape`, `vertical`, `square`,
-`portrait`) and `youtube` the safe area is a title-safe margin; on the other platform profiles it is where the
-phone's UI (status bar, button rail, title and music) does not cover the picture and a tall phone does not crop it
-(Bilibili, Xiaohongshu and Channels publish no template: theirs are conservative). Every platform profile requires
+All run at 30 fps with a true peak of −1 dBTP. Grain is a profile key (0–1, default 0): `"profile": {"base": "<name>",
+"grain": 0.3}` in project.json, or `grain` on a profile in workspace.json; a subtle moving film grain (0.3–0.5; a draft
+shows none; kept under `max_mb`). On the generic canvases (`landscape`, `vertical`, `square`, `portrait`) and `youtube`
+the safe area is a title-safe margin; on the other platform profiles it is where the phone's UI (status bar, button
+rail, title and music) does not cover the picture and a tall phone does not crop it (Bilibili, Xiaohongshu and Channels publish no template: theirs are conservative). Every platform profile requires
 sound; all but `youtube` refuse a stretch over 5 s where nothing moves and treat frame 0 as the cover. The target is
 advice, checked only when the owner's `rules.json` sets advice `"target_s": true`: a length the brief gives wins
 inside the caps (say in `handover.md` that it is off the target). Backgrounds may bleed to the edges; **words must
@@ -407,8 +408,8 @@ film lasts until `a_2` ends.
 ## Components
 
 A component clip renders a React component inside the clip box. Built-in presets: `Receipt`, `Stamp`, `CountUp`,
-`BarCompare`, `TimelineRule`, `DotGrid`, `EvidenceCard`, `Highlighter`, `Arrow`; `library(project)` lists them with
-their prop names, `library(project, "Receipt")` shows the schema, an example and the source file.
+`BarCompare`, `TimelineRule`, `DotGrid`, `EvidenceCard`, `Highlighter`, `Arrow`, `Broll`; `library(project)` lists
+them with their prop names, `library(project, "Receipt")` shows the schema, an example and the source file.
 
 Six presets are whole scenes for telling what happened. Each fills a large box (about 800 × 800), lands its parts
 at their own `at`, keeps moving gently while it holds, and reads on its own `light` or `dark` `ground`, or over a
@@ -444,10 +445,22 @@ Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); exam
 - **Tracks**: `world` (one component clip for the whole film reading every line from `useClip().lines`, or one per
   line, `"start": "line:3"`), a head text clip with the take (at most 4.5 s; the cover), captions.
 - **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.5 to 2 s, on its word.
+  Without a voice `useClip().lines` is empty and cue lookups throw: time things in seconds from the clip start.
 - **Cut-outs only** (no full-frame image or video): a picture enters as a `*_asset` prop, shown as a `Cut` or a
   `Loupe`; trace its outline on a preview of the preset `AssetGrid` (`{"asset": "<id>"}`), then remove that clip.
 - **Layered photographs** (kit.md; `examples/layers/`): a drawn `Plate` per place with traced `fronts`, cut-outs with
   alpha (`Photo`, `Travel`), `Refract`/`Warp` not drawn rings, one `Lens`, a `Join` instead of a cut.
+- **Shots that look filmed**: the preset `Broll` cuts one plate and its baked clip per shot (kit.md, same title).
+- **Motion in the picture**: for an action, draw key poses of one shot (`match_asset` = the first, prompt "Exactly the
+  same photograph from exactly the same camera position, framing and light; nothing changes except one thing: ...")
+  and `tween` them: two poses far apart ghost (it fades out and in instead of travelling), so add a pose between.
+  For a camera moving through a place, `parallax` one plate. Both take whole opaque pictures, never cut-outs, and
+  make video assets for `Footage`; after a tween the picture is still: cut soon or keep something live (steam, a camera move).
+- **Sound under the picture**: a voice alone leaves silence between lines. `sound` makes a looping bed for each
+  place (on an audio track: `"volume": 0.25, "loop": true, "duck": {"under": "voice", "to": 0.5}`; a new place gets
+  a new bed clip with `fade_in`/`fade_out` 0.3) and a one-shot for each action on a second audio track (`"start":
+  "line:3+0.3", "dur": <its seconds>`, `volume` 0.3–0.6). No voice: bed about 0.15, one-shots 0.6–0.8, since
+  mastering lifts the whole mix to the profile's loudness.
 - **Captions**: `"style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color":
   "#FFFDF7", "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}`, `max_chars` 10 (CJK) or 16 to 18 (Latin).
 
@@ -486,10 +499,12 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
 | `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `draw_many` 1–8 at once | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")`, `draw(p, "cup", "a paper coffee cup on the table, photo", cutout=true, match_asset="field")`, `draw_many(p, [{"id": "field", "prompt": "..."}, {"id": "cup", "prompt": "...", "cutout": true, "match_asset": "field"}])` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
+| `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: the frames between key pictures of one shot (2–6, ≤ 12 s); a camera moving through one still by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`); both run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
+| `sound(project, id, kind, seconds, seed?, gain_db?)` | local and free: a bed that loops (room, street, wind, rain, kitchen, fire, water, crowd, night; −24 LUFS) or a one-shot (whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter), with its loudness and low/mid/high split | `sound(p, "amb", "street", 20)`, `sound(p, "hit", "thump", 0.5)` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL (at most `providers.import.max_mb`, default 200 MB) into assets | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
 | `probe(project, source)` | a source's streams, codecs, rotation and loudness | `probe(p, "talk")` |
-| `frames(project, asset, times?, every?, n=12)` | stills of a source at source seconds (at most 24) + a timed contact sheet | `frames(p, "talk", ["0:12", 41.2])` |
+| `frames(project, asset, times?, every?, n=12)` | stills of a source at source seconds (at most 24) + a timed contact sheet; from a shell every tool's keyword arguments are flags (`-n 12`) and `--help` lists them | `frames(p, "talk", ["0:12", 41.2])` |
 | `scenes(project, asset, threshold=0.3)` | shot cuts (source seconds) + each shot's first frame | `scenes(p, "trip")` |
 | `silences(project, asset, min_s=0.5, noise_db=-35)` | quiet ranges and the sound between them (source seconds) | `silences(p, "talk", 0.4)` |
 | `transcribe(project, asset, language?, prompt?)` | every word said, with its source time, into `assets/<id>.transcript.json` | `transcribe(p, "talk", "en", "Ada Lovelace, reelsmith")` |
@@ -514,10 +529,9 @@ What you build stays in the workspace for every film; `note` what each piece is 
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters); a box over two lines or a wide paragraph comes out too small to read (`check` warns under
   40 px). Re-box an evidence asset with `update_asset`.
-- Music: there is no music generator. `import_asset` an audio file you are allowed to use (a bed made with ffmpeg's
-  `sine` or `anoisesrc` will do), on an audio track at a low `volume` (0.08–0.15) with `"loop": true` if it is
-  shorter than the film. Without a voice, mastering brings the whole mix to the profile's loudness: a lone bed comes
-  to the front whatever its `volume` (which sets only its balance against other sound), so pick one meant to be heard.
+- Music: there is no music generator. `import_asset` an audio file you are allowed to use (ambience and effects:
+  `sound`), on an audio track at a low `volume` (0.08–0.15), `"loop": true` if shorter than the film. Without a
+  voice, mastering lifts the mix to the profile's loudness: a lone bed comes to the front whatever its `volume`.
 - `preview` is cheap (a few seconds a still): use it after every meaningful edit and look at the PNGs. In the
   contact sheet the dark bands are outside the safe area, the yellow line is its edge and each tile shows its time;
   earlier stills stay in `build/stills`. `sweep=true` measures the film exactly as `render` does: run it first.

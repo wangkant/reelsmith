@@ -1,0 +1,70 @@
+{
+  "name": "Broll",
+  "description": "Footage that looks filmed, made from pictures: each shot is one plate with a clip baked from it (a parallax travel or a tween of key poses), panned and held in a slightly unsteady hand, with live steam, falling snow or dust and small things crossing. Give it the full canvas box and two to three seconds a shot; it cuts hard at each shot's `at` and never shows the plate's edge.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["shots"],
+    "properties": {
+      "shots": {
+        "type": "array", "minItems": 1, "description": "the shots in time order; each runs until the next one's `at` (the last to the clip's end)",
+        "items": {
+          "type": "object", "additionalProperties": false, "required": ["plate_asset", "at"],
+          "properties": {
+            "plate_asset": {"type": "string", "description": "the shot's picture (an image asset; any aspect, it covers the frame)"},
+            "film_asset": {"type": "string", "description": "a video baked from the plate (same aspect), played from the shot's start; without it the plate stays still and only the camera moves"},
+            "loop": {"type": "boolean", "default": false, "description": "play the clip round and round (a flame or a boil tweened a, b, c, a); otherwise its last frame holds"},
+            "at": {"type": ["number", "string"], "description": "when the shot cuts in (a Time)"},
+            "pan": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "the frame centre's x in plate px, first to last frame of the shot; past the edge it stops at the edge"},
+            "tilt": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "the frame centre's y in plate px, first to last frame"},
+            "zoom": {"type": "array", "items": {"type": "number", "minimum": 1, "maximum": 3}, "minItems": 2, "maxItems": 2, "default": [1.04, 1.04], "description": "zoom at the first and last frame; raised when the hand's wobble needs room"},
+            "steam": {
+              "type": "array", "description": "live steam or smoke (never draw it into the plate)",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["p"],
+                "properties": {
+                  "p": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "where it rises from, in plate px"},
+                  "w": {"type": "number", "minimum": 1, "default": 24, "description": "width of the source in plate px (a chimney mouth, a pot)"},
+                  "amount": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "how thick, 0 to 1"},
+                  "size": {"type": "number", "minimum": 1, "default": 45, "description": "puff size in plate px"},
+                  "rise": {"type": "number", "minimum": 0, "default": 240, "description": "how far it rises in plate px"},
+                  "color": {"type": "string", "default": "#F4F1EC", "description": "a light colour for steam, a grey for smoke"},
+                  "blend": {"enum": ["screen", "normal", "multiply"], "default": "screen", "description": "screen for steam, normal or multiply for smoke"}
+                }
+              }
+            },
+            "air": {
+              "type": "object", "additionalProperties": false, "description": "falling snow or drifting dust, at two depths: small slow specks far, a few large soft ones near",
+              "properties": {
+                "n": {"type": "number", "minimum": 0, "maximum": 300, "default": 70, "description": "far specks on a screenful of the plate at zoom 1"},
+                "size": {"type": "number", "minimum": 0.5, "default": 4, "description": "far speck size in px"},
+                "wind": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "default": [18, 120], "description": "drift in px a second, [x, y]; y over 0 falls"},
+                "color": {"type": "string", "default": "#FFFFFF", "description": "speck colour"},
+                "opacity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8, "description": "speck opacity"}
+              }
+            },
+            "movers": {
+              "type": "array", "description": "small cut-outs crossing during the shot (a car, a bird)",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["asset", "line", "w"],
+                "properties": {
+                  "asset": {"type": "string", "description": "a cut-out image asset with alpha"},
+                  "line": {"type": "array", "minItems": 2, "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "description": "its path in plate px, start to end, travelled over the whole shot"},
+                  "w": {"type": "number", "minimum": 1, "description": "its width in plate px at the start of the line (what it would measure on the plate)"},
+                  "sizes": {"type": "array", "items": {"type": "number", "minimum": 0}, "minItems": 2, "maxItems": 2, "default": [1, 1], "description": "scale at the start and the end (smaller as it goes away)"}
+                }
+              }
+            }
+          }
+        }
+      },
+      "hand": {"type": "number", "minimum": 0, "maximum": 40, "default": 8, "description": "the hand-held wobble in px (0 = on a tripod)"}
+    }
+  },
+  "example": {
+    "shots": [
+      {"plate_asset": "street", "film_asset": "street_mv", "at": 0, "pan": [500, 1100], "zoom": [1.04, 1.1]},
+      {"plate_asset": "stall", "at": 2.6, "steam": [{"p": [640, 520], "w": 60}], "air": {"n": 60}}
+    ]
+  }
+}

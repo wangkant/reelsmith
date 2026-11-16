@@ -9,7 +9,8 @@ import { handheld } from "./optics";
 import { clamp01 } from "./time";
 
 export type LensState = { focus: number; aperture: number };
-const LensContext = createContext<LensState>({ focus: 1, aperture: 0 });
+// exported for Plate's punch (a new focus per shot), not from the kit
+export const LensContext = createContext<LensState>({ focus: 1, aperture: 0 });
 
 /** The enclosing lens's focus depth and aperture (all sharp outside a Lens). */
 export const useLens = (): LensState => useContext(LensContext);

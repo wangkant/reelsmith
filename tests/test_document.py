@@ -413,7 +413,7 @@ def test_every_shipped_example_validates_against_its_schema():
     comps = L.components(Path(__file__).parent.parent / "examples" / "workspace" / "projects" / "new-film")
     presets = {"Receipt", "Stamp", "CountUp", "BarCompare", "TimelineRule", "DotGrid", "EvidenceCard",
                "Highlighter", "Arrow", "Parties", "QuoteCard", "NewsBrief", "Versus", "StoryBeats", "Seesaw",
-               "AssetGrid"}
+               "AssetGrid", "Broll"}
     assert presets <= set(comps)
     assert comps["PriceTag"].source == "library"
     for name, comp in comps.items():

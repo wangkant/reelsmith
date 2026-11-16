@@ -137,3 +137,92 @@ export const swayAngle = (f: number, fps: number, amp = 1.2, hz = 0.35, gust?: n
   const g = gust !== undefined && f >= gust ? gustAmp * Math.exp(-((f - gust) / (fps || 30)) * 1.6) * Math.sin(((f - gust) / (fps || 30)) * 7) : 0;
   return amp * (0.7 * Math.sin(sec * 2 * Math.PI * hz) + 0.3 * Math.sin(sec * 5.3 + 1)) + g;
 };
+
+/** When a clip plays in the world: from frame `at`, at speed `rate`, starting `from` seconds in, for `len` seconds
+ *  (default to its end), looping or holding its first frame before and its last after (`hold` true = both). */
+export type FilmTiming = { at?: number; rate?: number; from?: number; len?: number; loop?: boolean; hold?: boolean | "before" | "after" };
+
+/** The clip's frame (in frames of the clip fps from its start) shown at frame f, or null for none, and whether it is
+ *  before, playing or after. `duration` is the clip's length in seconds when known. */
+export const filmFrame = (t: FilmTiming, f: number, fps: number, duration?: number | null): { state: "before" | "play" | "after"; frame: number | null } => {
+  const at = t.at ?? 0, rate = t.rate && t.rate > 0 ? t.rate : 1, hold = t.hold ?? true;
+  const start = Math.max(0, Math.round((t.from ?? 0) * fps));
+  const last = duration && duration > 0 ? Math.max(0, Math.floor(duration * fps + 1e-6) - 1) : Infinity;
+  const end = Math.max(start, Math.min(last, t.len && t.len > 0 ? start + Math.round(t.len * fps) - 1 : Infinity));
+  if (t.loop && !Number.isFinite(end)) {
+    throw new Error("film loop: the clip's length is unknown; pass `len` (seconds) or the clip as an asset ref (an `*_asset` prop)");
+  }
+  const dt = f - at;
+  if (dt < 0) return { state: "before", frame: hold === true || hold === "before" ? start : null };
+  const run = Math.floor(dt * rate + 1e-6);
+  if (t.loop) return { state: "play", frame: start + (run % (end - start + 1)) };
+  if (start + run <= end) return { state: "play", frame: start + run };
+  return { state: "after", frame: hold === true || hold === "after" ? end : null };
+};
+
+/** Whether a film's frame is drawn rather than its still: not when it shows none, and before its start only when it
+ *  starts past the clip's first frame (which is the still). Footage and Plate share this rule. */
+export const showsFilm = (t: FilmTiming, ff: { state: "before" | "play" | "after"; frame: number | null }): boolean =>
+  ff.frame !== null && !(ff.state === "before" && !t.from);
+
+/** Where a placed picture's silhouette stands in stage px: `pts` are opaque outline points as picture fractions,
+ *  placed like Photo (anchor at x, y; box offset ox, oy; drawn dw x dh; rotated r degrees; mirrored by flip).
+ *  `foot` is its lowest stage y, `top` its highest, `w` its width and `cx` the middle of its lowest quarter. */
+export const silhouette = (pts: Pt[], x: number, y: number, ox: number, oy: number, dw: number, dh: number, r = 0, flip = false) => {
+  const rad = (r * Math.PI) / 180, c = Math.cos(rad), sn = Math.sin(rad), fx = flip ? -1 : 1;
+  const st = pts.map(([u, v]) => {
+    const lx = fx * (ox + u * dw), ly = oy + v * dh;
+    return [x + lx * c - ly * sn, y + lx * sn + ly * c] as Pt;
+  });
+  const ys = st.map((q) => q[1]), xs = st.map((q) => q[0]);
+  const foot = Math.max(...ys), top = Math.min(...ys), left = Math.min(...xs);
+  const low = st.filter((q) => q[1] >= foot - 0.28 * Math.max(1, foot - top)).map((q) => q[0]);
+  return { foot, top, left, w: Math.max(1, Math.max(...xs) - left), cx: (Math.min(...low) + Math.max(...low)) / 2 };
+};
+
+/** A second camera on the same plate: from frame `at` (until `end`, if given) it frames picture point `to` (picture
+ *  px) `z` times closer, as a cut; `focus` and `aperture` set the lens for that shot. */
+export type Punch = { at: number; end?: number; to: Pt; z?: number; focus?: number; aperture?: number };
+
+/** The punch in force at frame f (a later one wins), or null. */
+export const punchAt = (punches: Punch[] | undefined, f: number): Punch | null => {
+  let on: Punch | null = null;
+  for (const p of punches ?? []) if (f >= p.at && (p.end === undefined || f < p.end)) on = p;
+  return on;
+};
+
+/** A reframing: stage point (cx, cy) of the layer lands in the frame centre, z times larger. */
+export type View = { z: number; cx: number; cy: number };
+
+/** The view of a punch on a plate fitted by `fit` in a w x h frame, its crop kept inside the picture. */
+export const punchView = (p: Punch, fit: Fit, w: number, h: number): View => {
+  const z = Math.max(1, p.z ?? 1.5);
+  const [px, py] = fit.at(p.to);
+  const keep = (v: number, a: number, len: number, half: number) => (len <= 2 * half ? a + len / 2 : Math.max(a + half, Math.min(a + len - half, v)));
+  return { z, cx: keep(px, fit.x, fit.w, w / (2 * z)), cy: keep(py, fit.y, fit.h, h / (2 * z)) };
+};
+
+/** Where a stage point lands after a view (unchanged without one). */
+export const viewed = (v: View | null, w: number, h: number, pt: Pt): Pt =>
+  v ? [w / 2 + (pt[0] - v.cx) * v.z, h / 2 + (pt[1] - v.cy) * v.z] : pt;
+
+/** The direction light comes from on screen: a name, or degrees (0 = from the right, 90 = from the back of the
+ *  scene, so shadows fall toward the camera); `height` 0..1 is its elevation (1 = overhead, short shadows). */
+export type Light = { from?: "left" | "right" | "upper-left" | "upper-right" | "back" | "front" | "lower-left" | "lower-right" | number; height?: number };
+
+const FROM = { right: 0, "upper-right": 45, back: 90, "upper-left": 135, left: 180, "lower-left": 225, front: 270, "lower-right": 315 };
+
+/** The SVG matrix that lays a standing silhouette on the ground line y = `ground` as its cast shadow, and the
+ *  shadow's length per px of height. Depth on the ground is foreshortened, so a shadow toward the camera is short. */
+export const castMatrix = (light: Light, ground: number): { m: [number, number, number, number, number, number]; len: number } => {
+  const from = light.from ?? "upper-left";
+  const rad = ((typeof from === "number" ? from : FROM[from] ?? 135) * Math.PI) / 180;
+  const ax = -Math.cos(rad), ay = Math.sin(rad) * 0.4;
+  const elev = (Math.max(0.08, Math.min(0.95, light.height ?? 0.5)) * Math.PI) / 2;
+  const L = Math.min(3, 1 / Math.tan(elev));
+  const c = -L * ax;
+  let d = -L * ay;
+  // a shadow lying exactly sideways would be a line: the ground under a thing has some depth
+  if (Math.abs(d) < 0.12) d = d > 0 ? 0.12 : -0.12;
+  return { m: [1, 0, c, d, -c * ground, ground * (1 - d)], len: Math.hypot(L * ax, L * ay) };
+};

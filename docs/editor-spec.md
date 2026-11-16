@@ -466,7 +466,7 @@ them into the component clip's content (section 7) from the voice, so they follo
 - Imports allowed: `react`, `remotion`, installed `@remotion/*`, `@reelsmith/kit`, relative files in the same
   folder. Anything else (node builtins, other packages, a package path with `.` or `..` in it, absolute paths) is
   refused at bundle time.
-- Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `AssetGrid`, `BarCompare`, `CountUp`, `DotGrid`,
+- Built-in presets: `renderer/src/presets/<Name>.tsx` + `.meta.json`: `Arrow`, `AssetGrid`, `BarCompare`, `Broll`, `CountUp`, `DotGrid`,
   `EvidenceCard`, `Highlighter`, `NewsBrief`, `Parties`, `QuoteCard`, `Receipt`, `Seesaw`, `Stamp`, `StoryBeats`,
   `TimelineRule`, `Versus`. Library: `<workspace>/library/components/`.
   The renderer discovers both; a library component shadows a preset of the same name.
@@ -1224,6 +1224,7 @@ or another custom one of the workspace; default `landscape`) and every other fie
 | `lufs`, `peak_db` | the mastering target (−70 to −1) and true peak (−12 to 0) |
 | `max_black_ratio` | 0-1 |
 | `require_audio` | false: a silent film is delivered |
+| `grain` | 0-1 (default 0, off): moving luma grain laid over the mastered picture, re-encoded under a bitrate cap (0.09 bits a pixel, lowered to fit 90% of `max_mb` after the sound); a draft has none; the still check reads the film before it. A grain failure or timeout, or a grained film over `max_mb` when the clean one fits, delivers the clean film with a note |
 | `ui` | true: outside the safe area is the platform's UI (the layout message says so), and frame 0 is checked as the feed's cover (section 14) |
 | `cover` | `[{"name": "cover", "crop": [w, h, x, y]}, ...]`: render writes frame 0 of the delivered film cut to each crop as `out/<name>.png`, and the layout pass warns about words on frame 0 outside a crop; `[]` for none |
 

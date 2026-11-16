@@ -226,6 +226,7 @@ export default {
   "shot.footage": "视频画面",
   "shot.still": "静态图片",
   "shot.inset": "画中画",
+  "shot.broll": "实拍感镜头",
   "shot.speed": "{rate} 倍速",
   "shot.reversed": "倒放",
   "shot.held": "定格",

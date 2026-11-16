@@ -75,7 +75,7 @@ export const beatAt = (beats, sec) => beats.find((b) => sec >= b.start - 1e-6 &&
 
 // ---------------------------------------------------------------- what an element is, in plain words
 const COMPONENT = [
-  [/evidence|quote|source/i, "evidence", "i-quote"], [/story|step|list|beats/i, "steps", "i-steps"],
+  [/^broll$/i, "shot", "i-film"], [/evidence|quote|source/i, "evidence", "i-quote"], [/story|step|list|beats/i, "steps", "i-steps"],
   [/count|number|figure|stat/i, "figure", "i-hash"], [/chart|graph|bar/i, "chart", "i-rows"], [/map/i, "map", "i-globe"],
 ];
 function elementKind(c) {

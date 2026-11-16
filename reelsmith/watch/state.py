@@ -575,6 +575,7 @@ PRESETS = {   # built-in components: (kind, name code, English name)
     "EvidenceCard": ("evidence", "evidence.card", "Evidence card"),
     "Arrow": ("shape", "shape.arrow", "Arrow"),
     "Highlighter": ("shape", "shape.highlight", "Highlight stroke"),
+    "Broll": ("shot", "shot.broll", "Filmed shots"),
 }
 SHAPES = {"ellipse": ("shape.circle", "Circle mark"), "line": ("shape.line", "Line"), "arrow": ("shape.arrow", "Arrow"),
           "path": ("shape.path", "Drawn mark")}

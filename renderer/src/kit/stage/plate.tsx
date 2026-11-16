@@ -6,10 +6,12 @@ import { useClip } from "../context";
 import { assetSrc } from "../helpers";
 import type { AssetRef } from "../helpers";
 import { Layer, useDepth } from "./Stage";
-import { useLens } from "./lens";
-import { coverFit, dofBlur, swayAngle } from "./optics";
-import type { Fit } from "./optics";
-import { checkSameAspect, Hold, pictureSize, PictureContext, SvgImage, wipeBand } from "./photo";
+import { LensContext, useLens } from "./lens";
+import { coverFit, dofBlur, filmFrame, punchAt, punchView, showsFilm, swayAngle } from "./optics";
+import type { Fit, Light, Punch } from "./optics";
+import { checkSameAspect, Hold, LightProvider, pictureSize, PictureContext, SvgImage, ViewProvider, wipeBand } from "./photo";
+import { FilmFrame, filmDuration, isFilm } from "./footage";
+import type { Film } from "./footage";
 import type { Wipe } from "./photo";
 import type { Pt } from "./geom";
 
@@ -62,6 +64,15 @@ export type PlateProps = {
   wipe?: Wipe;
   soft?: number;
   wipeAt?: Pt;
+  /** the plate moving: a clip made from `src` (same aspect), played over it from `film.at` (a frame on the plate's
+   *  clock: `f` if given); before that the still shows (clip frame `from` when from > 0), after it the last frame
+   *  holds (with hold false or "before", the still returns). A video `src` plays from frame 0, and wherever it is
+   *  not running its first frame stands in for the still */
+  film?: Film;
+  /** where the light comes from: the photos inside cast their shadows away from it */
+  light?: Light;
+  /** second camera angles on the same plate: from each cue's frame it cuts to a closer framing of a picture point */
+  punch?: Punch | Punch[];
   /** what stands in the plate (stage px; usePlate().at maps traced points), drawn between the plate and its fronts */
   children?: React.ReactNode;
 };
@@ -72,16 +83,25 @@ export function Plate({ depth = 0.9, ...p }: PlateProps) {
 }
 
 function PlateBody({ src, imgW, imgH, pad = 0.06, focus, drift = 0, sway, fronts = [], feather = 3, blur = 0, photo, f: fIn, to, p = 0, wipe,
-  soft = 0.3, wipeAt = [0.5, 0.5], children }: PlateProps) {
+  soft = 0.3, wipeAt = [0.5, 0.5], film: filmIn, light, punch, children }: PlateProps) {
   const now = useCurrentFrame();
   const f = fIn ?? now;
   const { w, h, fps } = useClip();
   const depth = useDepth();
-  const lens = useLens();
+  const outer = useLens();
   const [IW, IH] = pictureSize(src, imgW, imgH, "Plate");
   if (to) checkSameAspect(to, IW, IH, "Plate");
   const fit = coverFit(IW, IH, w, h, pad, focus);
+  const shot = punchAt(punch === undefined ? undefined : Array.isArray(punch) ? punch : [punch], f);
+  const view = shot ? punchView(shot, fit, w, h) : null;
+  const lens = shot && (shot.focus !== undefined || shot.aperture !== undefined)
+    ? { focus: shot.focus ?? outer.focus, aperture: shot.aperture ?? outer.aperture } : outer;
   const b = dofBlur(depth, lens.focus, lens.aperture) + blur;
+  const film: Film | undefined = filmIn ?? (isFilm(src) ? { src, at: 0 } : undefined);
+  if (filmIn && isFilm(filmIn.src)) checkSameAspect(filmIn.src, IW, IH, "Plate film");
+  const ff = film ? filmFrame(film, f, fps || 30, filmDuration(film.src)) : null;
+  // a video src has no still: its first frame stands in, so an <Img> never gets a clip
+  const moving = !!film && !!ff && ff.frame !== null && (film.src === src || showsFilm(film, ff));
   const filter = [b > 0.3 ? `blur(${b.toFixed(2)}px)` : "", photo ?? ""].join(" ").trim() || undefined;
   const sec = f / (fps || 30);
   const life = drift ? `translate(${(Math.sin(sec * 0.37) * drift).toFixed(2)}px, ${(Math.cos(sec * 0.29) * drift * 0.6).toFixed(2)}px) scale(${(1 + (drift / w) * (1 + Math.sin(sec * 0.21))).toFixed(5)})` : undefined;
@@ -91,28 +111,65 @@ function PlateBody({ src, imgW, imgH, pad = 0.06, focus, drift = 0, sway, fronts
   const one = (pic: AssetRef | string, style?: React.CSSProperties) => (
     <Img src={assetSrc(pic)} style={{ position: "absolute", left: fit.x, top: fit.y, width: fit.w, height: fit.h, maxWidth: "none", filter, ...style }} />
   );
+  const framed = (clip: AssetRef | string, frame: number, clipMask?: string) => (
+    <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, filter,
+      ...(clipMask ? { WebkitMaskImage: clipMask, maskImage: clipMask, WebkitMaskSize: `${w}px ${h}px`, maskSize: `${w}px ${h}px`,
+        WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat" } : {}) }}>
+      <div style={{ position: "absolute", left: fit.x, top: fit.y, width: fit.w, height: fit.h }}>
+        <FilmFrame src={clip} frame={frame} />
+      </div>
+    </div>
+  );
+  const moved = (clipMask?: string) => framed((film as Film).src, ff?.frame ?? 0, clipMask);
+  const still = (pic: AssetRef | string) => (isFilm(pic) ? framed(pic, 0) : one(pic));
   const img = () => (
     <>
-      {k >= 1 ? null : one(src)}
-      {to && k > 0 ? <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, ...veil }}>{one(to)}</div> : null}
+      {k >= 1 ? null : moving ? moved() : still(src)}
+      {to && k > 0 ? <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, ...veil }}>{still(to)}</div> : null}
     </>
   );
-  return (
+  const frontStill = (pic: AssetRef | string, poly: Pt[], i: number) => isFilm(pic)
+    ? <React.Fragment key={i}>{framed(pic, 0, frontMask(fit, poly, feather, w, h))}</React.Fragment>
+    : <Front key={i} fit={fit} poly={poly} feather={feather} src={pic} filter={filter} />;
+  const frontOf = (poly: Pt[], i: number) => moving
+    ? <React.Fragment key={i}>{moved(frontMask(fit, poly, feather, w, h))}</React.Fragment>
+    : frontStill(src, poly, i);
+  const plate = (
     <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, transform: life, transformOrigin: "50% 50%" }}>
       {img()}
       {sway ? <SwayStrip fit={fit} sway={sway} f={f} fps={fps || 30} img={img} /> : null}
       <PlateContext.Provider value={fit}>
         <PictureContext.Provider value={{ at: fit.at, s: fit.s, r: 0, blur: b > 0.3 ? b : 0 }}>{children}</PictureContext.Provider>
       </PlateContext.Provider>
-      {k >= 1 ? null : fronts.map((poly, i) => <Front key={i} fit={fit} poly={poly} feather={feather} src={src} filter={filter} />)}
+      {k >= 1 ? null : fronts.map(frontOf)}
       {to && k > 0 && fronts.length ? (
         <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, ...veil }}>
-          {fronts.map((poly, i) => <Front key={i} fit={fit} poly={poly} feather={feather} src={to} filter={filter} />)}
+          {fronts.map((poly, i) => frontStill(to, poly, i))}
         </div>
       ) : null}
     </div>
   );
+  return (
+    <LensContext.Provider value={lens}>
+      <LightProvider value={light ?? null}>
+        <ViewProvider value={view}>
+          {view ? (
+            <div style={{ position: "absolute", left: 0, top: 0, width: w, height: h, transformOrigin: "0 0",
+              transform: `translate(${w / 2}px, ${h / 2}px) scale(${view.z}) translate(${-view.cx}px, ${-view.cy}px)` }}>{plate}</div>
+          ) : plate}
+        </ViewProvider>
+      </LightProvider>
+    </LensContext.Provider>
+  );
 }
+
+/** A front's feathered polygon as a CSS mask image, for fronts cut from a moving plate. */
+const frontMask = (fit: Fit, poly: Pt[], feather: number, w: number, h: number): string => {
+  const d = "M" + poly.map((pt) => fit.at(pt).map((v) => v.toFixed(1)).join(" ")).join(" L") + " Z";
+  const blur = feather > 0 ? `<filter id='b' x='-20%' y='-20%' width='140%' height='140%'><feGaussianBlur stdDeviation='${feather / 2}'/></filter>` : "";
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'>${blur}<path d='${d}' fill='white'${feather > 0 ? " filter='url(#b)'" : ""}/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+};
 
 /** The CSS mask for a plate's wipe, in stage px of the plate's layer. */
 const wipeCss = (fit: Fit, p: number, wipe: Wipe, soft: number, at: Pt): string => {

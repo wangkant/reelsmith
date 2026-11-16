@@ -1,5 +1,6 @@
 """The performance example (examples/performance): it checks clean, every world hears its own lines and every word
-it cues on is in them; the AssetGrid preset's meta; and the stage kit's unit tests (renderer/test/stage.test.mjs)."""
+it cues on is in them; the AssetGrid preset's meta; Broll's example in kit.md; and the stage kit's unit tests
+(renderer/test/stage.test.mjs)."""
 import json
 import re
 import shutil
@@ -90,6 +91,19 @@ def test_asset_grid_meta():
         assert props["properties"][key] == {**props["properties"][key], "type": "integer", "minimum": 2,
                                             "maximum": 40, "default": 10}
     assert meta["example"]["asset"]
+
+
+def test_broll_kit_example_validates():
+    # the clip agents copy from kit.md's "Shots that look filmed"
+    doc = (ROOT / "docs" / "kit.md").read_text(encoding="utf-8")
+    section = doc[doc.index("### Shots that look filmed"):]
+    clip = json.loads(re.search(r"```json\n(.*?)\n```", section, re.S).group(1))
+    comps = L.components(EXAMPLE / "projects" / "salt")
+    assert comps["Broll"].source == "preset"
+    assert L.validate_props(comps["Broll"], clip["props"]) == []
+    shots = clip["props"]["shots"]
+    assert any("pan" in s for s in shots) and any("steam" in s and "air" in s and "movers" in s for s in shots)
+    assert L.validate_props(comps["Broll"], {"shots": [{"plate_asset": "p", "at": 0, "pan": [1]}]})
 
 
 def test_every_stage_export_is_documented():

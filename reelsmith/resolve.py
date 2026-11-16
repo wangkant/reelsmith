@@ -196,6 +196,7 @@ def motion_keyframes(motion: str | None, seconds: float, w: float, h: float) -> 
 # ------------------------------------------------------------------ media facts
 _SIZES: dict[tuple, tuple[int, int] | None] = {}
 _DURATIONS: dict[tuple, float | None] = {}
+_VIDEO_SIZES: dict[tuple, tuple[int, int] | None] = {}
 _ANIMATED: dict[tuple, bool] = {}
 PROXY_KEEP_S = 24 * 3600            # a reversed proxy nothing has used for this long is deleted
 
@@ -324,6 +325,25 @@ def media_duration(path: Path) -> float | None:
         except Exception:  # noqa: BLE001 - no ffprobe or an odd file: the renderer copes without it
             _DURATIONS[key] = None
     return _DURATIONS[key]
+
+
+def video_size(path: Path) -> tuple[int, int] | None:
+    """Pixel size of a video's picture (ffprobe); None when it cannot be measured."""
+    key = _stamp(path)
+    if key is None:
+        return None
+    if key not in _VIDEO_SIZES:
+        try:
+            from . import media
+            v = next(x for x in media.probe(path).get("streams") or [] if x.get("codec_type") == "video")
+            w, h = int(v["width"]), int(v["height"])
+            rot = next((d["rotation"] for d in v.get("side_data_list") or [] if "rotation" in d),
+                       (v.get("tags") or {}).get("rotate", 0))
+            # a phone clip is stored landscape and shown upright: players turn it by the display rotation
+            _VIDEO_SIZES[key] = (h, w) if round(float(rot or 0)) % 180 == 90 else (w, h)
+        except Exception:  # noqa: BLE001 - same as media_duration
+            _VIDEO_SIZES[key] = None
+    return _VIDEO_SIZES[key]
 
 
 # ------------------------------------------------------------------ captions
@@ -996,6 +1016,9 @@ class _Resolver:
                 ref["around"] = list(a.around)
         if a.kind in ("video", "audio"):
             ref["duration"] = media_duration(path)
+        if a.kind == "video":
+            size = video_size(path)
+            ref["size"] = list(size) if size else None
         return ref
 
     def run(self) -> dict:

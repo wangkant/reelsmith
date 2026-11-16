@@ -220,6 +220,7 @@ export default {
   "shot.footage": "Filmmaterial",
   "shot.still": "Standbild",
   "shot.inset": "Eingesetztes Bild",
+  "shot.broll": "Gefilmte Einstellungen",
   "shot.speed": "{rate}× Geschwindigkeit",
   "shot.reversed": "Rückwärts",
   "shot.held": "Standbild gehalten",

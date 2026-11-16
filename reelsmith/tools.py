@@ -1068,6 +1068,59 @@ def animate(project: str, id: str, image_asset: str, motion: str, seconds: float
                      motion=motion, seconds=seconds, camera=camera or None)
 
 
+def _motion(name: str, project: str, **kwargs) -> ToolResult:
+    text, is_error = getattr(_mod("motion"), name)(_project(project), progress=_progress_of_call(), **kwargs)
+    return ToolResult(str(text), not is_error)
+
+
+@tool
+def tween(project: str, id: str, frames: list[str], seconds: list[float], fps: float = 0, hold_first: float = 0,
+          hold_last: float = 0) -> str:
+    """An action as video asset `id`: `frames` are 2-6 image assets, key pictures of ONE shot in order (same camera,
+    framing and size; only the action changes, drawn with match_asset on the first), `seconds` when each is reached
+    (0 first, strictly rising). The frames between are filled on this machine (RIFE, free; about 2 s a frame at
+    1080x1620): small steps between keys move cleanly, a far jump ghosts, so add a key pose. hold_first/hold_last:
+    seconds of stillness at either end. At most 12 s; the pictures' size within the canvas, the project's fps unless
+    `fps` is given, no sound and no transparency (a key with transparent pixels is refused: draw it on its full
+    background). Play it inside a scene like any video asset. The first call downloads the model (RIFE about 23 MB;
+    parallax uses Depth Anything V2 Small about 99 MB) into <workspace>/.cache/models; that folder can be copied to
+    another workspace."""
+    return _motion("tween", project, id=_id_arg(id), frames=_json_arg(frames, "frames"),
+                   seconds=_json_arg(seconds, "seconds"), fps=fps, hold_first=hold_first, hold_last=hold_last)
+
+
+@tool
+def parallax(project: str, id: str, asset: str, seconds: float, move: dict, fps: float = 0) -> str:
+    """A camera moving through one still as video asset `id`, `seconds` long (0.5-12): its depth is estimated once
+    on this machine (Depth Anything V2, free; kept beside the picture as <name>.depth.png) and near things shift more
+    than far ones. `move`: any of dolly (forward, a share of the distance to the nearest thing; about -0.15..0.15),
+    truck (right) and pedestal (up), shares of the width (about -0.06..0.06), and ease "in-out" (default) or
+    "linear". The picture is enlarged just enough that no border shows; a move that would tear edges or need more
+    than 20% enlargement is refused with a size that works. No sound and no transparency (a still with transparent
+    pixels is refused: draw it on its full background). Play it inside a scene like any video asset. The first call
+    downloads the model (Depth Anything V2 Small about 99 MB; tween uses RIFE about 23 MB) into
+    <workspace>/.cache/models; that folder can be copied to another workspace."""
+    return _motion("parallax", project, id=_id_arg(id), asset=_id_arg(asset, "asset"), seconds=seconds,
+                   move=_json_arg(move, "move"), fps=fps)
+
+
+@tool
+def sound(project: str, id: str, kind: str, seconds: float, seed: int | None = None, gain_db: float = 0) -> str:
+    """A sound effect or ambience as audio asset `id`, synthesised on this machine with ffmpeg (free, about a
+    second). Beds (stereo, 2-120 s, loop without a seam, levelled to -24 LUFS): room (quiet indoor tone), street
+    (distant traffic passing), wind (gusting outdoor air), rain (steady falling rain), kitchen (hood hum, sizzle),
+    fire (roar with crackles), water (babbling flowing stream), crowd (far wordless murmur), night (insects, night
+    air). One-shots (mono, 0.05-8 s, peak -3 dBTP): whoosh (fast air pass), thump (low soft impact), tick (tiny
+    sharp click), pop (short bright pop), sizzle (hot fat burst), crackle (dry snapping bits), pour (liquid pouring
+    gurgle), drip (single water drop), steam (hiss fading out), tear (paper or skin), clink (glass or metal),
+    shutter (camera shutter click). The same seed gives the same sound (default: from the id); gain_db shifts the
+    level, never past -1 dBTP. Reports loudness, peak, the low/mid/high power split (nobody hears it) and a clip
+    ready for edit."""
+    text, is_error = _mod("sound").sound(_project(project), progress=_progress_of_call(), id=_id_arg(id), kind=kind,
+                                         seconds=seconds, seed=seed, gain_db=gain_db)
+    return ToolResult(str(text), not is_error)
+
+
 @tool
 def import_asset(project: str, id: str, source: str, kind: str = "") -> str:
     """Bring a local file into assets/ (any size; hard-linked when it is on the project's drive, so a big recording
@@ -1148,6 +1201,7 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
 
 
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, redo, check, library, preview, render,
-                                 review, export_captions, speak, capture, draw, draw_many, animate, import_asset, assets,
+                                 review, export_captions, speak, capture, draw, draw_many, animate, tween, parallax,
+                                 sound, import_asset, assets,
                                  probe, frames, scenes, silences, transcribe, notes, note, typecheck, add_package,
                                  run_script)}
