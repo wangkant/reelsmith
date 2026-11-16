@@ -1,0 +1,16 @@
+{
+  "name": "Balloon",
+  "description": "The whole film in layered photographs: a valley plate with a balloon behind its treetops, a push into the balloon, the burner lighting under the envelope, a whip pan out as the balloon lifts clear of the trees.",
+  "props": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["valley_asset", "balloon_asset", "inside_asset", "flame_asset"],
+    "properties": {
+      "valley_asset": {"type": "string", "description": "image asset id of the valley plate (traced for valley.webp, 1024 x 1536)"},
+      "balloon_asset": {"type": "string", "description": "image asset id of the balloon cut-out with alpha (traced for balloon.webp, 560 x 807)"},
+      "inside_asset": {"type": "string", "description": "image asset id of the view up into the envelope (traced for inside.webp, 1024 x 1536)"},
+      "flame_asset": {"type": "string", "description": "image asset id of the burner flame cut-out with alpha"}
+    }
+  },
+  "example": {"valley_asset": "valley", "balloon_asset": "balloon", "inside_asset": "inside", "flame_asset": "flame"}
+}

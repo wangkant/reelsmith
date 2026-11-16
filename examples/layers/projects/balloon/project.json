@@ -1,0 +1,37 @@
+{
+ "version": 2,
+ "profile": "vertical",
+ "locale": "en",
+ "meta": {
+  "title": "Why does a hot-air balloon rise?",
+  "desc": "Warm air, a burner and a balloon lifting out of a misty valley, in layered photographs",
+  "topic": "why heating the air inside a balloon makes it rise",
+  "shape": "the principle, the burner, the lift",
+  "sources": [
+   {"title": "Hot air balloon (Encyclopaedia Britannica)", "url": "https://www.britannica.com/technology/hot-air-balloon"}
+  ]
+ },
+ "voice": "voice/voice.json",
+ "assets": {
+  "valley": {"path": "assets/valley.webp", "kind": "image", "note": "Plate: a green river valley at sunrise, mist on the valley floor, a near line of treetops, a meadow in front"},
+  "balloon": {"path": "assets/balloon.webp", "kind": "image", "note": "Cut-out with alpha: a striped hot-air balloon with its basket, lit from the right"},
+  "inside": {"path": "assets/inside.webp", "kind": "image", "note": "Plate: looking up from the basket into the envelope, the burner unlit, a gloved hand on the valve"},
+  "flame": {"path": "assets/flame.webp", "kind": "image", "note": "Cut-out with alpha: one tall burner flame, blue at the root"}
+ },
+ "tracks": [
+  {"id": "world", "kind": "visual", "clips": [
+   {"id": "w1", "type": "component", "name": "Balloon", "start": 0, "end": "end",
+    "props": {"valley_asset": "valley", "balloon_asset": "balloon", "inside_asset": "inside", "flame_asset": "flame"}}
+  ]},
+  {"id": "head", "kind": "visual", "clips": [
+   {"id": "take", "type": "text", "text": "Why does a balloon **rise**?", "start": 0, "end": 2.4,
+    "box": {"x": 110, "y": 230, "w": 860, "h": 300},
+    "style": {"font": "display", "size": "fit", "max_size": 140, "color": "#FFFDF7", "accent": "#FFD27A", "weight": 900,
+     "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true},
+    "exit": {"preset": "fade", "dur": 0.3}}
+  ]},
+  {"id": "cap", "kind": "captions", "source": "voice", "max_chars": 18,
+   "style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color": "#FFFDF7",
+    "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}}
+ ]
+}

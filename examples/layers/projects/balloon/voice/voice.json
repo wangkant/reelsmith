@@ -1,0 +1,10 @@
+{
+  "file": "voice/voice.m4a",
+  "duration_s": 11.6,
+  "gap_s": 0.25,
+  "lines": [
+    {"i": 1, "text": "Warm air is lighter than the cool air around it.", "t0": 0.0, "t1": 3.0},
+    {"i": 2, "text": "Light the burner, and the air inside the balloon heats up.", "t0": 3.25, "t1": 7.0},
+    {"i": 3, "text": "So the whole balloon floats up, above the morning mist.", "t0": 7.25, "t1": 11.6}
+  ]
+}

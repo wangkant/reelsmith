@@ -31,6 +31,10 @@ export const camAt = (keys: Key[], f: number): Cam => {
 
 type StageCtx = { cam: Cam; w: number; h: number; f: number };
 const StageContext = createContext<StageCtx | null>(null);
+const DepthContext = createContext(1);
+
+/** The depth of the enclosing <Layer> (1 outside one): photo layers read it for depth of field. */
+export const useDepth = (): number => useContext(DepthContext);
 
 /** The enclosing stage's camera, size and frame (a still camera at the frame centre outside a stage). */
 export const useStage = (): StageCtx => {
@@ -96,7 +100,7 @@ export function Layer({ depth = 1, blur = 0, opacity = 1, children }: { depth?: 
       transform: `translate(${w / 2}px, ${h / 2}px) scale(${z}) translate(${-tx}px, ${-ty}px)`,
       filter: blur > 0 ? `blur(${blur}px)` : undefined,
     }}>
-      {children}
+      <DepthContext.Provider value={depth}>{children}</DepthContext.Provider>
     </div>
   );
 }

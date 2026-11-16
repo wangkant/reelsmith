@@ -18,9 +18,9 @@ channel made with reelsmith, reviewed from its own platform numbers (practice[^o
 
 - The ranker predicts per viewer the chance to finish (完播), like, comment, share and follow (reported, 2025[^algo]);
   an early swipe lowers all (traffic pools are folklore[^folk]). Subject and claim on screen by 1 s; no logo, "大家好".
-- The first spoken line states the verdict, never a question: on one channel, films that opened on a spoken question
-  kept fewer viewers at five seconds, and films that opened on the verdict were watched longer and finished more
-  often (practice[^own]).
+- The first spoken line is a statement, never a question (the verdict, the strangest moment or the film's view): on
+  one channel, films that opened on a spoken question kept fewer viewers at five seconds, and films that opened on
+  a statement were watched longer and finished more often (practice[^own]).
 - Frame 0 shows the story's own object or person doing what line 1 says (a cracked phone flexed, a passenger in a
   train vestibule), not a prop (a payslip on a desk): the channel's best openings did so (practice[^own]). No check
   sees it: on the cover crop the object must show clear of the headline.
@@ -29,9 +29,9 @@ channel made with reelsmith, reviewed from its own platform numbers (practice[^o
 
 ## Pace and length
 
-- Payoff by 15 s: on one channel most viewers left long before the end, while the point to take away nearly always
-  came after 15 s (practice[^own]). Verdict and the viewer's stake (their money, usually 你) by 8 s, payoff
-  by 15 s, then story and evidence; names and background where used. Lines 2–4 each add a fact: no "事情是这样".
+- An explainer or a news film gives its payoff by 15 s: on one channel most viewers left long before the end, while
+  the point to take away nearly always came after 15 s (practice[^own]). The hook by 8 s, the payoff by 15 s, then
+  story and evidence; a story may keep its turn for the end. Lines 2–4 each add something new: no "事情是这样".
 - Cut every 2–4 s, the first change by about 4 s; a picture held 8–10 s reads as a slideshow (earlier cuts went with
   better early retention, though only weakly[^own]). Reuse a clip by re-cropping it (closer, another pan,
   `flip_x`) between other shots, not forward then backward, which made long holds (practice[^own]).
@@ -59,7 +59,7 @@ channel made with reelsmith, reviewed from its own platform numbers (practice[^o
 
 ## The ending, title, cover and tags
 
-- End on the line the viewer keeps or forwards (what to do when it happens to them) and cut within 1 s; no end card,
+- End on a line that lands (a verdict, a turn, or a line people answer) and cut within 1 s; no end card,
   no "点赞关注" (practice[^algo]). A question in the pinned comment invites comments (reported[^algo]).
 - Title (作品标题) ≤ 30 characters (unsure). Question titles did no harm; complaint titles (凭什么, 凭啥)
   held viewers worse (practice[^own]). Misleading titles or covers and engagement bait are 恶意营销 (reported[^ying]).

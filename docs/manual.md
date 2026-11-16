@@ -459,6 +459,8 @@ Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); exam
 - **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.5 to 2 s, on its word.
 - **Cut-outs only** (no full-frame image or video): a picture enters as a `*_asset` prop, shown as a `Cut` or a
   `Loupe`; trace its outline on a preview of the preset `AssetGrid` (`{"asset": "<id>"}`), then remove that clip.
+- **Layered photographs** (kit.md; `examples/layers/`): a drawn `Plate` per place with traced `fronts`, cut-outs with
+  alpha (`Photo`, `Travel`), `Refract`/`Warp` not drawn rings, one `Lens`, a `Join` instead of a cut.
 - **Captions**: `"style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color":
   "#FFFDF7", "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}`, `max_chars` 10 (CJK) or 16 to 18 (Latin).
 
@@ -495,7 +497,7 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
 | `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["A T-shirt drinks 2,700 litres.", {"text": "Most of it in the field.", "pace": 0.9}])` |
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
-| `draw(project, id, prompt, style_ref_asset?, size?)` | an original picture | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")` |
+| `draw(project, id, prompt, style_ref_asset?, size?, cutout?)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")`, `draw(p, "cup", "a paper coffee cup, photo", cutout=true)` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL (at most `providers.import.max_mb`, default 200 MB) into assets | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
@@ -516,7 +518,7 @@ What you build stays in the workspace for every film; `note` what each piece is 
   `"calm"`) given to the voice as an instruction: listen before relying on it. Write the lines in the film's
   language (`"一件T恤，要喝2700升水。"` in a `zh-CN` film).
 - `draw`: `size` is an aspect (`9:16`, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, `3:2`, `16:9`; default the one nearest
-  your canvas) or pixels `"WxH"` (sides 256–4096).
+  your canvas) or pixels `"WxH"` (sides 256–4096). A cut-out is never enlarged; one without real alpha is refused.
 - `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
   limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
   crossed. Transcribing the same recording again with the same settings is free.

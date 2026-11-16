@@ -150,6 +150,9 @@ class Asset(_M):
     line: Optional[float] = Field(None, gt=0)     # evidence: the text's line pitch in image pixels (capture)
     around: Optional[Pair] = None           # evidence: how far past the box the gaps beyond its neighbouring lines lie
     transcript: Optional[str] = None        # assets/<id>.transcript.json (transcribe)
+    alpha: Optional[bool] = None            # a cut-out with a real alpha channel (draw cutout)
+    width: Optional[int] = Field(None, gt=0)
+    height: Optional[int] = Field(None, gt=0)
 
 
 class Filter(_M):

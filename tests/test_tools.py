@@ -357,6 +357,16 @@ def test_providers_delegation(project, monkeypatch):
     assert calls[-1] == ("import", "a", "x.png", None)
 
 
+def test_draw_passes_cutout_through_the_tool_and_the_cli(project, monkeypatch):
+    seen = []
+    fake_module(monkeypatch, "providers", draw=lambda pr, **kw: (seen.append(kw) or "drew", False))
+    assert T.draw(str(project.path), "cup", "a cup").ok and seen[-1]["cutout"] is False
+    assert T.draw(str(project.path), "cup", "a cup", cutout=True).ok and seen[-1]["cutout"] is True
+    assert not T.draw(str(project.path), "cup", "a cup", cutout="yes").ok and len(seen) == 2
+    assert cli.main(["draw", str(project.path), "cup", "a cup", "--cutout"]) == 0 and seen[-1]["cutout"] is True
+    assert cli.main(["draw", str(project.path), "cup", "a cup"]) == 0 and seen[-1]["cutout"] is False
+
+
 # ------------------------------------------------------------------ preview / render / review with a fake render.mjs
 class FakeNode:
     def __init__(self, items_for=None, film_audio=True, film_ok=True, film_still=False, inspect_fail=None,

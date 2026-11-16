@@ -129,13 +129,15 @@ Unknown keys are refused everywhere. Ids (assets, tracks, clips) and marker name
 `-`; clip ids are unique in the project. Paths are relative to the project folder.
 
 **Asset**: `{"path": "assets/x.png", "kind": "image"|"video"|"audio"|"evidence", "box": [x, y, w, h], "site": "",
-"url": "", "note": "", "line": 58, "around": [89, 58], "transcript": "assets/x.transcript.json"}`. `box` (pixels in
-the image: the proving sentence), `site` and `url` belong to evidence, and so do `line` (the text's line pitch) and
-`around` (how far above and below the box the gaps past its neighbouring lines lie), image pixels both, which
-`capture` measures so a crop cuts between lines. `transcript` (video and audio; written by `transcribe`, section 9.8)
-names the asset's word timing: `{"version": 1, "asset", "source", "duration_s", "language", "provider", "text",
-"words": [{"word", "start", "end"}], "segments": [{"start", "end", "text"}]}`, times in source seconds. A missing
-or unreadable transcript is a warning (an error when captions follow it).
+"url": "", "note": "", "line": 58, "around": [89, 58], "transcript": "assets/x.transcript.json", "alpha": true,
+"width": 412, "height": 630}`. `box` (pixels in the image: the proving sentence), `site` and `url` belong to
+evidence, and so do `line` (the text's line pitch) and `around` (how far above and below the box the gaps past its
+neighbouring lines lie), image pixels both, which `capture` measures so a crop cuts between lines. `transcript`
+(video and audio; written by `transcribe`, section 9.8) names the asset's word timing: `{"version": 1, "asset",
+"source", "duration_s", "language", "provider", "text", "words": [{"word", "start", "end"}], "segments": [{"start",
+"end", "text"}]}`, times in source seconds. A missing or unreadable transcript is a warning (an error when captions
+follow it). `alpha`, `width` and `height` are written by `draw` with `cutout` (section 9.3): the image has a real
+alpha channel and was trimmed to that size.
 Accepted files: image `.png .jpg .jpeg .webp .gif`; evidence `.png .jpg .jpeg .webp`; video `.mp4 .m4v .mov .webm
 .mkv`; audio `.wav .mp3 .m4a .aac .ogg .oga .opus .flac`. An image clip takes an image or evidence asset, an audio
 clip an audio or video asset. An animated image (a GIF of more than one frame, an APNG, an animated WebP; resolve
@@ -615,16 +617,21 @@ addresses. `providers.capture.proxy` (or `REELSMITH_PROXY`, `HTTPS_PROXY`, `HTTP
 
 ### 9.3 draw
 
-`draw(project, id, prompt, style_ref_asset?, size?)` → `assets/<id>.png`, an image asset. `size` is an aspect
-(`9:16` at 1080×1920, `2:3`, `3:4`, `4:5` at 1080×1350, `1:1` at 1080×1080, `4:3`, `3:2`, `16:9` at 1920×1080;
-the default is the one nearest the project's canvas) or `"WxH"` with sides 256-4096;
-`style_ref_asset` is an image or evidence asset to match in style. The `codex` provider runs `codex exec` with
-image generation only: no user config, no shell, a read-only sandbox without network, no web search, in a
-throwaway folder; Codex's own words go to `<cache>/draw.log`, never to the agent. It uses the model from
-`$CODEX_HOME/config.toml` when one is set there. The binary is `CODEX_EXE`, else the CLI bundled with the Codex
-desktop app on Windows, else `codex` on PATH. A logged-out or out-of-quota answer pauses drawing for 10 minutes;
-a provider that cannot be reached pauses it for 2, then 10 if it is still unreachable, and a picture that comes out
-lifts that pause. An `HTTPS_PROXY` in the environment takes precedence over the system proxy.
+`draw(project, id, prompt, style_ref_asset?, size?, cutout?)` → `assets/<id>.png`, an image asset. `size` is an
+aspect (`9:16` at 1080×1920, `2:3`, `3:4`, `4:5` at 1080×1350, `1:1` at 1080×1080, `4:3`, `3:2`, `16:9` at
+1920×1080; the default is the one nearest the project's canvas) or `"WxH"` with sides 256-4096; `style_ref_asset` is
+an image or evidence asset to match in style (one with alpha is sent laid on a light grey). `cutout` (CLI
+`--cutout`) asks for one isolated subject on a transparent background and keeps the picture only when its alpha
+channel is real: an opaque picture, a painted checkerboard or an empty one is refused (one retry, both tries counted
+against `max_draws`) and nothing is saved. A kept cut-out is scaled down to fit inside `size` (never cropped, never
+enlarged), trimmed to the subject plus a 2% pad (at least 8 px) and registered with `alpha: true`, `width` and
+`height`; the answer says when the subject touches an edge of the drawn picture, where it may be cut off. The
+`codex` provider runs `codex exec` with image generation only: no user config, no shell, a read-only sandbox without
+network, no web search, in a throwaway folder; Codex's own words go to `<cache>/draw.log`, never to the agent. It
+uses the model from `$CODEX_HOME/config.toml` when one is set there. The binary is `CODEX_EXE`, else the CLI bundled
+with the Codex desktop app on Windows, else `codex` on PATH. A logged-out or out-of-quota answer pauses drawing for
+10 minutes; a provider that cannot be reached pauses it for 2, then 10 if it is still unreachable, and a picture
+that comes out lifts that pause. An `HTTPS_PROXY` in the environment takes precedence over the system proxy.
 
 `providers.image`: `provider` `"codex"`, `max_draws` 30 (tries per project, counted in the ledger), `timeout_s`
 360, `effort` `"low"` (`minimal`, `low`, `medium`, `high`).
@@ -753,7 +760,7 @@ no balance to read) and settled at the estimate of what was sent. The local prov
 | `render(project, draft?, start?, end?, scale?)` | the film, mastered and checked, with its captions files and chapters (section 14); `draft` a quick look at `scale` (0.5) to `build/draft.mp4`, optionally from `start` to `end` | `render --draft --start --end --scale` |
 | `review(project, n?, every?)` | the delivered film a frame every `every` s (default 1, at most 150 frames) on sheets of 2-4 columns by 2-4 rows (8 on a 9:16 or 16:9 canvas) in order, with the voice line heard at each frame and the stretches where the picture does not change; `n` > 0: 2-24 evenly spaced frames on one contact sheet | `review [-n N] [--every S]` |
 | `export_captions(project, track?)` | every captions track (or one) as `out/captions/<track>.srt` and `.vtt`, without rendering | `captions --track` |
-| `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw`, `animate`, `import`, `assets` |
+| `speak`, `capture`, `draw`, `animate`, `import_asset`, `assets` | asset tools (section 9) | `speak`, `capture` (`--viewport`), `draw` (`--cutout`), `animate`, `import`, `assets` |
 | `probe(project, source)` | streams, codecs, rotation, loudness of a source (section 9.7) | `probe <source>` |
 | `frames(project, asset, times?, every?, n?)` | stills of a source at source seconds and a timed contact sheet | `frames <asset> [times...] --every -n` |
 | `scenes(project, asset, threshold?)` | shot cuts in source seconds and each shot's first frame | `scenes <asset> --threshold` |

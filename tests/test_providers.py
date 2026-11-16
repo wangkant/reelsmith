@@ -1149,6 +1149,223 @@ def test_draw_prompt_wraps_any_description_in_english():
     assert zh.replace("一只猫", "").isascii() and D.STYLE_REF_NOTE not in zh
 
 
+# ------------------------------------------------------------------ draw: cut-outs
+def subject_png(path: Path, size=(1024, 1536), box=(312, 468, 712, 1068), checker=False, alpha=True) -> Path:
+    """A red block on clear ground; checker paints the 'transparency' grid instead of real alpha."""
+    from PIL import Image, ImageDraw
+    if checker:
+        img = Image.new("RGB", size, (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        for y in range(0, size[1], 32):
+            for x in range((y // 32) % 2 * 32, size[0], 64):
+                d.rectangle((x, y, x + 31, y + 31), fill=(204, 204, 204))
+    else:
+        img = Image.new("RGBA" if alpha else "RGB", size, (0, 0, 0, 0) if alpha else (250, 250, 250))
+        d = ImageDraw.Draw(img)
+    d.rectangle(box, fill=(200, 40, 30, 255) if alpha and not checker else (200, 40, 30))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, "PNG")
+    return path
+
+
+class CutPainter(FakePainter):
+    """Hands back the pictures `make(n)` paints, in order."""
+    def __init__(self, tmp: Path, make):
+        super().__init__(tmp)
+        self.make = make
+
+    def draw(self, prompt, gen_size, workdir, ref, timeout):
+        self.calls.append(dict(prompt=prompt, gen=gen_size, ref=ref, workdir=Path(workdir), timeout=timeout))
+        n = len(self.calls)
+        return D.Shot("ok", self.make(self.tmp / f"gen-{n}.png", n), 2.0, detail="done", thread="t-ok", events="{}")
+
+
+def test_cutout_asks_for_transparency_after_the_callers_words_and_trims_to_the_subject(env):
+    from PIL import Image
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p))
+    text, err = P.draw(env.project, id="cup", prompt="一只纸杯，照片", size="9:16", cutout=True, provider=painter)
+    assert not err, text
+    sent = painter.calls[0]["prompt"]
+    assert sent.startswith("一只纸杯，照片") and sent.endswith(D.CUTOUT_NOTE) and len(painter.calls) == 1
+    # 1024x1536 fits 1080x1920 at x1.0547: the 401x601 block becomes ~423x634, plus a 34 px pad each side
+    with Image.open(env.project / "assets" / "cup.png") as im:
+        assert im.mode == "RGBA" and im.size[0] < 520 and im.size[1] < 720
+        w, h = im.size
+        assert im.getpixel((0, 0))[3] == 0 and im.getpixel((w // 2, h // 2))[3] == 255
+    entry = read_project(env.project)["assets"]["cup"]
+    assert entry == {"path": "assets/cup.png", "kind": "image", "note": "一只纸杯，照片", "alpha": True,
+                     "width": w, "height": h}
+    assert "as a cut-out" in text and f"{w}x{h}" in text and "real alpha channel" in text
+    assert "% of it transparent" in text
+
+
+def test_cutout_never_crops_a_subject_wider_than_the_canvas_shape(env):
+    from PIL import Image
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, (1536, 1024), (0, 300, 1535, 700)))
+    text, err = P.draw(env.project, id="train", prompt="a long train, photo", size="9:16", cutout=True,
+                       provider=painter)
+    assert not err, text
+    with Image.open(env.project / "assets" / "train.png") as im:
+        assert im.size[0] == 1080 and im.size[1] < 400          # the whole width, scaled down, not centre-cropped
+
+
+@pytest.mark.parametrize("paint, says", [
+    (dict(alpha=False), "opaque"),
+    (dict(checker=True), "checkerboard"),
+    (dict(box=(0, 0, 1, 1)), "nothing visible"),
+])
+def test_cutout_refuses_a_picture_without_real_alpha_after_one_retry(env, paint, says):
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, **paint))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", cutout=True, provider=painter)
+    assert err and says in text and "no cut-out" in text and "nothing was saved" in text
+    assert len(painter.calls) == 2 and not (env.project / "assets" / "cup.png").exists()
+    assert "cup" not in read_project(env.project)["assets"]
+    assert [r["status"] for r in ledger_rows(env.ws) if r["tool"] == "draw"][-1] in D.NOT_CUT
+
+
+def test_cutout_takes_the_retry_when_the_first_answer_was_opaque(env):
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, alpha=n > 1))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", cutout=True, provider=painter)
+    assert not err and len(painter.calls) == 2 and read_project(env.project)["assets"]["cup"]["alpha"] is True
+
+
+@needs_ffmpeg
+def test_draw_without_cutout_is_unchanged(env):
+    from PIL import Image
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", size="9:16", provider=painter)
+    assert not err and "cut-out" not in text and "1080x1920" in text
+    assert painter.calls[0]["prompt"] == "a cup" and D.CUTOUT_NOTE not in painter.calls[0]["prompt"]
+    assert read_project(env.project)["assets"]["cup"] == {"path": "assets/cup.png", "kind": "image", "note": "a cup"}
+    with Image.open(env.project / "assets" / "cup.png") as im:
+        assert im.size == (1080, 1920)
+
+
+def test_alpha_verdict_tells_a_painted_grid_from_a_white_ground(tmp_path):
+    from PIL import Image
+    def verdict(**kw):
+        with Image.open(subject_png(tmp_path / "x.png", **kw)) as im:
+            return D.alpha_verdict(im.convert("RGBA"))
+    assert verdict() == "" and verdict(alpha=False) == "opaque" and verdict(checker=True) == "checker"
+
+
+@pytest.mark.parametrize("size", ["4096x4096", " 2000 X 3000 ", "1080×1350", "1:1", "16:9", [3000, 2000]])
+def test_cutout_never_upscales_past_the_drawn_picture(env, size):
+    from PIL import Image
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, (1024, 1024), (100, 100, 923, 923)))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", size=size, cutout=True, provider=painter)
+    assert not err, text
+    with Image.open(env.project / "assets" / "cup.png") as im:
+        assert im.size[0] <= 1024 and im.size[1] <= 1024 and im.mode == "RGBA"
+    entry = read_project(env.project)["assets"]["cup"]
+    assert (entry["width"], entry["height"]) == im.size
+
+
+def test_cutout_still_shrinks_into_a_small_size(env):
+    from PIL import Image
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, (1024, 1536), (40, 40, 983, 1495)))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", size="256x256", cutout=True, provider=painter)
+    assert not err, text
+    with Image.open(env.project / "assets" / "cup.png") as im:
+        assert max(im.size) <= 256
+
+
+@pytest.mark.parametrize("mode", ["P", "LA", "RGBA-opaque"])
+def test_cutout_reads_palette_and_grey_alpha_and_refuses_an_opaque_alpha(env, mode):
+    from PIL import Image
+    def make(p, n):
+        img = Image.open(subject_png(p)).convert("RGBA")
+        if mode == "P":
+            img = img.convert("P", palette=Image.ADAPTIVE, colors=8)
+            img.info["transparency"] = img.getpixel((0, 0))
+            img.save(p, "PNG", transparency=img.getpixel((0, 0)))
+        elif mode == "LA":
+            img.convert("LA").save(p, "PNG")
+        else:
+            img.putalpha(255)
+            img.save(p, "PNG")
+        return p
+    painter = CutPainter(env.tmp, make)
+    text, err = P.draw(env.project, id="cup", prompt="a cup", cutout=True, provider=painter)
+    if mode == "RGBA-opaque":
+        assert err and "opaque" in text and not (env.project / "assets" / "cup.png").exists()
+    else:
+        assert not err, text
+        with Image.open(env.project / "assets" / "cup.png") as im:
+            assert im.mode == "RGBA" and im.getpixel((0, 0))[3] == 0
+
+
+def test_cutout_says_when_the_subject_runs_off_the_frame(env):
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, (1024, 1536), (0, 400, 1023, 1535)))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", cutout=True, provider=painter)
+    assert not err, text
+    assert "left, right and bottom" in text and "cut off" in text
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p))
+    text, err = P.draw(env.project, id="cup2", prompt="a cup", cutout=True, provider=painter)
+    assert not err and "cut off" not in text
+
+
+def test_cutout_leaves_no_part_file_when_saving_fails(env, monkeypatch):
+    from PIL import Image
+    src = subject_png(env.tmp / "s.png")
+    out = env.tmp / "out"
+    out.mkdir()
+
+    def broken(self, fp, *a, **kw):
+        Path(fp).write_bytes(b"half")
+        raise OSError("disk full")
+    monkeypatch.setattr(Image.Image, "save", broken)
+    with pytest.raises(OSError):
+        D.cut_out(src, out / "cup.png", (1080, 1920))
+    assert list(out.iterdir()) == []
+
+
+def test_refused_cutouts_spend_tries_and_the_last_try_keeps_its_reason(env):
+    env.config(providers={"image": {"max_draws": 3}})
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p, alpha=False))
+    text, err = P.draw(env.project, id="a", prompt="a cup", cutout=True, provider=painter)
+    assert err and "opaque" in text and len(painter.calls) == 2
+    text, err = P.draw(env.project, id="b", prompt="a cup", cutout=True, provider=painter)
+    assert err and len(painter.calls) == 3 and "opaque" in text and "3 drawing tries" in text
+
+
+def test_cutout_style_reference_is_flattened_onto_a_light_ground(env):
+    from PIL import Image
+    subject_png(env.project / "assets" / "host.png")
+    env.set_project(assets={"host": {"path": "assets/host.png", "kind": "image", "alpha": True,
+                                     "width": 1024, "height": 1536}})
+    seen = []
+    class Looking(CutPainter):
+        def draw(self, prompt, gen_size, workdir, ref, timeout):
+            with Image.open(ref) as im:
+                seen.append(im.convert("RGB").getpixel((2, 2)))
+            return super().draw(prompt, gen_size, workdir, ref, timeout)
+    painter = Looking(env.tmp, lambda p, n: subject_png(p))
+    text, err = P.draw(env.project, id="cup", prompt="a cup", style_ref_asset="host", cutout=True, provider=painter)
+    assert not err, text
+    assert min(seen[0]) > 200
+
+
+def test_cutout_fields_survive_a_save_and_load_and_old_files_load(env):
+    from reelsmith import document as DOC
+    old = DOC.Asset.model_validate({"path": "assets/a.png", "kind": "image"})
+    assert old.alpha is None and old.width is None
+    new = DOC.Asset.model_validate({"path": "assets/a.png", "kind": "image", "alpha": True, "width": 400,
+                                    "height": 600})
+    again = DOC.Asset.model_validate(new.model_dump(mode="json", exclude_unset=True))
+    assert again == new and "alpha" not in old.model_dump(mode="json", exclude_unset=True)
+    with pytest.raises(Exception):
+        DOC.Asset.model_validate({"path": "assets/a.png", "kind": "image", "width": 0})
+
+
+def test_assets_listing_marks_a_cutout(env):
+    painter = CutPainter(env.tmp, lambda p, n: subject_png(p))
+    assert not P.draw(env.project, id="cup", prompt="a cup", cutout=True, provider=painter)[1]
+    text, err = P.assets(env.project)
+    row = next(r for r in text.splitlines() if r.strip().startswith("cup"))
+    assert not err and "alpha" in row and "x" in row.split("assets/cup.png")[1]
+
+
 def test_codex_failures_are_classified(tmp_path):
     def answering(final):
         def run(cmd, cwd=None, timeout=None, stdin=None, no_window=False):

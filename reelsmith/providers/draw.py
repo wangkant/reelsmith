@@ -40,7 +40,11 @@ LABELS = {"noimage": "no picture came out", "timeout": "timed out before the pic
           "auth": "the image provider is logged out", "quota": "the image provider's quota is used up",
           "badsize": "the picture came out too small", "missing": "the image provider is not installed here",
           "network": "the image provider cannot be reached",
+          "opaque": "the picture came back opaque, with no usable transparent background",
+          "checker": "the picture came back with a painted checkerboard, not a transparent background",
+          "empty": "the cut-out came back with nothing visible in it",
           "error": "an error"}
+NOT_CUT = ("opaque", "checker", "empty")
 _AUTH = re.compile(r"401 Unauthorized|not logged in|not signed in|login required|log ?in again|sign in again|"
                    r"refresh[_ ]token|token (?:has )?expired|invalid_grant|re-?authenticate", re.I)
 _QUOTA = re.compile(r"\b429\b|usage limit|rate limit|quota|too many requests|hit your (?:usage )?limit|"
@@ -58,6 +62,10 @@ CODEX_LOCKDOWN = ["--ignore-user-config", "--ignore-rules", "-s", "read-only",
                                 "goals", "tool_suggest", "skill_mcp_dependency_install")
                     for a in ("-c", f"features.{f}=false")],
                   "-c", "suppress_unstable_features_warning=true"]
+CUTOUT_NOTE = ("Isolated object on a fully transparent background (PNG with alpha channel): no ground, no shadow, "
+               "no background at all.")
+CLEAR_MIN = 0.05                # under this share of see-through pixels the alpha is not a cut-out
+CUT_PAD = 0.02                  # trim pad, as a share of the longer side
 _BLOCKED: dict[str, tuple[str, float]] = {}
 _NETWORK_FAILS: dict[str, int] = {}
 _LOG_LOCK = threading.Lock()
@@ -73,6 +81,7 @@ class Shot:
     detail: str = ""
     thread: str = ""
     events: str = ""
+    cut: dict | None = None          # a cut-out's trimmed size and transparent share
 
 
 class ImageProvider:
@@ -273,8 +282,91 @@ def fit_image(src: Path, dst: Path, size: tuple[int, int], run=run_tree, measure
     return tw, th
 
 
+def _checkerboard(img) -> bool:
+    """A painted 'transparency' grid: the border is grey in two even, distinct tones."""
+    w, h = img.size
+    band = max(2, min(w, h) // 30)
+    px = []
+    for box in ((0, 0, w, band), (0, h - band, w, h), (0, 0, band, h), (w - band, 0, w, h)):
+        raw = img.crop(box).convert("RGB").tobytes()
+        px += [raw[i:i + 3] for i in range(0, len(raw), 3)]
+    bins: dict[int, int] = {}
+    grey = 0
+    for r, g, b in px:
+        if max(r, g, b) - min(r, g, b) <= 14:
+            grey += 1
+            bins[(r + g + b) // 24] = bins.get((r + g + b) // 24, 0) + 1
+    if grey < 0.85 * len(px) or len(bins) < 2:
+        return False
+    (b1, n1), (b2, n2) = sorted(bins.items(), key=lambda kv: -kv[1])[:2]
+    return abs(b1 - b2) >= 2 and min(n1, n2) >= 0.15 * len(px) and n1 + n2 >= 0.7 * len(px)
+
+
+def alpha_verdict(img) -> str:
+    """'' when the RGBA image is a usable cut-out, else the reason (a Shot kind in NOT_CUT)."""
+    hist = img.getchannel("A").histogram()
+    n = img.width * img.height
+    if sum(hist[:16]) / n < CLEAR_MIN:
+        return "checker" if _checkerboard(img) else "opaque"
+    return "" if sum(hist[128:]) / n >= 0.005 else "empty"
+
+
+def _solid_box(img) -> tuple[int, int, int, int]:
+    return img.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox() or (0, 0, img.width, img.height)
+
+
+def cut_out(src: Path, dst: Path, size: tuple[int, int]) -> dict:
+    """Scale down to fit inside `size` (never cropped or enlarged), trim the clear margin to the subject plus a pad,
+    save as PNG with alpha. {"kind": "ok", "width", "height", "clear", "edges"} or {"kind": <why not>}."""
+    from PIL import Image
+    with Image.open(src) as im:
+        img = im.convert("RGBA")
+    why = alpha_verdict(img)
+    if why:
+        return {"kind": why}
+    box = _solid_box(img)
+    edges = [side for side, hit in (("top", box[1] == 0), ("left", box[0] == 0), ("right", box[2] == img.width),
+                                    ("bottom", box[3] == img.height)) if hit]
+    # a layer is placed at its own scale; enlarging only adds blur
+    s = min(1.0, size[0] / img.width, size[1] / img.height)
+    if s < 1 - 1e-3:
+        # premultiplied, so clear pixels' colour does not bleed into the edge
+        new = (max(1, round(img.width * s)), max(1, round(img.height * s)))
+        img = img.convert("RGBa").resize(new, Image.LANCZOS).convert("RGBA")
+        box = _solid_box(img)
+    pad = max(8, round(CUT_PAD * max(img.size)))
+    img = img.crop((max(0, box[0] - pad), max(0, box[1] - pad), min(img.width, box[2] + pad),
+                    min(img.height, box[3] + pad)))
+    clear = sum(img.getchannel("A").histogram()[:16]) / (img.width * img.height)
+    part = Path(dst).with_name(f".{Path(dst).stem}.{uuid.uuid4().hex[:6]}.part.png")
+    try:
+        img.save(part, "PNG")
+        os.replace(part, dst)
+    finally:
+        part.unlink(missing_ok=True)
+    return {"kind": "ok", "width": img.width, "height": img.height, "clear": round(clear, 3), "edges": edges}
+
+
+def _flat_ref(ref: Path, workdir: Path) -> Path:
+    """A reference with alpha laid on a light ground: its clear pixels would otherwise read as black."""
+    try:
+        from PIL import Image
+        with Image.open(ref) as im:
+            if im.mode not in ("RGBA", "LA", "PA") and "transparency" not in im.info:
+                return ref
+            img = im.convert("RGBA")
+        flat = Image.new("RGBA", img.size, (238, 238, 238, 255))
+        flat.alpha_composite(img)
+        out = workdir / "ref-flat.png"
+        flat.convert("RGB").save(out, "PNG")
+        return out
+    except (OSError, ValueError):
+        return ref
+
+
 def _ref_jpeg(ref: Path, workdir: Path) -> Path:
     """A smaller JPEG of the reference: the style survives, the upload is a tenth of the PNG."""
+    ref = _flat_ref(ref, workdir)
     jpg = workdir / "ref.jpg"
     try:
         rc, _, _, _ = run_tree([exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(ref),
@@ -351,9 +443,10 @@ def _blocked(name: str) -> str:
 
 
 @safe_tool
-def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: ImageProvider | None = None,
-         fit=fit_image, measure=image_size):
-    """(text, is_error): an original picture into assets/<id>.png, registered as an image asset."""
+def draw(project, id, prompt, style_ref_asset=None, size=None, cutout=False, *,
+         provider: ImageProvider | None = None, fit=fit_image, measure=image_size, cut=cut_out):
+    """(text, is_error): an original picture into assets/<id>.png, registered as an image asset; with cutout, an
+    isolated subject with a real alpha channel, trimmed to itself."""
     ctx = context(project)
     asset_id = check_id(id)
     prompt = str(prompt or "").strip()
@@ -367,31 +460,52 @@ def draw(project, id, prompt, style_ref_asset=None, size=None, *, provider: Imag
     provider = provider or make_provider(ctx)
     max_draws = int(cfg.get("max_draws") or 30)
     timeout = float(cfg.get("timeout_s") or TIMEOUT_S)
+    asked = f"{prompt}\n\n{CUTOUT_NOTE}" if cutout else prompt
     last = None
-    for _ in range(2):                    # one retry for a try that drew nothing
+    for _ in range(2):                    # one retry for a try that drew nothing or no real alpha
         blocked = _blocked(provider.name)
         if blocked:
             return _down(asset_id, provider.name, blocked), True
         call = _take_try(ctx, provider.name, asset_id, max_draws)
         if call is None:
+            first = f" The try before gave {LABELS.get(last.kind, LABELS['error'])}." if last else ""
             return (f"draw {asset_id!r}: this project has used its {max_draws} drawing tries "
-                    "(providers.image.max_draws); reuse a picture or build it in the editor."), True
-        last = _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout, fit, measure)
+                    f"(providers.image.max_draws); reuse a picture or build it in the editor.{first}"), True
+        last = _one_try(ctx, provider, call, asset_id, asked, gen, out_size, ref, timeout, fit, measure,
+                        cut if cutout else None)
         if last.kind == "ok":
             _reachable(provider.name)
-            reg = register_asset(ctx, asset_id, {"path": f"assets/{asset_id}.png", "kind": "image",
-                                                 "note": prompt[:200]})
+            entry = {"path": f"assets/{asset_id}.png", "kind": "image", "note": prompt[:200]}
+            if last.cut:
+                entry.update(alpha=True, width=last.cut["width"], height=last.cut["height"])
+            reg = register_asset(ctx, asset_id, entry)
+            if last.cut:
+                return (f"Drew {asset_id!r} as a cut-out: assets/{asset_id}.png, {last.cut['width']}x"
+                        f"{last.cut['height']} with a real alpha channel ({last.cut['clear']:.0%} of it transparent), "
+                        f"in {last.seconds:.0f} s.{reg}{_edge_note(last.cut['edges'])} Look at it once before "
+                        "using it."), False
             return (f"Drew {asset_id!r}: assets/{asset_id}.png, {out_size[0]}x{out_size[1]}, in {last.seconds:.0f} s."
                     f"{reg} Look at it once before using it."), False
         if last.kind in PROVIDER_DOWN:
             _block(provider.name, last.kind)
             return _down(asset_id, provider.name, last.kind), True
     why = LABELS.get(last.kind, LABELS["error"]) if last else LABELS["error"]
+    if last and last.kind in NOT_CUT:
+        return (f"draw {asset_id!r}: no cut-out ({why}); nothing was saved. Ask again for one plain subject, or draw "
+                "it without cutout as a full picture."), True
     return (f"draw {asset_id!r}: nothing usable ({why}). Rewrite the prompt and try again, or build the picture "
             "in the editor."), True
 
 
-def _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout, fit, measure) -> Shot:
+def _edge_note(edges: list[str]) -> str:
+    if not edges:
+        return ""
+    sides = edges[0] if len(edges) == 1 else f"{', '.join(edges[:-1])} and {edges[-1]}"
+    return (f" The subject touches the picture's {sides} edge{'s' if len(edges) > 1 else ''}: it may be cut off "
+            "there, so keep that side out of view or behind something.")
+
+
+def _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout, fit, measure, cut=None) -> Shot:
     """One provider try, logged and counted; the picture lands in assets/ when it is good."""
     workdir = Path(tempfile.gettempdir()) / "reelsmith-draw" / f"{asset_id}-{uuid.uuid4().hex[:8]}"
     workdir.mkdir(parents=True, exist_ok=True)
@@ -406,7 +520,14 @@ def _one_try(ctx, provider, call, asset_id, prompt, gen, out_size, ref, timeout,
                 shot.kind, shot.detail = "badsize", f"{w}x{h}; {shot.detail}"
             else:
                 ctx.assets_dir.mkdir(parents=True, exist_ok=True)
-                fit(shot.png, ctx.assets_dir / f"{asset_id}.png", out_size)
+                if cut is None:
+                    fit(shot.png, ctx.assets_dir / f"{asset_id}.png", out_size)
+                else:
+                    made = cut(shot.png, ctx.assets_dir / f"{asset_id}.png", out_size)
+                    if made["kind"] == "ok":
+                        shot.cut = made
+                    else:
+                        shot.kind, shot.detail = made["kind"], f"{LABELS[made['kind']]}; {shot.detail}"
     except Exception as exc:  # noqa: BLE001 - the try is still logged and counted
         shot = Shot("error", detail=f"{type(exc).__name__}: {exc}", thread=shot.thread if shot else "",
                     events=shot.events if shot else "",

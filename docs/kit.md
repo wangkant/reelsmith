@@ -213,7 +213,8 @@ unknown keys (`"additionalProperties": false`) so a typo is caught at edit time.
 The stage kit (`renderer/src/kit/stage/`, exported from `@reelsmith/kit` by name) is for performance films: films in
 which every narration line is acted out in code by drawn objects and torn photo cut-outs, instead of laid over a
 still or a video. `examples/performance/` is a complete one; the manual's "Performance films" section gives the track
-layout.
+layout. Its second manner, "Layered photographs" (the last section), builds the same kind of world from generated
+photographs that move as layers; `examples/layers/` is one.
 
 ### The form
 
@@ -510,3 +511,132 @@ picture whole on a dark ground under a labelled grid, every fifth line yellow, w
 coordinates on all four edges (fractions when the size is unknown). Preview it once per picture, read the outline's
 points off it (10 to 14 points are enough), write them into the scene as `Pt[]` and remove the clip. It is a
 tracing aid, not film content; its labels are not measured as film text.
+
+### Layered photographs
+
+The second manner of the stage kit: every picture on screen is a generated photo-real image, and code moves them
+as separate layers. One full-frame **plate** is the place; the things that act are **cut-outs with a true alpha
+channel** standing in it; parts of the plate traced by hand are drawn again in front, so a thing passes behind a
+tree line, a door jamb or a tunnel mouth. Light, air, lens and motion are added in code: shade and tint to sit an
+object in the plate's light, depth of field, haze, motes, rays, refraction that bends the picture, a region of a
+picture that deforms, and joins that travel from one scene into the next. `examples/layers/` is a complete film.
+
+Use it when the subject is a real place or a real object; use the drawn sets when the idea is abstract (money, a
+rule, a count) or the picture would need people's faces. The standard is detail and plausibility, not photo-realism
+for its own sake: every thing where it belongs, sizes, light and angles that agree between layers, and motion that
+follows how the thing behaves (a balloon drifts and bobs, a flame flares and settles, a door swings on its hinge).
+
+**Plan the pictures of a scene** before drawing any:
+
+1. One **plate** per place, full frame, in the film's aspect (draw at 9:16 or 2:3): the place with nothing that will
+   move in it. Leave room where things will travel, and ask for the parts things pass behind by name ("a continuous
+   line of near treetops across the lower middle of the frame").
+2. Each thing that moves, lights up or deforms as its own **cut-out**: one object, its angle and light matching the
+   plate ("lit by low morning sun from the right"). Nothing that must move belongs in the plate.
+3. Write down what passes behind what: each answer is a front polygon you will trace on the plate.
+4. A second place (inside the object, a close-up) is its own plate; joins carry the camera into it.
+
+Three to five pictures carry 10 to 15 s. Keep plates near 1024 px wide and cut-outs at the size they are seen;
+WebP keeps both small (`.webp` with alpha works as an image asset).
+
+**Ask for them**: a plate is an ordinary `draw`. A cut-out is `draw(project, id, prompt, cutout=true)`, which asks
+for an isolated object with a transparent background and trims it. Look at every cut-out over a coloured ground
+before using it: a halo, a cast shadow or a cropped edge shows at once.
+
+**Trace** on an `AssetGrid` preview of the plate (`{"asset": "<id>"}`, 20 columns for detail): the front polygon
+along the edge that hides things, closed down round the frame's bottom (10 to 25 points); a travel line along the
+ground or the path (2 to 4 points); the points effects start from (a burner, a vent, the sun). All in the picture's
+own pixels; inside a `Plate`, `usePlate().at(pt)` (or `coverFit(...).at(pt)` outside) turns them into stage px.
+
+| export | |
+|---|---|
+| `<Plate src imgW? imgH? depth = 0.9 pad = 0.06 focus? drift = 0 sway? fronts? feather = 3 blur = 0 photo? f? children>` | the plate on its own parallax layer, covering the frame with `pad` to spare. `drift` is a slow breathing move in px; `sway` (type `Sway`) `{y, amp = 1.2, hz = 0.35, feather = 60, gust?, gustAmp = 3}` bends the strip below picture row `y` (grass, water) with an optional gust at a frame. Children stand in the plate (stage px of its layer); `fronts` (polygons in picture px, type `Pt[][]`) are drawn again over them with a soft edge |
+| `usePlate()` | the enclosing plate's `Fit`: `{s, x, y, w, h, at(pt)}` |
+| `<Occluder src poly pad focus feather filter>` | one front placed by hand, in a `Layer` of the plate's depth with the plate's `pad` and `focus` |
+| `<Photo src imgW? imgH? x y w? s = 1 sy = 1 anchor = [0.5, 1] r = 0 flip depth? blur smear smearAng shade tint tintA haze hazeColor shadow shadowW = 0.8 lift opacity>` | a picture standing with its `anchor` (fractions of the picture) on (x, y). `depth` gives it its own parallax layer; inside a `Layer` or `Plate` it takes theirs. Depth of field comes from the enclosing `Lens`; `smear` is motion blur in px along `smearAng`; `shade` darkens, `tint` at `tintA` multiplies in the plate's light, `haze` mixes toward the air; `shadow` is a soft contact shadow where it stands; `sy` stretches it from the anchor |
+| `<Travel src line at dur sizes? ease = "inOut" smearK = 0.7 maxSmear = 60 shadeAt? turn f ...Photo props>` | a photo moving along `line` (stage px) from frame `at` for `dur`: perspective scale `sizes` [start, end], a smear that grows with its speed (one blur along the motion, never ghost copies), its shadow along with it, `shadeAt(x, y)` darkening it where it is, `turn` to follow the line's direction |
+| `travelAt(line, f, at, dur, {sizes, ease}?)`, `pointAt(line, t)` | the state the `Travel` draws: `{x, y, ang, t, s, speed}` (type `TravelState`, options `TravelOptions`; `ease` is `linear in out inOut` or a function, type `Ease`); a point and direction at a fraction of a line |
+| `shadeRamp(from, to, max = 0.6)` | a `shadeAt` function: 0 at `from`, `max` at `to` and beyond (into a doorway's shade) |
+| `coverFit(imgW, imgH, w, h, pad = 0.06, focus = [0.5, 0.5])` | how a plate covers the frame: a `Fit` |
+| `pictureSize(src, imgW?, imgH?)`, `lightMatrix(shade, tint, tintA, haze, hazeColor)`, `<Hold src>`, `<SvgImage key href ...>` | a picture's size from its ref; the colour matrix `Photo` lights with; a hidden `<Img>` that loads a picture; an SVG `<image>` that holds the render until it has decoded (key it by `href`; `Photo` and fronts use it) |
+| `<Haze y0 y1 tail = 0.35 color amount = 0.35 drift = 6 seed f>` | air in a band: clear at y0, thickest at y1, gone again past it, with wisps drifting sideways. Put it among a plate's children (behind the cut-outs that stand in front of the distance) |
+| `<Motes box n = 40 size = 4 wind = [10, -4] color opacity light? seed f>` | soft specks of dust or pollen that drift and glint, brighter near `light`. In a near `Layer` (depth over 1, a little blur) they give the frame depth |
+| `<Rays x y ang = 115 spread = 34 n = 6 len? color strength = 0.35 seed f>` | shafts of light from (x, y) falling at `ang` degrees, added as light, breathing slowly |
+| `<Refract kind = "heat" \| "front" \| "ripple" area r = 0 width = 60 strength = 14 grain = 60 speed = 120 push = 0.03 seed f>` | bends what it wraps: `heat` scrolls noise up through the ellipse `area` [cx, cy, rx, ry] (shimmer over a flame, a road, a roof); `front` bends a ring of radius `r` (grow `r` by the frame: a pressure wave); `ripple` three rings. `area`, `r` and `width` are frame px (`onScreen` maps a stage point) |
+| `<Warp area feather = 0.5 origin? sx sy rot skew dx dy>` | deforms one soft region of what it wraps: bulge (`sx`, `sy` over 1), squash, bend (`skew`, `rot` around `origin`), shake (`dx`, `dy` from `shake`) |
+| `softEllipse(area, feather = 0.45)`, `softRing(cx, cy, r, width, squash = 1)`, `Area` | the CSS masks `Warp` and `Refract` use |
+| `hazeBand(y0, y1, tail = 0.35)`, `swayAngle(f, fps, amp, hz, gust?, gustAmp)` | the band and gradient stops `Haze` draws (either way up); the skew a plate's `sway` strip takes at a frame |
+| `<Streak src box round pos speed dir = "left" zoom = 1.15 align = 0.5 blurK = 0.8 maxBlur = 70>` | scenery running past an opening (a window): the picture repeats mirrored, `pos` is the distance run (`distanceAt(f, speed)`), the blur follows `speed` |
+| `<Pane box round dark reflect reflectA = 0.5 sheen = 0.1>` | glass over an opening: `dark` 0..1 (a tunnel), mirroring `reflect` (any node in stage px) more as it darkens |
+| `distanceAt(f, speed)` | distance run by frame f at `speed(frame)` px per frame |
+| `<Lens focus = 1 aperture = 0 grade? vignette = 0.35 grain = 0.05 kick? handheld = 0 seed f>` | the camera body around a whole world (the `Stage` inside it sets `grain={0} light={0} vignette={0}`): depth of field (`aperture` px of blur per unit of depth from `focus`), one `grade` `{lift, gamma, gain, tint, tintA}`, static grain, impact `kick` `{at, amp = 22, dur = 14, fringe = 6}` (a shake with a brief colour fringe; one or a list) and a hand-held drift in px. Types `Grade`, `Kick`, `LensState` |
+| `useLens()`, `dofBlur(depth, focus = 1, aperture = 10, max = 40)`, `useDepth()` | the lens's focus and aperture; the blur for a depth; the enclosing `Layer`'s depth |
+| `handheld(f, amp = 6, seed, fps)` | `[dx, dy, roll]`: the drift `Lens` uses |
+| `<Join a b at len = 14 kind = "push" \| "whip" \| "match" hole? round oval feather dir from to f>` | travels from scene `a` into scene `b` instead of cutting. `push`: into `hole` [x, y, w, h] of `a` (frame px; `oval` for a soft oval), where `b` is already seen, until it fills the frame. `whip`: a fast pan toward `dir` with real motion blur. `match`: the shape `from` [x, y, size] in `a` moves onto `to` in `b` while `b` dissolves in |
+| `onScreen(cam, depth, w, h, pt)`, `lookAt(pt, depth, w, h)`, `joinAt(f, at, len)` | where a stage point of a layer lands in the frame (and its scale), the camera x, y that centres it, a join's eased progress |
+
+**A complete scene.** Line 1 of `examples/layers/` (`library/components/balloon/valley.tsx`): the valley plate,
+the balloon standing behind the treetops, warm air bending above its crown, mist, rays and motes, the camera
+pushing in; `Balloon.tsx` wraps the scenes in one `Lens` and joins them.
+
+```tsx
+export function Opening({ f, a, shot, lighter }: { f: number; a: Assets; shot: Shot; lighter: number }) {
+  const { w, h } = useClip();
+  const fit = coverFit(PLATE[0], PLATE[1], w, h, PAD);
+  const p = shot.at(f);                                       // the balloon's foot: it bobs and lifts on "lighter"
+  const crown = onScreen(camAt(shot.keys, f), DEPTH, w, h, onBalloon(p.x, p.y, shot.bw, CROWN));
+  const heat = 0.6 + 0.4 * prog(f, lighter - 6, 20);
+  const s = crown.s * (shot.bw / 300);
+  return (
+    <Stage cam={shot.keys} grain={0} light={0} vignette={0} f={f}>
+      <Refract kind="heat" area={[crown.x, crown.y - 110 * s, 80 * s, 120 * s]} strength={7 * heat} grain={26} speed={70} f={f}>
+        <Plate src={a.valley} depth={DEPTH} pad={PAD} drift={3} fronts={[TREES]} feather={4}
+          sway={{ y: GRASS_Y, amp: 1.1, feather: 70 }} f={f}>
+          <Haze y0={fit.at([0, MIST[0]])[1]} y1={fit.at([0, MIST[1]])[1]} amount={0.32} drift={10} f={f} />
+          <Photo src={a.balloon} x={p.x} y={p.y} w={shot.bw} tint="#FFE3BC" tintA={0.25} haze={0.12} hazeColor="#E8EEF2" />
+        </Plate>
+      </Refract>
+      <Air f={f} w={w} h={h} />{/* Rays on the plate's layer, Motes on a near one */}
+    </Stage>
+  );
+}
+```
+
+and the film around its three scenes:
+
+```tsx
+<Lens handheld={4} vignette={0.32} grain={0.04} kick={[{ at: lit + 1, amp: 9, dur: 12, fringe: 5 }]}
+  grade={{ lift: 0.02, gamma: 1.03, tint: "#FFDDB0", tintA: 0.06 + 0.1 * warm }}>
+  {f < whip ? (
+    <Join kind="push" oval feather={0.3} at={push} len={18} hole={envelopeOnScreen(shot, push, w, h)}
+      a={<Opening f={f} a={a} shot={shot} lighter={lighter} />} b={inside} />
+  ) : (
+    <Join kind="whip" dir="left" at={whip} len={12} a={inside} b={<Rise f={f} a={a} start={whip + 6} end={dur} mist={mist} />} />
+  )}
+</Lens>
+```
+
+**What makes it look fake**, and the fix:
+
+- **Effects that read as graphics**: drawn rings, outlines, arrows or flat dashes over a photograph. Show air as the
+  picture bending (`Refract`), light as light added (`Rays`, a glow with `mixBlendMode: "screen"`), dust as soft
+  points (`Motes`).
+- **A sticker sliding**: a cut-out moving at constant size with no shadow, no blur and the wrong light. Give it a
+  `shadow` where it stands, `tint` from the plate, `shade` where it passes into shadow, perspective `sizes` and the
+  `Travel` smear; let it pass behind a front.
+- **Hard cuts** between places: use a `Join` (push into the thing the next scene is inside, whip with the
+  camera's direction, match a shape).
+- **Nothing deforming**: something inside a picture should give: a flame that flares (`sy`), fabric that swells, a
+  pane that bows (`Warp`), a shake on impact (`Lens` `kick`).
+- **A still plate with a push**: the plate needs life of its own (`drift`, `sway`, `Haze` wisps) and something must
+  happen in the first second: start the camera already moving and the subject already in frame.
+
+**Cost.** The plate, fronts and cut-outs are images under CSS transforms, cheap to draw. An effect costs a second
+draw of what it wraps (`Refract`, `Warp`, a `sway` strip) or a filter over its area (`Haze` wisps, `Rays`, the
+`Lens` grade and fringe, a `Photo` that is shaded, tinted, hazed or blurred). Every effect is free when idle: at
+strength, amount, opacity or `n` 0, an identity `Warp`, a `sway` of `amp` 0, a neutral `Photo` and a `Join`
+outside its frames draw what they wrap once with no filter; a `Lens` adds no fringe with no kick running, no depth
+blur at `aperture` 0 and no grain at `grain` 0. So give an effect strength only around its word, wrap the smallest
+subtree that must bend, and keep one or two active at a time. The example renders 12.2 s at 1080 x 1920 as a
+full-size draft in about a minute, 5 s per second of film; `Rays` and the lens grade each cost 4 to 5 s of that,
+both heat `Refract`s or the haze wisps 2 s each.

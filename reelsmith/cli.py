@@ -93,6 +93,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--style-ref", default="", dest="style_ref_asset")
     p.add_argument("--size", default="", help="9:16, 2:3, 3:4, 4:5, 1:1, 4:3, 3:2, 16:9 or WxH pixels "
                                               "(default: the aspect nearest the canvas)")
+    p.add_argument("--cutout", action="store_true", help="an isolated subject with a real alpha channel, trimmed")
     p = proj(cmd("animate", tools.animate))
     p.add_argument("id")
     p.add_argument("image_asset")
@@ -193,7 +194,7 @@ def _call(args) -> tools.ToolResult:
     if c == "capture":
         return tools.capture(args.project, args.url, args.id, args.match, args.viewport)
     if c == "draw":
-        return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size)
+        return tools.draw(args.project, args.id, args.prompt, args.style_ref_asset, args.size, args.cutout)
     if c == "animate":
         return tools.animate(args.project, args.id, args.image_asset, args.motion, args.seconds, args.camera)
     if c in ("import", "import_asset"):

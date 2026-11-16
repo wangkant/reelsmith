@@ -343,6 +343,8 @@ def _describe(ctx: Context, asset_id: str, entry: dict, tracks) -> str:
         size = header_size(path)
         if size:
             facts.append(f"{size[0]}x{size[1]}")
+        if entry.get("alpha"):
+            facts.append("alpha")
     elif kind in ("video", "audio") and shutil.which("ffprobe"):
         try:
             _, _, dur = _streams(path)

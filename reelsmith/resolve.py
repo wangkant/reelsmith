@@ -1613,6 +1613,8 @@ class _Window:
                 size = image_size(path)
                 if size:
                     facts.append(f"{size[0]}x{size[1]}")
+                if a.alpha:
+                    facts.append("alpha")
             elif a.kind in ("video", "audio"):
                 d = media_duration(path)
                 if d:

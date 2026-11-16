@@ -928,14 +928,18 @@ def capture(project: str, url: str, id: str, match: str = "", viewport: str = ""
 
 
 @tool
-def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "") -> str:
+def draw(project: str, id: str, prompt: str, style_ref_asset: str = "", size: str = "", cutout: bool = False) -> str:
     """Generate an original image asset `id` from `prompt` (optionally in the style of an image asset). size: an
     aspect "9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9" (default: the one nearest the project's canvas),
-    or pixels "WxH" with sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes)."""
+    or pixels "WxH" with sides 256-4096. Paid or rate-limited depending on the provider; slow (minutes).
+    cutout=true: one isolated subject on a real transparent background, scaled down into size (never enlarged) and
+    trimmed to itself."""
     if not (prompt or "").strip():
         raise ToolInputError("prompt is empty: describe the picture")
+    if not isinstance(cutout, bool):
+        raise ToolInputError("cutout must be true or false")
     return _provider("draw", _project(project), id=_id_arg(id), prompt=prompt,
-                     style_ref_asset=style_ref_asset or None, size=size or None)
+                     style_ref_asset=style_ref_asset or None, size=size or None, cutout=cutout)
 
 
 @tool
