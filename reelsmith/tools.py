@@ -79,7 +79,7 @@ def tool(fn):
     return _logged(fn.__name__, wrapper)
 
 
-UNLOGGED = {"manual", "notes", "library", "describe", "assets"}     # read-only chatter
+UNLOGGED = {"manual", "notes", "library", "describe", "assets", "stock"}     # read-only chatter
 ACTIVITY_LOG = ".history/activity.jsonl"
 ACTIVITY_KEEP = 1000
 ACTIVITY_TEXT = 4000
@@ -1105,16 +1105,14 @@ def parallax(project: str, id: str, asset: str, seconds: float, move: dict, fps:
 
 @tool
 def sound(project: str, id: str, kind: str, seconds: float, seed: int | None = None, gain_db: float = 0) -> str:
-    """A sound effect or ambience as audio asset `id`, synthesised on this machine with ffmpeg (free, about a
-    second). Beds (stereo, 2-120 s, loop without a seam, levelled to -24 LUFS): room (quiet indoor tone), street
-    (distant traffic passing), wind (gusting outdoor air), rain (steady falling rain), kitchen (hood hum, sizzle),
-    fire (roar with crackles), water (babbling flowing stream), crowd (far wordless murmur), night (insects, night
-    air). One-shots (mono, 0.05-8 s, peak -3 dBTP): whoosh (fast air pass), thump (low soft impact), tick (tiny
-    sharp click), pop (short bright pop), sizzle (hot fat burst), crackle (dry snapping bits), pour (liquid pouring
-    gurgle), drip (single water drop), steam (hiss fading out), tear (paper or skin), clink (glass or metal),
-    shutter (camera shutter click). The same seed gives the same sound (default: from the id); gain_db shifts the
-    level, never past -1 dBTP. Reports loudness, peak, the low/mid/high power split (nobody hears it) and a clip
-    ready for edit."""
+    """A sound effect or ambience as audio asset `id`, synthesised on this machine with ffmpeg (free, about a second).
+    Beds (stereo, 2-120 s, loop without a seam, levelled to -24 LUFS): room, street, wind, rain, kitchen, fire, water,
+    crowd, night, office, cafe, market, forest, sea, train. One-shots (mono, 0.05-8 s, peak -3 dBTP, held tones lower):
+    whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter, boing, plop, ding, chime, buzz,
+    coin, register, poof, splat, zip, slide_up, slide_down, squeak, knock, page, stamp, type, heartbeat, zap, sparkle,
+    drum, cymbal, badum, footsteps (an unknown kind lists what each sounds like). The same seed gives the same sound
+    (default: from the id); gain_db shifts the level, never past -1 dBTP. Reports loudness, peak, the low/mid/high power
+    split (nobody hears it) and a clip ready for edit."""
     text, is_error = _mod("sound").sound(_project(project), progress=_progress_of_call(), id=_id_arg(id), kind=kind,
                                          seconds=seconds, seed=seed, gain_db=gain_db)
     return ToolResult(str(text), not is_error)
@@ -1136,6 +1134,50 @@ def import_asset(project: str, id: str, source: str, kind: str = "") -> str:
 def assets(project: str) -> str:
     """The project's assets with kinds, sizes and durations."""
     return _provider("assets", _project(project))
+
+
+# ------------------------------------------------------------------ stock (the workspace's reusable pictures)
+def _stock(name: str, *args, **kwargs) -> ToolResult:
+    S = _mod("stock")
+    try:
+        result = getattr(S, name)(*args, **kwargs)
+    except S.StockError as exc:
+        raise ToolInputError(str(exc)) from None
+    except _mod("providers.config").ProviderError as exc:
+        return _fail(str(exc))
+    return ToolResult(result[0], not result[1]) if isinstance(result, tuple) else _ok(result)
+
+
+@tool
+def stock(project: str, kind: str = "", name: str = "") -> str:
+    """The workspace's stock pictures every film can reuse (library/stock: poses with their twins, sets as layers,
+    props), in its own look, and the catalogue names not yet in stock, by kind. `kind` pose, set or prop lists one
+    kind with what each catalogue item is. `name` ("pose:shrug") shows one item in full: its files and meta, or the
+    pictures take would draw for it. Read it before drawing a pose, a place or a thing: taking is cheaper."""
+    return _stock("listing", _project(project), kind, name)
+
+
+@tool
+def take(project: str, items: list[str]) -> str:
+    """Bring stock items into this project as image assets: items like ["pose:shrug", "set:kitchen", "prop:coin"]. A
+    pose comes with its twins (<id>, <id>_shut, <id>_blink, <id>_half when kept), a set as <id>_<layer>, a prop as
+    <id>. An item not in stock but in the catalogue is drawn first in the workspace's look (library/stock/look.json):
+    a pose from the model sheet, then its closed-mouth twin and the blink of that (3 draws); a set's plate, then its
+    middle piece matched to it; a prop as a cut-out; counted and reported as draw_many does, then kept in stock for
+    every later film. A failed twin is reported; the pose works without it. Ends with the poses manifest (feet,
+    twins), each set's layer order and the clip's pics."""
+    items = _json_arg(items, "items")
+    return _stock("take", _project(project), items)
+
+
+@tool
+def keep(project: str, ids: list[str], kind: str, what: str = "", name: str = "", replace: bool = False) -> str:
+    """Save pictures you drew in this project into the workspace's stock, so later films take them. kind "pose": each
+    id a pose cut-out, its twins found by name (<id>_shut, _half, _blink, _blink_open); "prop": each id a prop; "set":
+    ids are one set's layers back to front (cut-out layers after the first stand in front of the figure), `name` its
+    stock id (default: the layers' shared "<name>_" prefix). `what`: one line on what it is (default: the catalogue's
+    or the asset's note). An item already in stock is refused unless replace=true."""
+    return _stock("keep", _project(project), _json_arg(ids, "ids"), kind, what, name, bool(replace))
 
 
 # ------------------------------------------------------------------ footage (looking at sources)
@@ -1203,6 +1245,6 @@ def transcribe(project: str, asset: str, language: str = "", prompt: str = "") -
 
 TOOLS = {f.__name__: f for f in (manual, describe, new_project, edit, undo, redo, check, library, preview, render,
                                  review, export_captions, speak, capture, draw, draw_many, animate, tween, parallax,
-                                 sound, import_asset, assets,
+                                 sound, import_asset, assets, stock, take, keep,
                                  probe, frames, scenes, silences, transcribe, notes, note, typecheck, add_package,
                                  run_script)}

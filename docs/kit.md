@@ -264,11 +264,12 @@ blinkAt(f, seed = "blink", every = [2.5, 5], len = 3, fps = 30) → boolean
 checkTwins(poses: Record<string, Pose>) → void
 <Cracks x, y, at = 0, len = 6, p?, clip?: string | [n, n, n, n], n = 7, reach = 320>
 <DustPuff x, y, at, w = 260, n = 4, len = 22, color = "#EFE3CC">
-faceAt(pose: Pose, talking: boolean, blinking: boolean) → Asset
+faceAt(pose: Pose, talking: boolean | Mouth, blinking: boolean) → Asset
 <Framing cuts: FramingCut[], scene?: [n, n], children?: ReactNode>
 framingAt(cuts: FramingCut[], f, w, h, scene?: [n, n]) → { x: number; y: number; z: number }
 <LineStyle children?: ReactNode, ...LineStyleValue>
-<Performer poses: Record<string, Pose>, beats: Beat[], x, y, h, flip = false, level?: ((f: number) => number), open = 0.14, hold = 0.07, blinks = [], autoBlink = true, blinkEvery = [2.5, 5], blinkLen = 3, nudge?: ((f: number) => Nudge), ...ActOptions>
+mouthAt(level: number[] | ((f: number) => number), f, three = true, o = {}) → Mouth
+<Performer poses: Record<string, Pose>, beats: Beat[], x, y, h, flip = false, level?: ((f: number) => number), open = 0.14, hold = 0.07, wide?, narrow?, blinks = [], autoBlink = true, blinkEvery = [2.5, 5], blinkLen = 3, nudge?: ((f: number) => Nudge), ...ActOptions>
 <PopMark x, y, at, kind = "!", size = 170, len = 36, r = 10, color?: string>
 poseBox(pose: Pose, h, scale = 1, who = "Performer") → { w: number; hh: number; fx: number; sole: number; head: number; s: number }
 <PoseSheet poses: Record<string, Pose>, ids?: string[], h, y?, show = "src">
@@ -286,9 +287,73 @@ type ActOptions = {antic?, anticSquash?, anticLean?, anticDip?, settle?, overSqu
 type Beat = {at, pose: string, dir?, scale?}
 type FramingCut = {at, x, y, z}
 type LineStyleValue = {color: string, weight, paper: string, spark: string}
+type Mouth = 0 | 1 | 2
+type MouthOptions = {open?, hold?, wide?, narrow?}
 type Nudge = {dx?, dy?, rot?, sy?}
-type Pose = {src: Asset, shut?: Asset, blink?: Asset, blinkOpen?: Asset, scale?, feet?, imgW?, imgH?, inset?: [n, n]}
+type Pose = {src: Asset, shut?: Asset, half?: Asset, blink?: Asset, blinkOpen?: Asset, scale?, feet?, imgW?, imgH?, inset?: [n, n]}
 type Toss = {x, y, r, sx, sy, t, landed: boolean}
+// kit/stage/craft.tsx
+bakedAt(data: T[], f) → T
+<Boil amount = 3, grain = 40, box?: [n, n, n, n], every = 2, drawings = 3, children?: ReactNode>
+boilSeed(f, seed = 1, every = 2, drawings = 3) → number
+<Brush line: string | Pt[], p = 1, size?, thinning = 0.6, taper = 0.6, color?: string, opacity?>
+brushPressure(t, taper = 0.6) → number
+<Morph from: string, to: string, p, fill = "none", stroke?: string | false, weight?, maxSegmentLength = 6>
+morphAt(from: string, to: string, p, maxSegmentLength = 6) → string
+partOf(pts: Pt[], p) → Pt[]
+posesFrom(cast: PoseSpec[], assets: Record<string, unknown>) → Record<string, Pose>
+ramp(light: string, dark: string, steps = 5) → string[]
+sampleLine(line: string | Pt[], gap) → Pt[]
+<Smear pos: (f: number) => Pt, lines = 3, children?: ReactNode, ...SmearOptions>
+smearAt(pos: (f: number) => Pt, f, o = {}) → { x: number; y: number; dx: number; dy: number; speed: number; ang: number; stretch: number }
+useBaked(data: T[], f?) → T
+usePoses(cast: PoseSpec[], assets: Record<string, unknown>) → Record<string, Pose>
+walkAt(f, o: WalkOptions) → { x: number; k: number; dy: number; sy: number; moving: boolean; dur: number }
+<Walker drawings: (Asset | Pose)[], y, h, feet?, flip?: boolean, ...WalkOptions>
+type PoseSpec = {id: string, feet?, scale?, inset?: [n, n], twins?: Twin[]}
+type SmearOptions = {fast?, max?, r?}
+type Twin = "shut" | "half" | "blink" | "blinkOpen"
+type WalkOptions = {at, dur?, stride?, x0, x1, step?, bob?, squash?, h}
+// kit/stage/marks.tsx
+<AngerVein x, y, at, len = 45, size = 90, color = "#E8443A", seed?: string, beat = 10>
+<DizzyStars x, y, at, len = 60, size = 260, color?: string, seed?: string, n = 3, speed = 0.16>
+<FocusLines x, y, w, h, at, len = 60, cx?, cy?, n = 72, inner = 0.6, width = 0.022, color?: string>
+focusLinesAt(f, at, len, area: FocusArea, o = {}) → Pt[][]
+<GloomLines x, y, at, len = 60, size = 220, color?: string, n = 7, reach = 300, cloud = "#6B6577">
+<Hearts x, y, at, len = 60, size = 56, color = "#FF6F91", every = 9, life = 30, rise = 240, spread = 110>
+<IdeaBulb x, y, at, len = 45, size = 150, color?: string, seed?: string, rays = 8, click = 4>
+<ImpactFlash x, y, w, h, at, len = 3, cx?, cy?, n = 40>
+<MusicNotes x, y, at, len = 90, size = 80, color?: string, every = 12, life = 38, rise = 260>
+<Poof x, y, at, len = 22, size = 300, color?: string, n = 7>
+popAt(j, squash = 0.16) → [n, n] | null
+<ShockLines x, y, at, len = 24, size = 170, color?: string, n = 9, arc = 220>
+spawnsAt(f, at, len, every, lifeLen, max = 99) → Spawn[]
+<Sparkles x, y, at, len = 60, size = 46, color?: string, n = 5, r = 150>
+<Tears x, y, at, len = 60, size = 40, color = "#9FD8F2", kind = "stream", gap = 140, fall = 260>
+<Zzz x, y, at, len = 90, size = 70, color?: string, seed?: string, every = 16, life = 44, rise = 200>
+type FocusArea = {x, y, w, h}
+type Spawn = {i, age, k}
+// kit/stage/marks-air.tsx
+<Bubbles x, y, w, h, at, len = Infinity, n = 14, size = 70, color?: string, speed = 5, wobble?>
+<Confetti x, y, w, h, at, len = Infinity, n = 60, size = 34, colors = CONFETTI, speed = 7, sway = 30>
+fallAt(f, at, len, area: AirArea, o = {}) → Fall[]
+<Petals x, y, w, h, at, len = Infinity, n = 26, size = 46, kind = "petal", colors?: string[], speed = 3.2, sway = 70, slant = 0.35>
+<Rain x, y, w, h, at, len = Infinity, n = 70, size = 70, color?: string, speed = 46, slant = 0.18, splash = true>
+riseAt(f, at, len, area: AirArea, o = {}) → Rise[]
+<Snow x, y, w, h, at, len = Infinity, n = 46, size = 26, color?: string, speed = 2.6, sway = 40>
+type AirArea = {x, y, w, h}
+type Fall = {i, x, y, cycle, j, seed, splash: { x: number; age: number } | null}
+type FallOptions = {n?, speed?, slant?, sway?, swayPeriod?, pad?, splashLen?, seed?: string}
+type Rise = {i, x, y, r, pop: number | null}
+// kit/stage/marks-board.tsx
+<ChalkBoard x, y, w, h, color = "#2F4A3C", frame = "#9A6A3F", stand = false, children?: ReactNode>
+chalkLine(a: Pt, b: Pt, seed = "chalk", wobble = 0.012) → string
+<ChalkLine from: Pt, to: Pt, wobble?, ...ChalkPathProps (without d)>
+<ChalkPath d: string, p?, at = 0, len = 20, width?, color = CHALK>
+<ChalkText x, y, text: string, p?, at = 0, len = 30, size?, font = "sans", weight = 700, anchor = "start", color = CHALK>
+<SpeechBubble x, y, w, h, tail = null, at, len = Infinity, size?, color?: string, children?: ReactNode, shape = "round">
+<ThoughtBubble x, y, w, h, tail = null, at, len = Infinity, size?, color?: string, children?: ReactNode, bumps = 11>
+writeAt(text: string, p) → number[]
 ```
 
 <!-- exports:end -->
@@ -487,10 +552,12 @@ needs no photographs, depth, `tween` or `parallax`.
 
 1. **One model sheet** fixes the design. **Every key pose** is a cut-out drawn with `style_ref_asset` = the sheet,
    head to feet, the same outfit named in every prompt; one pose per attitude (explain, doubt, shock, smug, shrug, think).
-   draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose.
+   draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose. Read `stock(p)` first:
+   kept poses, sets and props cost nothing to take ("Stock", below).
 2. **Twins**, each registered onto its pose's canvas: `draw(p, "pA_shut", "the mouth is closed in a small smile",
    twin_of="pA")`; for blinks `draw(p, "pA_blink", "the eyes are shut", twin_of="pA_shut")` (eyes shut, mouth
-   shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). Say "mouth" or "eyes" in the
+   shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). A third mouth, optional:
+   `draw(p, "pA_half", "the mouth is slightly open", twin_of="pA")` as the pose's `half`. Say "mouth" or "eyes" in the
    prompt: only that part is taken from the redraw, whole and with a soft edge, lined up on its surroundings; fur,
    sleeves and outline that the redraw wobbled stay the base's, so nothing flickers when the two swap. The report
    gives the patched box, how far down the figure it sits, and the regions left as the base: a box that sits low
@@ -498,11 +565,15 @@ needs no photographs, depth, `tween` or `parallax`.
    eye, or the face around it is another drawing) is another pose: draw it again, or use it as a pose of its own
    with its own twins. Look at each twin beside its pose once, enlarged at the mouth. The Performer refuses a twin
    whose pixel size differs from its pose's picture (it would make the figure jump on every mouth flap).
+   `usePoses([{ id: "pA", feet: 0.52, twins: ["shut", "half", "blink"] }, { id: "pB", scale: 0.9 }], pics)` builds
+   `poses` from the props `pA_asset`, `pA_shut_asset`, `pA_half_asset`, `pA_blink_asset`, `pA_blink_open_asset`; a
+   twin listed in `twins` that is missing throws, naming the prop; without `twins` it takes whichever are present.
 3. **Preview a PoseSheet before staging**: `<PoseSheet poses={poses} h={520} />` as one still shows every pose on
    one ground line as the Performer places it (pick `h` so they fit side by side), a tick at each `feet` and a guide
    at the first pose's head top: even out head size with `scale` and the stance with `feet` until both hold.
    Poses stand on their soles: the clear rows under a cut-out are measured from the picture, so `y` is where the
-   soles touch (for a plain string `src`, give `inset: [top, bottom]` in image px).
+   soles touch (for a plain string `src`, give `inset: [top, bottom]` in image px). `show="shut"` (or `"half"`,
+   `"blink"`) shows a twin of each pose instead.
 4. **The set** as drawn layers in the same style; **props** as cut-outs in `Photo` (`anchor` is the pivot, `r` turns
    about it, `w` × sx with `sy` = sy / sx squashes), moved by `drop`, `toss` (an arc that lands and squashes), `swing`.
 5. **Beats** from cue times, **effects** under one `LineStyle` in the drawings' line colour, **cuts** between
@@ -513,8 +584,10 @@ needs no photographs, depth, `tween` or `parallax`.
 midway between the feet as a fraction of the canvas width (default 0.5; take it from the draw report); `scale`
 multiplies one pose so its head matches the others. The Performer stands the canvas's bottom edge on `y` with the
 `feet` point on `x`. **Mouth and eyes**: while the voice is heard the open-mouth `src` shows (a blink uses
-`blinkOpen` if given, otherwise it is skipped); in silence `shut`, and `blink` while blinking. Beats may come in any
-order (sorted by `at`).
+`blinkOpen` if given, otherwise it is skipped); in silence `shut`, and `blink` while blinking. A pose with `half`
+has three mouths, picked by loudness on twos: shut, half (above `open`), open (above `wide`, staying open while
+above `narrow`); a syllable opens through half and every shape holds 2 frames or more; no blink shows during half.
+`mouthAt` gives the mouth (0, 1, 2) at a frame. Beats may come in any order (sorted by `at`).
 
 ```tsx
 const { T } = useCues();
@@ -542,7 +615,7 @@ Its clip: `{"type": "component", "name": "Cook", "start": 0, "end": "end", "box"
 {"pA_asset": "pA", "pA_shut_asset": "pA_shut", ...}}}`. Acting defaults (`ActOptions`): `antic` 3 frames,
 `anticSquash` 0.07, `anticLean` 3°, `anticDip` 6 px, `settle` 12 frames, `overSquash` 0.09, `overRot` 5°, `breath`
 0.012 over 2.8 s, `sway` 0.6° over 4.1 s. The mouth reads `useVoiceLevel()` (loudness 0..1 a frame, 0 without a
-voice) on twos; blinks run by themselves. `LineStyle` defaults: line #2A1A0E, 9 px at 1080 wide, paper #FFFBF2,
+voice) on twos (`open` 0.14, `hold` 0.07, `wide` 0.45, `narrow` 0.3); blinks run by themselves. `LineStyle` defaults: line #2A1A0E, 9 px at 1080 wide, paper #FFFBF2,
 spark #FFD45C. `Framing`: from each cut's `at` the scene shows `z` times larger with its point (`x`, `y`) at the frame
 centre, no easing; with `scene` [w, h] it is clamped so no edge shows (`framingAt` gives the framing at a frame).
 
@@ -556,6 +629,55 @@ centre, no easing; with `scene` [w, h] it is clamped so no edge shows (`framingA
 - `PopMark`: "!" or "?" filled with spark (or `color`), (x, y) its centre
 - `Cracks`: lines spreading from the hit point (x, y), kept inside `clip`
 - `DustPuff`: two clouds (`color`, default light sand) rolling out sideways from (x, y) on the ground
+
+**Drawn marks** (siblings of the effects: LineStyle ink, `at` and `len` in frames, nothing before `at`, a `seed`):
+- By a head (`x, y, at, len, size, color`): `AngerVein` (pops in, throbs every `beat` frames), `Sparkles` (twinkle
+  within `r`), `Hearts` (one rises every `every` frames), `Zzz`, `Tears` (`kind` "stream" or "drops", eyes `gap`
+  apart), `GloomLines` (a small cloud, lines dropping over the head), `ShockLines` (ticks over the top `arc`
+  degrees), `DizzyStars` (orbiting above the head), `IdeaBulb` (lights `click` frames after it pops on, then rays),
+  `MusicNotes`. A question mark is `PopMark kind="?"`.
+- Over an area (`x, y, w, h`): `Rain` (`slant`, `splash`), `Snow`, `Confetti` (`colors`), `Petals` (`kind` "petal"
+  or "leaf"), `Bubbles` (pop at their own height). Already falling at `at`, they fade in over 6 frames and out at
+  the end of `len` (default the whole clip).
+- Impact: `Poof` (a puff that swells and breaks into curls; hide or show the thing at about 40 % of `len`),
+  `ImpactFlash` (a 1 to 3 frame impact frame over an area, ink wedges from `cx, cy`), `FocusLines` (concentration
+  lines round the area's edge toward `cx, cy`, clear inside `inner`, redrawn on twos).
+- Furniture: `SpeechBubble` (`shape` "round" or "box") and `ThoughtBubble`, centred on (x, y), `w` × `h`, a tail
+  toward `tail` [x, y]; they pop in with a squash, pop out over the last 5 frames of `len`, and the children are the
+  words. `ChalkBoard` draws a framed board at (x, y, w, h) (`stand` adds legs); inside it `ChalkText` (written on
+  by `p` or by `at`/`len`, lines split on "\n"), `ChalkLine` (`from`, `to`) and `ChalkPath` (`d`).
+- Pure helpers for your own marks: `popAt`, `spawnsAt`, `fallAt`, `riseAt`, `focusLinesAt`, `writeAt`, `chalkLine`.
+
+```tsx
+<AngerVein x={hx + 90} y={hy - 60} at={T("furious")} />
+<SpeechBubble x={540} y={560} w={600} h={280} tail={[hx, hy]} at={T("why")} len={60}>Why?</SpeechBubble>
+<FocusLines x={0} y={0} w={1080} h={1920} cx={hx} cy={hy} at={T("now")} len={20} />
+```
+
+**Craft helpers**:
+- `Walker`: the two-drawing walk in and out. `<Walker drawings={[a.walk_a_asset, a.walk_b_asset]} at={T("enter")}
+  x0={-200} x1={640} y={1600} h={1250} />` alternates the drawings every `step` (6) frames at an even pace, rises
+  mid-step and squashes as a foot lands, stands on its soles as the Performer does (`feet`, `h`) and mirrors itself
+  walking left (draw the steps facing right; `flip` overrides). `dur` defaults to whole strides of `stride`
+  (0.28 h) px a drawing: match it to the drawing's step or the feet slide. `walkAt` gives the state at a frame.
+- `Smear`: a smear frame instead of motion blur. `<Smear pos={(k) => [x(k), y(k)]} r={70}>...</Smear>` stretches
+  its children along the move on frames faster than `fast` (28 px a frame), up to `max` (1.2: 2.2 times as long),
+  about the leading edge `r` px ahead of the centre, with `lines` (3) ink lines trailing; `smearAt` gives it.
+- `Brush`: a brush-pen stroke along points or a path `d`, filled in the LineStyle colour, tapered at the ends
+  (`taper`, `thinning`, `size` default 1.6 times the line weight), drawn on by `p` (perfect-freehand).
+- `Morph`: one closed shape turning into another, `<Morph from={puddle} to={splash} p={spr(f, T("hit"))}
+  fill="#9FD8F2" />` (flubber; exact at p 0 and 1); `morphAt` gives the path.
+- `Boil`: the lines of what it wraps boil, a displacement of `amount` (3) px re-seeded every `every` (2) frames
+  through `drawings` (3) seeds. `box` [x, y, w, h] limits the filter (cheaper); nothing outside it is drawn.
+  `boil` (in Time) instead jitters a whole object.
+- `ramp(light, dark, steps)`: even OKLCH steps from one colour to another, both ends exact, for one shadow tone
+  across props (`shades` stays the material recipe).
+- `useBaked(data, f?)`: frame `f` of a simulation baked to JSON, held at both ends. Never step physics in a
+  component (frames render in any order): `add_package(p, ["matter-js"])`, a script run once with
+  `run_script(p, "library/tools/fall.mjs")` that steps the engine at 1000/30 ms and writes one `{x, y, a}` a frame
+  to `${process.env.REELSMITH_LIBRARY_MADE}/fall.json`, then `import fall from "../made/fall.json"` and
+  `const s = useBaked(fall, f - T("drop"))`.
+- Other helpers: `sampleLine`, `partOf` (even points along a line, the first `p` of it), `brushPressure`, `boilSeed`.
 
 **What reads as animation**: a new pose or action at least every 1.2 s of narration; anticipation before every move
 (give `dir`); arcs and gravity for props, a squash where they land; the pose 2 or 3 frames before its word; the face
@@ -571,7 +693,36 @@ changes with the line; a close shot for a detail; never a picture slid to fake a
 
 **On model**: the sheet as `style_ref_asset` every time, the outfit named every time, each new pose looked at beside
 the sheet and on a PoseSheet with the others.
-**Limits**: limbs jump between drawings (more poses smooth it, not tweening); two mouth shapes.
+**Limits**: limbs jump between drawings (more poses smooth it, not tweening); two or three mouth shapes, by
+loudness only.
+
+### Stock: poses, sets and props that stay
+
+A workspace keeps reusable pictures in `library/stock` (`poses/`, `sets/`, `props/`: each item its pictures and an
+`<id>.json`), all in one look set once in `library/stock/look.json`: `{"sheet": "<model sheet picture in
+library/stock>", "who": "<the character and its outfit, as every pose names it>", "character": "<style sentence>",
+"set": "<style sentence>", "prop": "<style sentence>"}`. A shipped catalogue names standard items: 54 poses
+(expressions, gestures, actions and the bridge poses `crouch`, `lean_back`, `turn`), 38 sets and 66 props.
+
+- `stock(p)` lists what is kept, then the catalogue ids not yet kept; `kind` lists one kind with what each is;
+  `name="pose:shrug"` shows one item in full, or the draws `take` would make for it.
+- `take(p, items)` copies kept items into `assets/`; a catalogue item not yet kept is drawn first in the look (a
+  pose: base, closed-mouth twin, blink, 3 draws; a set: the plate, then each piece matched to it; a prop: one
+  cut-out) and kept for every later film. Without a complete `look.json` it takes kept items only.
+- `keep(p, ids, kind)` saves the project's own drawings: a pose with its twins found by name, a set's layers back
+  to front, props one per id; an item already kept needs `replace=true`.
+
+```text
+take(p, ["pose:shrug", "set:kitchen", "prop:coin"])
+→ assets shrug, shrug_shut, shrug_blink; kitchen_plate, kitchen_counter; coin
+For the component:
+const poses = { shrug: { src: a.shrug_asset, shut: a.shrug_shut_asset, blink: a.shrug_blink_asset, feet: 0.50 } };
+set kitchen back to front: kitchen_plate, the figure, kitchen_counter (...)
+clip props: "pics": {"shrug_asset": "shrug", ...}
+```
+
+Paste the `poses` line and the `pics` map; draw the plate, the Performer, then the front pieces. Cut-outs come back
+at their own size: scale props and front pieces to the plate and the figure yourself.
 
 ### Places drawn in code
 

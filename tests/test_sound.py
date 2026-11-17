@@ -1,6 +1,7 @@
 """sound: every kind renders at the length asked, audible, under the peak ceiling, beds loop without a jump; seeds
 repeat; the tool registers the asset; mastering a voice over a ducked bed keeps the target and the voice on top."""
 import json
+import re
 import shutil
 import subprocess
 import wave
@@ -56,6 +57,36 @@ def test_seed_repeats_and_differs(tmp_path):
     sound.make(c, "rain", 2, 6)
     assert a.read_bytes() == b.read_bytes()
     assert a.read_bytes() != c.read_bytes()
+
+
+@pytest.mark.parametrize("kind", list(sound.KINDS))
+def test_every_kind_repeats_for_the_same_seed(kind, tmp_path):
+    secs = 2.0 if sound.KINDS[kind].bed else 0.3
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    sound.make(a, kind, secs, 7)
+    sound.make(b, kind, secs, 7)
+    assert a.read_bytes() == b.read_bytes()
+
+
+@pytest.mark.parametrize("kind,secs", [("type", 0.05), ("footsteps", 0.05), ("heartbeat", 0.05), ("coin", 0.05),
+                                       ("type", 8), ("badum", 8), ("cymbal", 8)])
+def test_event_kinds_survive_extreme_lengths(kind, secs, tmp_path):
+    info = sound.make(tmp_path / "x.wav", kind, secs, 2)
+    assert info["peak"] is not None and info["peak"] > -30
+
+
+@pytest.mark.parametrize("kind,band,share", [("ding", "high", 60), ("sparkle", "high", 80), ("cymbal", "high", 80),
+                                             ("coin", "high", 80), ("heartbeat", "low", 80), ("footsteps", "low", 60),
+                                             ("knock", "low", 50), ("chime", "mid", 70), ("slide_up", "mid", 70)])
+def test_energy_sits_where_the_sound_lives(kind, band, share, tmp_path):
+    info = sound.make(tmp_path / "x.wav", kind, 1.0, 11)
+    assert info["bands"][band] >= share, info["bands"]
+
+
+@pytest.mark.parametrize("kind", ["buzz", "slide_up", "slide_down"])
+def test_held_tones_are_trimmed_to_the_loudness_of_hits(kind, tmp_path):
+    info = sound.make(tmp_path / "x.wav", kind, 0.8, 11)
+    assert info["lufs"] is not None and info["lufs"] <= -13, info
 
 
 def test_gain_never_passes_the_ceiling(tmp_path):
@@ -117,7 +148,8 @@ def test_cli_runs_sound(ws, capsys):
 def test_description_lists_every_kind():
     doc = " ".join(tools.sound.__doc__.split())
     for name, k in sound.KINDS.items():
-        assert f"{name} ({k.blurb})" in doc, name
+        assert re.search(rf"\b{name}\b", doc), name       # names only: descriptions are capped at 1024 characters
+        assert f"{name} ({k.blurb})" in sound.kinds_text()
         assert len(k.blurb.replace(",", " ").split()) == 3, name
 
 

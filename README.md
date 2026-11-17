@@ -104,7 +104,7 @@ attaches itself with `reelsmith setup <agent>` and renders a test film without a
 | Captions and chapters | Captions from narration or a transcript, by phrase or by word, burned in and delivered as `.srt` and `.vtt`; chapters from markers. |
 | Timing | Times anchor on narration lines, clips, markers or source seconds (`"line:5+0.3"`, `"clip:c2.end-0.5"`), so a re-recorded line or a recut clip moves the edit with it. |
 | Inspection | `describe` prints the timeline as text; `preview` renders stills with measured layout problems; a draft render shows a stretch as video; `review` shows the delivered film frame by frame. |
-| Assets | Narration (text-to-speech, cached per line), generated pictures, web-page evidence with the proving sentence boxed, image-to-video clips, imports of local or downloaded media. |
+| Assets | Narration (text-to-speech, cached per line), generated pictures, web-page evidence with the proving sentence boxed, image-to-video clips, imports of local or downloaded media; a workspace stock of poses, sets and props drawn once in one look and reused by every film. |
 | Canvas and language | `landscape`, `vertical`, `square`, `portrait`, platform profiles and custom sizes and frame rates; a `locale` sets caption phrasing, component wording and capture language. |
 | Platform playbooks | Each platform profile (YouTube and Shorts, Douyin, TikTok, Instagram Reels, Bilibili, Xiaohongshu, WeChat Channels) carries a sourced playbook that the agent reads with the manual. |
 | Delivery checks | Text outside the safe area, cut, too small, overlapping or low in contrast; loudness; black or frozen stretches; length, size and workspace rules. A refused render names the clips and times to fix. |

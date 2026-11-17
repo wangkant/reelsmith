@@ -11,14 +11,14 @@ import { pictureSize } from "./photo";
 import { clamp01 } from "./time";
 
 /** One key pose of the performer: `src` with the mouth open; its twins, all on `src`'s canvas (draw's `twin_of`):
- *  `shut` the mouth closed (twin_of src), `blink` the eyes shut on the shut drawing (twin_of shut), `blinkOpen` the
- *  eyes shut with the mouth open (twin_of src). `scale` multiplies this pose so its head matches the others; `feet`
+ *  `shut` the mouth closed (twin_of src), `half` the mouth slightly open (twin_of src), `blink` the eyes shut on the
+ *  shut drawing (twin_of shut), `blinkOpen` the eyes shut with the mouth open (twin_of src). `scale` multiplies this pose so its head matches the others; `feet`
  *  is the x midway between the feet as a fraction of the canvas width (default 0.5; draw reports it). The soles
  *  stand on the ground line: the clear rows under the drawing (its trim pad) are measured from `src`'s asset; for a
  *  plain string src give `inset` [top, bottom] in image px. */
 export type Pose = {
-  src: AssetRef | string; shut?: AssetRef | string; blink?: AssetRef | string; blinkOpen?: AssetRef | string;
-  scale?: number; feet?: number; imgW?: number; imgH?: number; inset?: [number, number];
+  src: AssetRef | string; shut?: AssetRef | string; half?: AssetRef | string; blink?: AssetRef | string;
+  blinkOpen?: AssetRef | string; scale?: number; feet?: number; imgW?: number; imgH?: number; inset?: [number, number];
 };
 
 const insetOf = (pose: Pose): [number, number] | null => {
@@ -26,13 +26,20 @@ const insetOf = (pose: Pose): [number, number] | null => {
   return i && i.length === 2 && i.every((v) => Number.isFinite(v) && v >= 0) ? [i[0], i[1]] : null;
 };
 
-/** The drawing shown: while talking the open mouth (eyes shut only through `blinkOpen`, else the blink is skipped);
- *  in silence the shut mouth, `blink` while blinking. A blink never opens the mouth. */
-export const faceAt = (pose: Pose, talking: boolean, blinking: boolean): AssetRef | string =>
-  talking ? (blinking && pose.blinkOpen ? pose.blinkOpen : pose.src)
-    : blinking && pose.blink ? pose.blink : pose.shut ?? pose.src;
+/** Which mouth shows: 0 shut, 1 half open, 2 open. */
+export type Mouth = 0 | 1 | 2;
 
-const TWINS = { shut: "the pose", blink: "its shut twin", blinkOpen: "the pose" } as const;
+/** The drawing shown: while talking the open mouth (eyes shut only through `blinkOpen`, else the blink is skipped),
+ *  mouth 1 the `half` twin (the open one without it; the blink skipped); in silence the shut mouth, `blink` while
+ *  blinking. A blink never opens the mouth. `talking` true is mouth 2, false mouth 0. */
+export const faceAt = (pose: Pose, talking: boolean | Mouth, blinking: boolean): AssetRef | string => {
+  const m = talking === true ? 2 : talking === false ? 0 : talking;
+  if (m === 1 && pose.half) return pose.half;
+  return m ? (m === 2 && blinking && pose.blinkOpen ? pose.blinkOpen : pose.src)
+    : blinking && pose.blink ? pose.blink : pose.shut ?? pose.src;
+};
+
+const TWINS = { shut: "the pose", half: "the pose", blink: "its shut twin", blinkOpen: "the pose" } as const;
 const refSize = (r?: AssetRef | string): [number, number] | null =>
   isAsset(r) && r.size && r.size[0] > 0 && r.size[1] > 0 ? [r.size[0], r.size[1]] : null;
 
@@ -139,6 +146,30 @@ export const talkAt = (level: ((f: number) => number) | number[], f: number, ope
   return false;
 };
 
+/** Thresholds of the three-shape mouth: talking as talkAt (`open`, `hold`), wide open above `wide` and staying wide
+ *  while above `narrow`. */
+export type MouthOptions = { open?: number; hold?: number; wide?: number; narrow?: number };
+
+/** The mouth at frame `f`: with `three` (the pose has a `half` twin) shut, half or open by loudness bands with
+ *  hysteresis, on twos (every shape holds two frames at least), a syllable opening through half; without, talkAt's
+ *  shut or open. Replayed from the last quiet two, so every frame agrees with its neighbours. */
+export const mouthAt = (level: ((f: number) => number) | number[], f: number, three = true, o: MouthOptions = {}): Mouth => {
+  const { open = 0.14, hold = 0.07, wide = 0.45, narrow = 0.3 } = o;
+  if (!three) return talkAt(level, f, open, hold) ? 2 : 0;
+  const L = typeof level === "function" ? level : (k: number) => level[k] ?? 0;
+  const g = f - (((f % 2) + 2) % 2);
+  let from = g - 60;
+  for (let k = g; k > g - 60; k -= 2) if (L(k) <= hold) { from = k; break; }
+  let m: Mouth = 0;
+  for (let k = from; k <= g; k += 2) {
+    const v = L(k);
+    const talking: boolean = v > (m ? hold : open);
+    const target: Mouth = !talking ? 0 : v > (m === 2 ? narrow : wide) ? 2 : 1;
+    m = m === 0 && target === 2 ? 1 : target;
+  }
+  return m;
+};
+
 /** The narration's loudness 0..1 at a frame from the clip's start (0 without a voice, or past it). */
 export const useVoiceLevel = (): ((f: number) => number) => {
   const { level } = useClip();
@@ -156,8 +187,9 @@ export type PerformerProps = ActOptions & {
   /** the drawn height of a pose's canvas at scale 1, clip px */
   h: number;
   flip?: boolean;
-  /** the voice level per frame (default useVoiceLevel()); thresholds as in talkAt */
-  level?: (f: number) => number; open?: number; hold?: number;
+  /** the voice level per frame (default useVoiceLevel()); thresholds as in talkAt, and for poses with a `half` twin
+   *  the wide-open band as in mouthAt */
+  level?: (f: number) => number; open?: number; hold?: number; wide?: number; narrow?: number;
   /** extra blinks: frames where one starts */
   blinks?: number[];
   /** automatic blinks (shown as faceAt picks) every `blinkEvery` [min, max] seconds, `blinkLen` frames */
@@ -169,7 +201,7 @@ export type PerformerProps = ActOptions & {
 
 /** A drawn character played pose to pose: holds a drawing, anticipates, snaps to the next, overshoots and settles,
  *  breathes while it holds, flaps its mouth on the voice and blinks. */
-export function Performer({ poses, beats, x, y, h, flip = false, level: levelIn, open = 0.14, hold = 0.07, blinks = [],
+export function Performer({ poses, beats, x, y, h, flip = false, level: levelIn, open = 0.14, hold = 0.07, wide, narrow, blinks = [],
   autoBlink = true, blinkEvery = [2.5, 5], blinkLen = 3, nudge, seed = "performer", f: fIn, ...o }: PerformerProps) {
   const now = useCurrentFrame();
   const voice = useVoiceLevel();
@@ -184,7 +216,7 @@ export function Performer({ poses, beats, x, y, h, flip = false, level: levelIn,
   const sy = a.sy * (n.sy ?? 1), sx = a.sx / Math.sqrt(n.sy ?? 1);
   const { w, hh, fx, sole } = poseBox(pose, h, a.scale);
   const blinking = blinks.some((b) => f >= b && f < b + blinkLen) || (autoBlink && blinkAt(f, seed, blinkEvery, blinkLen, fps));
-  const pic = faceAt(pose, talkAt(level, f, open, hold), blinking);
+  const pic = faceAt(pose, mouthAt(level, f, !!pose.half, { open, hold, wide, narrow }), blinking);
   return (
     <div style={{
       position: "absolute", left: x - fx + (n.dx ?? 0), top: y - sole + a.dy + (n.dy ?? 0), width: w, height: hh,
@@ -204,7 +236,7 @@ export type PoseSheetProps = {
   /** the ground line's y (default 85% down the frame) */
   y?: number;
   /** the drawing shown for each pose */
-  show?: "src" | "shut" | "blink" | "blinkOpen";
+  show?: "src" | "shut" | "half" | "blink" | "blinkOpen";
 };
 
 /** A preview still: the poses side by side on one ground line, each placed as Performer places it (same `h`, its

@@ -26,7 +26,7 @@ def test_exports_block_is_current():
 @needs_ts
 def test_exports_block_names_every_export_with_its_signature():
     block = run().stdout
-    assert 3000 < len(block) < 20000
+    assert 3000 < len(block) < 24000        # every export on one line: the kit grew, the lines did not
     for line in ("lookAt(pt: Pt, depth, w, h) → { x: number; y: number }", "<Vapor x, y, ", "<Surface quad: Pt[], ",
                  "useClip() → ClipCtx", "...PhotoProps"):
         assert line in block, line

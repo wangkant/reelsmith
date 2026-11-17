@@ -53,11 +53,25 @@ export type { Grade, Kick, LensProps, LensState } from "./lens";
 export { Join } from "./join";
 export type { JoinProps } from "./join";
 export {
-  actAt, beatAt, blinkAt, Burst, checkTwins, Cracks, DustPuff, faceAt, Framing, framingAt, LineStyle, Performer, PopMark, poseBox,
+  actAt, beatAt, blinkAt, Burst, checkTwins, Cracks, DustPuff, faceAt, Framing, framingAt, LineStyle, mouthAt, Performer, PopMark, poseBox,
   PoseSheet, Splash, SpeedLines, SteamCurls, SweatDrop, talkAt, toss, ToonStar, useLineStyle, useVoiceLevel,
 } from "./drawn";
 export type {
-  Act, ActOptions, Beat, BurstProps, CracksProps, DustPuffProps, FramingCut, FramingProps, LineStyleValue, Nudge, PerformerProps, PopMarkProps,
-  Pose, PoseSheetProps, SplashProps,
+  Act, ActOptions, Beat, BurstProps, CracksProps, DustPuffProps, FramingCut, FramingProps, LineStyleValue, Mouth, MouthOptions, Nudge,
+  PerformerProps, PopMarkProps, Pose, PoseSheetProps, SplashProps,
   SpeedLinesProps, SteamCurlsProps, SweatDropProps, Toss, ToonStarProps,
 } from "./drawn";
+export {
+  bakedAt, Boil, boilSeed, Brush, brushPressure, Morph, morphAt, partOf, posesFrom, ramp, sampleLine, Smear, smearAt, useBaked, usePoses,
+  walkAt, Walker,
+} from "./craft";
+export type { BoilProps, BrushProps, MorphProps, PoseSpec, SmearOptions, SmearProps, Twin, WalkerProps, WalkOptions } from "./craft";
+export {
+  AngerVein, Bubbles, ChalkBoard, chalkLine, ChalkLine, ChalkPath, ChalkText, Confetti, DizzyStars, fallAt, FocusLines, focusLinesAt, GloomLines, Hearts,
+  IdeaBulb, ImpactFlash, MusicNotes, Petals, Poof, popAt, Rain, riseAt, ShockLines, Snow, spawnsAt, Sparkles, SpeechBubble, Tears, ThoughtBubble, writeAt, Zzz,
+} from "./marks";
+export type {
+  AirArea, AngerVeinProps, BubblesProps, ChalkBoardProps, ChalkLineProps, ChalkPathProps, ChalkTextProps, ConfettiProps, DizzyStarsProps, Fall, FallOptions,
+  FocusArea, FocusLinesProps, GloomLinesProps, HeartsProps, IdeaBulbProps, ImpactFlashProps, MusicNotesProps, PetalsProps, PoofProps, RainProps, Rise,
+  ShockLinesProps, SnowProps, Spawn, SparklesProps, SpeechBubbleProps, TearsProps, ThoughtBubbleProps, ZzzProps,
+} from "./marks";

@@ -20,7 +20,8 @@ fs.writeFileSync(entry, [
   `export * from ${JSON.stringify(path.join(ROOT, "src/kit/stage/optics.ts").replace(/\\/g, "/"))};`,
   `export { lightMatrix } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/photo.tsx").replace(/\\/g, "/"))};`,
   `export { softEllipse, softRing } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/warp.tsx").replace(/\\/g, "/"))};`,
-  `export { actAt, beatAt, blinkAt, checkTwins, faceAt, framingAt, poseBox, talkAt, toss } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/drawn.tsx").replace(/\\/g, "/"))};`,
+  `export { bakedAt, boilSeed, brushPressure, morphAt, partOf, posesFrom, ramp, sampleLine, smearAt, walkAt } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/craft.tsx").replace(/\\/g, "/"))};`,
+  `export { actAt, beatAt, blinkAt, checkTwins, faceAt, framingAt, mouthAt, poseBox, talkAt, toss } from ${JSON.stringify(path.join(ROOT, "src/kit/stage/drawn.tsx").replace(/\\/g, "/"))};`,
   `export { handPan, keepInside } from ${JSON.stringify(path.join(ROOT, "src/presets/Broll.tsx").replace(/\\/g, "/"))};`,
 ].join("\n"));
 const bundle = path.join(OUT, "stage.mjs");
@@ -522,6 +523,89 @@ test("framingAt: hard cuts at their frames, clamped inside the scene", () => {
   assert.deepEqual(K.framingAt(cuts, 40, 1080, 1920), { x: 300, y: 1500, z: 2 });
   assert.deepEqual(K.framingAt([{ at: 0, x: 100, y: 1900, z: 2 }], 5, 1080, 1920, [1080, 1920]), { x: 270, y: 1440, z: 2 });
   assert.equal(K.framingAt([{ at: 0, x: 540, y: 960, z: 0.5 }], 5, 1080, 1920, [1080, 1920]).z, 1);   // never smaller than the frame
+});
+
+test("mouthAt: three shapes by loudness, on twos, opening through half, wide held while above `narrow`", () => {
+  const L = [0, 0, 0.2, 0.2, 0.6, 0.6, 0.6, 0.6, 0.35, 0.35, 0.2, 0.2, 0.05, 0.05, 0.9, 0.9, 0.9, 0.9];
+  assert.deepEqual([0, 2, 4, 6, 8, 10, 12, 14, 16].map((f) => K.mouthAt(L, f)), [0, 1, 2, 2, 2, 1, 0, 1, 2]);
+  assert.equal(K.mouthAt(L, 15), K.mouthAt(L, 14));                    // the odd frame repeats the even one
+  const seq = Array.from({ length: 400 }, (_, f) => 0.5 + 0.5 * Math.sin(f * 0.37) * Math.sin(f * 0.051));
+  const m = seq.map((_, f) => K.mouthAt(seq, f));
+  for (let f = 1; f < m.length; f++) if (m[f] !== m[f - 1]) assert.ok(f % 2 === 0 && m[f + 1] === m[f], `shape held one frame at ${f}`);
+  for (let f = 1; f < m.length; f++) assert.ok(!(m[f - 1] === 0 && m[f] === 2), `jumped shut to open at ${f}`);
+  assert.ok(m.includes(1) && m.includes(2) && m.includes(0));
+  for (let f = 0; f < seq.length; f++) assert.equal(K.mouthAt(seq, f, false), K.talkAt(seq, f) ? 2 : 0);
+});
+
+test("faceAt and checkTwins know the half twin; poses without it act as before", () => {
+  const p = { src: "open", shut: "shut", half: "half", blink: "blink", blinkOpen: "blinkOpen" };
+  assert.deepEqual([0, 1, 2].map((m) => K.faceAt(p, m, false)), ["shut", "half", "open"]);
+  assert.equal(K.faceAt(p, 1, true), "half");
+  assert.equal(K.faceAt(p, 2, true), "blinkOpen");
+  assert.equal(K.faceAt({ src: "open", shut: "shut" }, 1, false), "open");
+  const ref = (w, h) => ({ src: `a${w}.png`, size: [w, h] });
+  assert.throws(() => K.checkTwins({ pA: { src: ref(10, 20), half: ref(11, 20) } }), /its half picture is 11x20.*twin_of=<the pose>/);
+});
+
+test("posesFrom builds Performer poses from asset props, twins found by name, listed twins required", () => {
+  const a = (n) => ({ src: `${n}.png`, kind: "image", size: [400, 800] });
+  const props = { pA_asset: a("pA"), pA_shut_asset: a("pAs"), pA_half_asset: a("pAh"), pA_blink_asset: a("pAb"), pB: a("pB"), pB_blink_open: a("pBo") };
+  const poses = K.posesFrom([{ id: "pA", feet: 0.52, twins: ["shut", "half", "blink"] }, { id: "pB", scale: 0.9 }], props);
+  assert.equal(poses.pA.src.src, "pA.png");
+  assert.equal(poses.pA.half.src, "pAh.png");
+  assert.equal(poses.pA.feet, 0.52);
+  assert.equal(poses.pB.blinkOpen.src, "pBo.png");
+  assert.equal(poses.pB.shut, undefined);
+  assert.throws(() => K.posesFrom([{ id: "pB", twins: ["shut"] }], props), /lists twin "shut" but there is no prop "pB_shut_asset"/);
+  assert.throws(() => K.posesFrom([{ id: "pC" }], props), /no asset prop "pC_asset"/);
+  assert.throws(() => K.posesFrom([{ id: "pD" }], { pD_asset: "pD" }), /not an asset/);
+});
+
+test("walkAt: stands, travels evenly, changes drawing every step, rises mid-step, squashes on foot-fall", () => {
+  const o = { at: 10, dur: 60, x0: 100, x1: 700, step: 6, h: 1000 };
+  assert.deepEqual([K.walkAt(0, o).x, K.walkAt(0, o).moving], [100, false]);
+  assert.equal(K.walkAt(70, o).x, 700);
+  assert.equal(K.walkAt(40, o).x, 400);
+  assert.deepEqual([10, 15, 16, 21, 22].map((f) => K.walkAt(f, o).k % 2), [0, 0, 1, 1, 0]);
+  assert.ok(K.walkAt(10, o).sy < 1 && K.walkAt(16, o).sy < 1 && K.walkAt(13, o).sy === 1);
+  assert.ok(K.walkAt(13, o).dy < -10 && Math.abs(K.walkAt(16, o).dy) < 1e-9);
+  const back = K.walkAt(20, { ...o, dur: undefined, stride: 100, x0: 700, x1: 100 });
+  assert.equal(back.dur, 36);                                          // six strides of six frames
+  assert.ok(back.x < 700);
+});
+
+test("smearAt: no stretch when slow, stretches along a fast move, capped", () => {
+  const slow = K.smearAt((f) => [f * 5, 0], 10);
+  assert.equal(slow.stretch, 0);
+  const fast = K.smearAt((f) => [0, f * 120], 10, { r: 80 });
+  assert.ok(fast.stretch > 0.4 && Math.abs(fast.ang - 90) < 1e-9 && fast.speed === 120, JSON.stringify(fast));
+  assert.equal(K.smearAt((f) => [f * 2000, 0], 3, { max: 1.2 }).stretch, 1.2);
+});
+
+test("ramp: OKLCH steps from light to dark, ends exact, lightness falling evenly", () => {
+  const r = K.ramp("#F2C48D", "#7A4A2A", 5);
+  assert.equal(r.length, 5);
+  assert.deepEqual([r[0], r[4]], ["#F2C48D", "#7A4A2A"]);
+  const lum = r.map((h) => [1, 3, 5].reduce((s, i, j) => s + [0.3, 0.59, 0.11][j] * parseInt(h.slice(i, i + 2), 16), 0));
+  for (let i = 1; i < 5; i++) assert.ok(lum[i] < lum[i - 1], r.join(" "));
+  assert.deepEqual(K.ramp("#fff", "#000", 3).map((h) => h.slice(1, 3) === h.slice(3, 5) && h.slice(3, 5) === h.slice(5, 7)), [true, true, true]);
+  assert.throws(() => K.ramp("red", "#000"), /not a #rgb/);
+});
+
+test("brush, morph, boil and baked helpers", () => {
+  const pts = K.sampleLine([[0, 0], [100, 0]], 10);
+  assert.equal(pts.length, 11);
+  assert.deepEqual(K.partOf(pts, 0.55).at(-1), [55, 0]);
+  assert.equal(K.sampleLine("M0 0 L0 50", 5).length, 11);
+  assert.ok(K.brushPressure(0.5) === 1 && K.brushPressure(0) < 0.5);
+  const a = "M0 0 L100 0 L100 100 L0 100Z", b = "M50 0 L100 100 L0 100Z";
+  assert.equal(K.morphAt(a, b, 0), a);
+  assert.equal(K.morphAt(a, b, 1), b);
+  assert.match(K.morphAt(a, b, 0.5), /^M[\d.\-, LCZ]+$/);
+  assert.equal(K.morphAt(a, b, 0.5), K.morphAt(a, b, 0.5));
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 7].map((f) => K.boilSeed(f, 1)), [1, 1, 2, 2, 3, 3, 1, 1]);
+  assert.deepEqual([-3, 0, 1.4, 9].map((f) => K.bakedAt([{ y: 0 }, { y: 1 }, { y: 2 }], f).y), [0, 0, 1, 2]);
+  assert.throws(() => K.bakedAt([], 0), /empty/);
 });
 
 fs.rmSync(OUT, { recursive: true, force: true });

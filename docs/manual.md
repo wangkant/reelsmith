@@ -142,13 +142,11 @@ y 826–1026, so the other words stay above it):
 }
 ```
 
-The arrow sits on its own track because it starts while `n1` is still on screen: two clips that overlap in time
-need two tracks. Words in any language go in the same fields; the `locale` tells reelsmith how to cut the captions.
+The arrow has its own track: it overlaps `n1`. Any language goes in the same fields; `locale` sets how captions are cut.
 
 The narration (`voice`) plays by itself at full volume. The film lasts until the voice ends + 0.6 s unless you set
-`"duration"` (without a voice, until its last clip ends). Without a captions track there are no captions.
-`"chapters": [{"at": Time, "title": "..."}]` names the film's chapters. `meta` takes only `title`, `desc`, `topic`,
-`shape` and `sources`.
+`"duration"` (without a voice, until its last clip ends). `"chapters": [{"at": Time, "title": "..."}]` names the
+film's chapters. `meta` takes only `title`, `desc`, `topic`, `shape` and `sources`.
 
 ### Time
 
@@ -287,9 +285,8 @@ back what the last undo took (all N as one batch), and any later edit clears it.
   removes a key. Setting `end` drops `dur` and the other way round; `move_clip` with only `start` keeps the length.
 - Renaming a clip with `update_clip` retargets every Time and captions `source` naming it; renaming a track
   retargets the ducks under it. `update_asset` cannot change an id, nor the kind of an asset in use.
-- `add_asset` with an existing id replaces that asset. An asset still used by a clip (directly or through component
-  props) cannot be removed; removing a clip others are timed from leaves them where they were (their anchors on it
-  become numbers).
+- `add_asset` with an existing id replaces it. An asset a clip uses (directly or in component props) cannot be
+  removed; removing a clip others are timed from leaves them in place (their anchors on it become numbers).
 - The last three ripple-edit footage (next sections); `trim_clip` on a clip that is not media takes new start/end Times.
 
 ## Making a film people watch
@@ -325,8 +322,7 @@ the platform's playbook may tighten them.
 
 A recording of your own, or a clip you downloaded, is a source: look at it, cut it on the timeline, caption it.
 The footage tools speak **source seconds**; `"src:a@41.2"` is the moment clip `a` plays second 41.2 of its source,
-so you cut straight from what you found. A film of footage needs no `speak`; without a voice it lasts until its last
-clip ends (or `duration`).
+so you cut straight from what you found. A film of footage needs no `speak`.
 
 1. `import_asset` the file (any size: on the project's drive it is hard-linked, the same file as its source, so a
    program rewriting the source in place changes the asset: write a new file and import it over the same id), then
@@ -410,9 +406,8 @@ A component clip renders a React component inside the clip box. Built-in presets
 `BarCompare`, `TimelineRule`, `DotGrid`, `EvidenceCard`, `Highlighter`, `Arrow`, `Broll`; `library(project)` lists
 them with their prop names, `library(project, "Receipt")` shows the schema, an example and the source file.
 
-Six presets are whole scenes for telling what happened. Each fills a large box (about 800 × 800), lands its parts
-at their own `at`, keeps moving gently while it holds, and reads on its own `light` or `dark` `ground`, or over a
-picture at full brightness (never dim footage to make a card read):
+Six presets are whole scenes for telling what happened: each fills about 800 × 800, lands its parts at their own
+`at`, moves gently while it holds and reads on its `light` or `dark` `ground` or over a picture at full brightness:
 
 | preset | the scene | reach for it when |
 |---|---|---|
@@ -443,6 +438,9 @@ Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); exam
   `Performer`, which anticipates, snaps, overshoots and settles; a set drawn in layers in the same style; cut-out
   props with weight (`drop`, `toss`, `swing`); effects under one `LineStyle`; hard cuts between framings on words
   (`Framing`). Judge pacing on a 6-a-second `frames` sheet and each pose change on a 25-a-second one.
+- **Before drawing**: `stock` and `take` (kept poses, sets and props are free; a catalogue item is drawn once in the
+  workspace's look, then kept; `keep` saves your own). The kit draws marks (anger, tears, rain, poof, focus lines,
+  speech bubbles, a chalkboard), a third mouth (`half`), `Walker`, `Smear`, `Brush`, `Morph` and `Boil` (kit.md).
 - **Tracks**: `world` (one component clip for the whole film reading every line from `useClip().lines`, or one per
   line, `"start": "line:3"`), a head text clip with the take (at most 4.5 s; the cover), captions.
 - **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.2 to 2 s, on its word.
@@ -454,11 +452,10 @@ Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); exam
   third, things that slide in and stop.
 - **Moving one picture is not motion**: `tween`, `parallax`, the preset `Broll`, a `Plate` `film` and `Travel` slide
   or warp a single picture (kit.md, "Photograph components"); watched, that reads as a warp, not as a film's motion.
-- **Sound under the picture**: a voice alone leaves silence between lines. `sound` makes a looping bed for each
-  place (on an audio track: `"volume": 0.25, "loop": true, "duck": {"under": "voice", "to": 0.5}`; a new place gets
-  a new bed clip with `fade_in`/`fade_out` 0.3) and a one-shot for each action on a second audio track (`"start":
-  "line:3+0.3", "dur": <its seconds>`, `volume` 0.3–0.6). No voice: bed about 0.15, one-shots 0.6–0.8, since
-  mastering lifts the whole mix to the profile's loudness.
+- **Sound under the picture**: `sound` makes a looping bed for each place (on an audio track: `"volume": 0.25,
+  "loop": true, "duck": {"under": "voice", "to": 0.5}`; a new place gets a new bed clip with `fade_in`/`fade_out`
+  0.3) and a one-shot for each action on a second audio track (`"start": "line:3+0.3", "dur": <its seconds>`,
+  `volume` 0.3–0.6), on the key pose's frame. No voice: bed about 0.15, one-shots 0.6–0.8 (mastering lifts the mix).
 - **Captions**: `"style": {"bg": null, "size": "fit", "max_size": 84, "min_size": 64, "weight": 900, "color":
   "#FFFDF7", "stroke": {"color": "#2A1A0E", "width": 6}, "shadow": true}`, `max_chars` 10 (CJK) or 16 to 18 (Latin).
 
@@ -496,9 +493,12 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["A T-shirt drinks 2,700 litres.", {"text": "Most of it in the field.", "pace": 0.9}])` |
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
 | `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?, twin_of?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `twin_of` the same cut-out drawing with one change (a closed mouth), registered onto its canvas; `draw_many` 1–8 at once | `draw(p, "pA", "the cat host points left, head to feet", cutout=true, style_ref_asset="sheet")`, `draw_many(p, [{"id": "wall", "prompt": "...", "style_ref_asset": "sheet"}, {"id": "pot", "prompt": "...", "cutout": true, "style_ref_asset": "sheet"}])`, `draw(p, "pA_shut", "the mouth is closed", twin_of="pA")` |
+| `stock(project, kind?, name?)` | the workspace's reusable poses, sets and props (`library/stock`), then the catalogue items not yet kept; `name` shows one in full | `stock(p, "pose")`, `stock(p, name="pose:shrug")` |
+| `take(project, items)` | kept items into the project as assets; a catalogue item not kept is drawn first in the workspace's look (`library/stock/look.json`) and kept; returns the `poses` manifest and each set's layer order | `take(p, ["pose:shrug", "set:kitchen", "prop:coin"])` |
+| `keep(project, ids, kind, what?, name?, replace?)` | save the project's own pose (twins found by name), a set's layers back to front, or props into stock | `keep(p, ["wave"], "pose")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: frames interpolated between key pictures of one shot (2–6, ≤ 12 s); one still pushed through by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`). Both warp a picture, which reads as a warp: not a film's motion. They run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
-| `sound(project, id, kind, seconds, seed?, gain_db?)` | local and free: a bed that loops (room, street, wind, rain, kitchen, fire, water, crowd, night; −24 LUFS) or a one-shot (whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter), with its loudness and low/mid/high split | `sound(p, "amb", "street", 20)`, `sound(p, "hit", "thump", 0.5)` |
+| `sound(project, id, kind, seconds, seed?, gain_db?)` | local and free: a bed that loops (room, street, wind, rain, kitchen, fire, water, crowd, night, office, cafe, market, forest, sea, train; −24 LUFS) or a one-shot (whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter; cartoon and interface: boing, plop, ding, chime, buzz, coin, register, poof, splat, zip, slide_up, slide_down, squeak, knock, page, stamp, type, heartbeat, zap, sparkle, drum, cymbal, badum, footsteps; held tones such as buzz and the slides peak under −3 dBTP to match the hits' loudness), with its loudness and low/mid/high split | `sound(p, "amb", "street", 20)`, `sound(p, "hit", "thump", 0.5)` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL (at most `providers.import.max_mb`, default 200 MB) into assets | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |
 | `probe(project, source)` | a source's streams, codecs, rotation and loudness | `probe(p, "talk")` |
@@ -521,9 +521,9 @@ What you build stays in the workspace for every film; `note` what each piece is 
   `"WxH"` (sides 256–4096). A cut-out is never enlarged, is refused without real alpha and comes back at its own
   size: place it at its real size. `draw_many` runs three at once (read its sheet); a plate and its cut-outs
   (`match_asset`: camera, light), or a pose and its `twin_of` twins, may share a call: they wait for the new picture.
-- `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model) and `draw` spends
-  limited tries: they estimate first and refuse when the project budget, the account floor or the tries would be
-  crossed. Transcribing the same recording again with the same settings is free.
+- `speak`, `animate` and `transcribe` cost money (transcribe is free with the owner's local model or when repeated
+  with the same settings) and `draw` spends limited tries: each estimates first and refuses past the project budget,
+  the account floor or the tries.
 - Evidence captures are the strongest proof you have: match a short exact phrase that sits on one line of the page
   (8–20 characters); a box over two lines or a wide paragraph comes out too small to read (`check` warns under
   40 px). Re-box an evidence asset with `update_asset`.

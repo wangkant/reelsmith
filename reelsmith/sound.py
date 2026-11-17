@@ -32,6 +32,7 @@ class Kind:
     bed: bool
     blurb: str              # three words for the tool's description
     build: object           # (Graph, random.Random) -> label of the mono result
+    trim_db: float = 0.0    # a held tone at the shared peak is far louder than a hit: this brings it back in line
 
 
 class Graph:
@@ -99,9 +100,24 @@ def _bp(f: float, w: float) -> str:
     return f"bandpass=f={f:.1f}:t=h:w={w:.1f}"
 
 
-def _sweep(f0: float, f1: float, tau: float) -> str:
+def _sweep(f0: float, f1: float, tau: float, t: str = "t") -> str:
     """Phase of a tone gliding from f0 to f1 with time constant tau (closed form, so it never clicks)."""
-    return f"2*PI*({f1:.3f}*t+({f0 - f1:.3f})*{tau:.5f}*(1-exp(-t/{tau:.5f})))"
+    return f"2*PI*({f1:.3f}*{t}+({f0 - f1:.3f})*{tau:.5f}*(1-exp(-{t}/{tau:.5f})))"
+
+
+def _hit(tk: float, tau: float, attack: float = 0.0) -> str:
+    """0 before tk, then a strike dying away over tau; the max() keeps exp() from overflowing before tk."""
+    rise = f"*min(1,(t-{tk:.4f})/{attack:.4f})" if attack > 0 else ""
+    return f"exp(-max(0,t-{tk:.4f})/{tau:.4f})*gte(t,{tk:.4f}){rise}"
+
+
+def _ring(base: float, modes, tk: float = 0.0, span: float = 1.0) -> str:
+    """Decaying partials (ratio, amplitude, decay) of one struck body, starting at tk."""
+    return "+".join(f"{a:g}*sin(2*PI*{base * r:.2f}*(t-{tk:.4f}))*{_hit(tk, dec * span)}" for r, a, dec in modes)
+
+
+def _bump(c: float, w: float) -> str:
+    return f"exp(-pow((t-{c:.4f})/{w:.4f},2))"
 
 
 # ------------------------------------------------------------------ beds
@@ -182,6 +198,82 @@ def _night(g: Graph, p: random.Random) -> str:
     insects = g.expr("+".join(calls))
     air = g.noise("pink", "lowpass=f=1200")
     return g.mix([(insects, 0.6), (air, 0.5)])
+
+
+def _office(g: Graph, p: random.Random) -> str:
+    hvac = g.noise("pink", "highpass=f=60", "lowpass=f=600")
+    hiss = g.noise("white", "highpass=f=2000", "lowpass=f=6000")
+    parts = [(hvac, 1), (hiss, 0.03)]
+    for _ in range(2):
+        # someone types in bursts: key clicks gated by a slow swell
+        keys = g.mul(g.noise("white", _bp(p.uniform(2500, 3500), 2500)),
+                     g.train(p.uniform(9, 13), 0.004, 0.5, attack=0.0005))
+        parts.append((g.mul(keys, g.train(p.uniform(0.15, 0.25), 2.5, 0.3, attack=0.4)), 4.0))
+    return g.mix(parts, "lowpass=f=6000")
+
+
+def _cafe(g: Graph, p: random.Random) -> str:
+    parts = [(g.noise("pink", "highpass=f=200", "lowpass=f=1800"), 0.8)]
+    for _ in range(5):
+        f = p.uniform(350, 800)
+        parts.append((g.mul(g.noise("pink", _bp(f, 500)), g.train(p.uniform(2.5, 4), 0.12, 0.7, attack=0.03)), 0.8))
+    for _ in range(3):
+        base = p.uniform(2000, 4000)
+        cup = g.expr(f"sin(2*PI*{base:.1f}*t)+0.5*sin(2*PI*{base * 2.7:.1f}*t)")
+        parts.append((g.mul(cup, g.train(p.uniform(0.25, 0.45), 0.12, 0.7)), 0.1))
+    return g.mix(parts, "lowpass=f=7000", "aecho=0.7:0.5:50|83:0.25|0.15")
+
+
+def _market(g: Graph, p: random.Random) -> str:
+    parts = [(g.noise("pink", "highpass=f=250", "lowpass=f=2500"), 0.7)]
+    for _ in range(9):
+        f = p.uniform(350, 1100)
+        parts.append((g.mul(g.noise("pink", _bp(f, 600)), g.train(p.uniform(3.5, 5.5), 0.1, 0.7, attack=0.02)), 1.0))
+    for _ in range(2):
+        # a nearer voice calling out: a held vowel with a rising and falling pitch
+        f0, form = p.uniform(160, 240), p.uniform(600, 900)
+        call = g.expr(f"st(0,ld(0)+2*PI*{f0:.1f}*(1+0.1*sin(2*PI*{p.uniform(0.6, 1.2):.2f}*t))/{SR});"
+                      + "+".join(f"sin({k}*ld(0))/{k}" for k in range(1, 9)), _bp(form, 500))
+        parts.append((g.mul(call, g.train(p.uniform(0.15, 0.3), 0.5, 0.5, attack=0.08)), 0.25))
+    crates = g.mul(g.noise("pink", _bp(400, 400)), g.train(p.uniform(0.3, 0.6), 0.03, 0.6))
+    return g.mix(parts + [(crates, 1.0)], "lowpass=f=3500", "aecho=0.7:0.4:70:0.2")
+
+
+def _forest(g: Graph, p: random.Random) -> str:
+    waves = "+".join(f"sin(2*PI*{p.uniform(lo, hi):.4f}*t+{p.uniform(0, 6.28):.3f})"
+                     for lo, hi in ((0.06, 0.1), (0.13, 0.2), (0.25, 0.35)))
+    gust = f"0.4+0.6*(({waves})/3+1)/2"
+    leaves = g.mul(g.noise("pink", "highpass=f=400", "lowpass=f=6000"), g.expr(gust))
+    rustle = g.mul(g.mul(g.noise("white", _bp(3500, 3000)), g.train(150, 0.002, 1.0)), g.expr(gust))
+    parts = [(leaves, 0.8), (rustle, 0.5), (g.noise("brown", "lowpass=f=200"), 0.6)]
+    for _ in range(p.randint(2, 3)):
+        fc, fm, beta, rep = p.uniform(2500, 4500), p.uniform(8, 25), p.uniform(2, 6), p.uniform(8, 14)
+        tone = g.expr(f"sin(2*PI*{fc:.1f}*t+{beta:.2f}*sin(2*PI*{fm:.2f}*t))"
+                      f"*pow(max(0,sin(2*PI*{rep:.2f}*t)),2)")
+        parts.append((g.mul(tone, g.train(p.uniform(0.2, 0.4), 0.6, 0.6, attack=0.02)), 0.2))
+    return g.mix(parts)
+
+
+def _sea(g: Graph, p: random.Random) -> str:
+    a, b = p.uniform(0.09, 0.13), p.uniform(0.05, 0.08)
+    lift = f"((sin(2*PI*{a:.4f}*t+{p.uniform(0, 6.28):.3f})+0.6*sin(2*PI*{b:.4f}*t+{p.uniform(0, 6.28):.3f}))/1.6+1)/2"
+    wash = g.mul(g.noise("pink", "highpass=f=60", "lowpass=f=900"), g.expr(f"0.25+0.75*pow({lift},2)"))
+    surf = g.mul(g.noise("white", "highpass=f=2000", "lowpass=f=9000"), g.expr(f"pow({lift},4)"))
+    rumble = g.noise("brown", "lowpass=f=120")
+    return g.mix([(wash, 1), (surf, 0.5), (rumble, 0.6)])
+
+
+def _train(g: Graph, p: random.Random) -> str:
+    period, pair = p.uniform(0.9, 1.1), p.uniform(0.11, 0.15)
+    # two wheel sets over each rail joint: da-dum ... da-dum, as a periodic envelope with no event list
+    def hits(tau: float) -> str:
+        return "+".join(f"{a}*exp(-mod(t+{period - o:.4f},{period:.4f})/{tau:.4f})"
+                        for o, a in ((0.0, 1.0), (pair, 0.8), (period / 2, 0.7), (period / 2 + pair, 0.6)))
+    rumble = g.mul(g.noise("brown", "lowpass=f=180"), g.expr(f"0.85+0.15*sin(2*PI*{p.uniform(1, 1.6):.2f}*t)"))
+    rattle = g.noise("pink", _bp(900, 800))
+    clack = g.mul(g.noise("pink", _bp(500, 600)), g.expr(hits(0.02)))
+    tick = g.mul(g.noise("white", _bp(2500, 2000)), g.expr(hits(0.006)))
+    return g.mix([(rumble, 1), (rattle, 0.08), (clack, 1.5), (tick, 0.4)])
 
 
 # ------------------------------------------------------------------ one-shots (d = their length)
@@ -274,6 +366,242 @@ def _shutter(g: Graph, p: random.Random) -> str:
     return g.mix([(click, 1), (thunk, 0.06)])
 
 
+def _boing(g: Graph, p: random.Random) -> str:
+    f0, rate, dec = p.uniform(150, 190), p.uniform(13, 17), min(0.6, g.d / 2.5)
+    # a phase accumulator: the spring's wobble is a frequency, so the phase must be summed sample by sample
+    freq = f"{f0:.2f}*(1+0.3*exp(-t/0.35)*sin(2*PI*{rate:.2f}*t))*(1+0.15*(1-exp(-t/0.2)))"
+    tone = "+".join(f"{a:g}*sin({k}*ld(0))" for k, a in ((1, 1), (2, 0.6), (3, 0.4), (4, 0.25), (5, 0.15)))
+    return g.expr(f"st(0,ld(0)+2*PI*{freq}/{SR});({tone})*exp(-t/{dec:.4f})*min(1,t/0.003)", "lowpass=f=2500")
+
+
+def _plop(g: Graph, p: random.Random) -> str:
+    bubble = g.expr(f"sin({_sweep(p.uniform(280, 340), p.uniform(800, 950), 0.025)})*exp(-t/0.06)*min(1,t/0.001)")
+    weight = g.expr(f"sin(2*PI*{p.uniform(110, 140):.1f}*t)*exp(-t/0.035)*min(1,t/0.002)")
+    return g.mix([(bubble, 1), (weight, 0.5)])
+
+
+def _ding(g: Graph, p: random.Random) -> str:
+    base, span = p.uniform(2000, 2500), min(1.0, g.d / 1.2)
+    # a detuned twin of the first partial beats against it: the shimmer of a real bell
+    ring = g.expr(_ring(base, ((1, 1, 0.9), (1.004, 0.6, 0.9), (2.76, 0.35, 0.4), (5.4, 0.15, 0.2)), 0.0, span))
+    tap = g.mul(g.noise("white", "highpass=f=3000"), g.expr("exp(-t/0.001)"))
+    return g.mix([(ring, 0.5), (tap, 0.3)])
+
+
+def _chime(g: Graph, p: random.Random) -> str:
+    base, gap, span = p.uniform(1000, 1150), min(0.13, g.d / 4), min(1.0, g.d)
+    modes = ((1, 1, 0.45), (2, 0.2, 0.2), (3, 0.08, 0.12))
+    low, high = _ring(base, modes, 0.0, span), _ring(base * 1.5, modes, gap, span)
+    # a soft mallet: each note rises over 3 ms instead of starting on a click
+    return g.expr(f"min(1,t/0.003)*(({low})+min(1,max(0,t-{gap:.4f})/0.003)*({high}))")
+
+
+def _buzz(g: Graph, p: random.Random) -> str:
+    f, rough = p.uniform(95, 115), p.uniform(1.05, 1.07)
+    odd = "+".join(f"sin(2*PI*{f * m:.2f}*{k}*t)/{k}" for m in (1, rough) for k in range(1, 30, 2))
+    end = g.d * 0.9
+    env = f"min(1,t/0.006)*min(1,max(0,({end:.4f}-t)/0.03))*(0.8+0.2*sin(2*PI*30*t))"
+    return g.expr(f"({odd})*{env}", "lowpass=f=3500")
+
+
+def _coin(g: Graph, p: random.Random) -> str:
+    base, sc = p.uniform(3800, 4500), min(1.0, g.d / 0.9)
+    tk, gap, amp, rings = 0.003, 0.11 * sc, 1.0, []
+    for i in range(7):
+        last = i == 6 or tk + gap * 0.7 > g.d * 0.8
+        modes = ((1, 1, 0.5 if last else 0.06), (1.58, 0.6, 0.3 if last else 0.04), (2.4, 0.3, 0.02))
+        rings.append(f"{amp:.3f}*({_ring(base * p.uniform(0.99, 1.01), modes, tk, sc)})")
+        if last:
+            break
+        tk, gap, amp = tk + gap, gap * 0.7, amp * 0.8
+    tap = g.mul(g.noise("white", "highpass=f=5000"), g.expr("exp(-t/0.001)"))
+    return g.mix([(g.expr("+".join(rings)), 0.5), (tap, 0.2)])
+
+
+def _register(g: Graph, p: random.Random) -> str:
+    sc = min(1.0, g.d / 0.9)
+    clunk = g.mul(g.noise("pink", _bp(500, 600)), g.expr("exp(-t/0.03)*min(1,t/0.001)"))
+    thunk = g.expr("sin(2*PI*120*t)*exp(-t/0.03)*min(1,t/0.002)")
+    bell, t1 = p.uniform(2200, 2500), 0.08 * sc
+    modes = ((1, 1, 0.5), (2.4, 0.4, 0.3), (4.1, 0.2, 0.15))
+    ching = g.expr(f"{_ring(bell, modes, t1, sc)}+0.7*({_ring(bell * 1.01, modes, t1 + 0.035 * sc, sc)})")
+    jingle = g.mul(g.noise("white", _bp(5500, 2000)), g.train(40, 0.01, 0.8))
+    jingle = g.mul(jingle, g.expr(f"{_hit(t1, 0.2 * sc, 0.01)}"))
+    return g.mix([(clunk, 2.0), (thunk, 0.5), (ching, 0.35), (jingle, 0.6)])
+
+
+def _poof(g: Graph, p: random.Random) -> str:
+    sc = min(1.0, g.d / 0.5)
+    low = g.mul(g.noise("pink", _bp(p.uniform(250, 350), 400)), g.expr(f"min(1,t/0.01)*exp(-t/{0.18 * sc:.4f})"))
+    mid = g.mul(g.noise("pink", _bp(1200, 1500)), g.expr(f"min(1,t/0.005)*exp(-t/{0.07 * sc:.4f})"))
+    high = g.mul(g.noise("white", "highpass=f=3500"), g.expr("min(1,t/0.002)*exp(-t/0.025)"))
+    return g.mix([(low, 1), (mid, 0.5), (high, 0.15)])
+
+
+def _splat(g: Graph, p: random.Random) -> str:
+    body = g.expr(f"sin({_sweep(p.uniform(110, 140), 60, 0.02)})*exp(-t/0.06)*min(1,t/0.002)")
+    slap = g.mul(g.noise("pink", "highpass=f=300", _bp(900, 1600)), g.expr("exp(-t/0.04)*min(1,t/0.001)"))
+    wet = g.mul(g.mul(g.noise("white", _bp(1800, 2000)), g.train(p.uniform(130, 170), 0.004, 0.9)),
+                g.expr("exp(-t/0.09)"))
+    return g.mix([(body, 0.2), (slap, 2.0), (wet, 2.0)], "lowpass=f=5000")
+
+
+def _zip(g: Graph, p: random.Random) -> str:
+    span, parts = min(g.d, 0.35), []
+    for i, f in enumerate((500, 900, 1600, 2800, 5000)):
+        env = _bump((0.2 + 0.13 * i) * span, 0.12 * span)
+        parts.append((g.mul(g.noise("pink", _bp(f * p.uniform(0.95, 1.05), f * 0.8)), g.expr(env)), 1.0))
+    r = 8.0
+    chirp = g.expr(f"0.15*sin(2*PI*400*{span / math.log(r):.5f}*(exp({math.log(r) / span:.4f}*t)-1))"
+                   f"*{_bump(0.55 * span, 0.25 * span)}*lt(t,{span:.4f})")
+    return g.mix(parts + [(chirp, 1)])
+
+
+def _slide(up: bool):
+    def build(g: Graph, p: random.Random) -> str:
+        lo, hi = p.uniform(420, 500), p.uniform(1800, 2100)
+        f0, f1 = (lo, hi) if up else (hi, lo)
+        d, k = g.d, math.log(f1 / f0)
+        vib = 0.012 * (f0 + f1) / 2 / 6
+        phase = f"2*PI*{f0:.2f}*{d / k:.5f}*(exp({k / d:.5f}*t)-1)+{vib:.3f}*sin(2*PI*6*t)"
+        env = f"min(1,t/0.03)*min(1,max(0,({d:.4f}-t)/0.06))"
+        tone = g.expr(f"(sin({phase})+0.12*sin(2*({phase})))*{env}")
+        breath = g.mul(g.noise("white", _bp(2500, 3000)), g.expr(env))
+        return g.mix([(tone, 1), (breath, 0.04)])
+    return build
+
+
+def _squeak(g: Graph, p: random.Random) -> str:
+    span, lo, up = min(g.d, 0.22), p.uniform(1300, 1500), p.uniform(700, 1000)
+    freq = f"({lo:.1f}+{up:.1f}*sin(PI*min(t,{span:.4f})/{span:.4f}))"
+    tone = "sin(ld(0))+0.5*sin(2*ld(0))+0.25*sin(3*ld(0))"
+    # stick-slip of rubber: a fast tremolo on the tone
+    env = f"min(1,t/0.01)*max(0,1-t/{span:.4f})*(0.7+0.3*sin(2*PI*45*t))"
+    return g.expr(f"st(0,ld(0)+2*PI*{freq}/{SR});({tone})*{env}", _bp(2400, 3000))
+
+
+def _knock(g: Graph, p: random.Random) -> str:
+    f, gap = p.uniform(180, 230), min(0.17, g.d / 3.5)
+    times = ((0.003, 1.0), (0.003 + gap, 0.85))
+    wood = "+".join(f"{a}*({_ring(f, ((1, 1, 0.045), (2.3, 0.6, 0.025), (4.6, 0.3, 0.012)), tk)})"
+                    for tk, a in times)
+    click = g.mul(g.noise("white", _bp(2000, 2500)), g.expr("+".join(f"{a}*{_hit(tk, 0.003)}" for tk, a in times)))
+    return g.mix([(g.expr(wood), 1), (click, 0.5)])
+
+
+def _page(g: Graph, p: random.Random) -> str:
+    span = min(g.d, 0.5)
+    rustle = g.mul(g.mul(g.noise("white", _bp(3500, 5000)), g.train(p.uniform(250, 350), 0.002, 1.0)),
+                   g.expr(_bump(0.55 * span, 0.25 * span)))
+    flap = g.mul(g.noise("pink", _bp(700, 900)), g.expr(_bump(0.72 * span, 0.08 * span)))
+    air = g.mul(g.noise("pink", "highpass=f=1500"), g.expr(_bump(0.6 * span, 0.2 * span)))
+    return g.mix([(rustle, 1), (flap, 0.8), (air, 0.25)])
+
+
+def _stamp(g: Graph, p: random.Random) -> str:
+    thud = g.expr(f"sin({_sweep(p.uniform(150, 180), 90, 0.02)})*exp(-t/0.05)*min(1,t/0.002)")
+    pad = g.mul(g.noise("pink", "lowpass=f=400"), g.expr("exp(-t/0.035)*min(1,t/0.001)"))
+    slap = g.mul(g.noise("white", _bp(1800, 2500)), g.expr("exp(-t/0.012)"))
+    crush = g.mul(g.mul(g.noise("white", _bp(3000, 3000)), g.train(200, 0.002, 1.0)), g.expr("exp(-t/0.05)"))
+    return g.mix([(thud, 1), (pad, 1.2), (slap, 0.5), (crush, 0.4)])
+
+
+def _type(g: Graph, p: random.Random) -> str:
+    keys, tk = [], 0.01
+    while not keys or (tk < g.d - 0.04 and len(keys) < 120):
+        keys.append((tk, p.uniform(0.6, 1.0), p.random() < 0.12))
+        tk += p.uniform(0.06, 0.13) + (p.uniform(0.15, 0.3) if p.random() < 0.08 else 0)
+    clicks = "+".join(f"{a:.2f}*{_hit(k, 0.004)}" for k, a, _ in keys)
+    # the space bar bottoms out lower than the letters
+    thock = "+".join(f"{a:.2f}*sin(2*PI*{180 if space else p.uniform(300, 380):.0f}*(t-{k:.4f}))*{_hit(k, 0.012)}"
+                     for k, a, space in keys)
+    return g.mix([(g.mul(g.noise("white", _bp(3000, 3000)), g.expr(clicks)), 1), (g.expr(thock), 0.25)])
+
+
+def _heartbeat(g: Graph, p: random.Random) -> str:
+    period, beats, tk = p.uniform(0.8, 0.9), [], 0.01
+    gap = min(0.2, g.d / 3)
+    while tk < g.d - gap - 0.08:
+        beats += [(tk, 1.0), (tk + gap, 0.7)]
+        tk += period
+    if not beats:
+        beats = [(0.01, 1.0)]
+    lub = "+".join(f"{a}*sin({_sweep(75, 45, 0.04, f'max(0,t-{k:.4f})')})*{_hit(k, 0.07, 0.006)}" for k, a in beats)
+    skin = g.mul(g.noise("brown", "lowpass=f=150"), g.expr("+".join(f"{a}*{_hit(k, 0.04, 0.004)}" for k, a in beats)))
+    return g.mix([(g.expr(lub), 1), (skin, 0.6)])
+
+
+def _zap(g: Graph, p: random.Random) -> str:
+    span = min(g.d, 0.35)
+    ph = _sweep(p.uniform(2200, 2800), p.uniform(220, 300), 0.17 * span)
+    env = f"exp(-t/{0.4 * span:.4f})*min(1,t/0.002)"
+    return g.expr(f"(sin({ph})+0.4*sin(2*({ph}))+0.25*sin(3*({ph})))*{env}", "aecho=0.8:0.6:40:0.3")
+
+
+def _sparkle(g: Graph, p: random.Random) -> str:
+    span = min(g.d, 0.9)
+    times = sorted(p.uniform(0, 0.7 * span) for _ in range(p.randint(7, 9)))
+    # each ping a little higher than the last: the twinkle climbs
+    pitches = [(2800 + 3500 * i / len(times)) * p.uniform(0.9, 1.1) for i in range(len(times))]
+    pings = "+".join(f"{p.uniform(0.5, 1):.2f}*({_ring(f, ((1, 1, 0.09), (2.76, 0.2, 0.04)), tk)})"
+                     for f, tk in zip(pitches, times))
+    shimmer = g.mul(g.noise("white", "highpass=f=6000"), g.expr(_bump(0.4 * span, 0.3 * span)))
+    return g.mix([(g.expr(pings), 1), (shimmer, 0.08)])
+
+
+def _snare(g: Graph, p: random.Random, tk: float = 0.0, a: float = 1.0) -> list[tuple[str, float]]:
+    body = g.expr(f"{a}*({_ring(p.uniform(180, 200), ((1, 1, 0.06), (1.7, 0.6, 0.04)), tk)})")
+    wires = g.mul(g.noise("white", "highpass=f=1800", "lowpass=f=9000"), g.expr(f"{a}*{_hit(tk, 0.11)}"))
+    crack = g.mul(g.noise("white", _bp(3500, 3000)), g.expr(f"{a}*{_hit(tk, 0.006)}"))
+    return [(body, 0.7), (wires, 0.6), (crack, 1.0)]
+
+
+def _drum(g: Graph, p: random.Random) -> str:
+    return g.mix(_snare(g, p))
+
+
+def _metal(g: Graph, p: random.Random) -> str:
+    # six square oscillators at clashing pitches, the classic drum-machine cymbal
+    k = p.uniform(1.9, 2.1)
+    squares = "+".join(f"sgn(sin(2*PI*{f * k:.2f}*t))" for f in (205.3, 304.4, 369.6, 522.7, 540.0, 800.0))
+    return g.expr(f"({squares})/6", "highpass=f=3500", "highpass=f=3500")
+
+
+def _cymbal(g: Graph, p: random.Random) -> str:
+    dec = min(1.5, g.d / 2.5)
+    env = f"min(1,t/0.001)*(exp(-t/{dec:.4f})+exp(-t/0.02))"
+    metal = g.mul(_metal(g, p), g.expr(env))
+    wash = g.mul(g.noise("white", "highpass=f=5000"), g.expr(env))
+    return g.mix([(metal, 0.7), (wash, 0.5)])
+
+
+def _badum(g: Graph, p: random.Random) -> str:
+    sc = min(1.0, g.d / 1.2)
+    t1, t2 = 0.16 * sc, 0.42 * sc
+    tom = g.expr(f"sin({_sweep(160, 120, 0.05)})*{_hit(0, 0.1, 0.002)}")
+    floor = g.expr(f"sin({_sweep(120, 80, 0.05, f'max(0,t-{t1:.4f})')})*{_hit(t1, 0.18, 0.002)}")
+    kick = g.expr(f"sin({_sweep(110, 50, 0.03, f'max(0,t-{t1:.4f})')})*{_hit(t1, 0.15, 0.002)}")
+    tss = g.mul(_metal(g, p), g.expr(_hit(t2, 0.5 * sc, 0.001)))
+    hiss = g.mul(g.noise("white", "highpass=f=6000"), g.expr(_hit(t2, 0.35 * sc, 0.001)))
+    beater = g.mul(g.noise("pink", _bp(1200, 1500)), g.expr(_hit(t1, 0.012)))
+    return g.mix([*_snare(g, p, 0.0, 0.7), (tom, 0.6), (floor, 1.0), (kick, 0.9), (beater, 0.8), (tss, 0.6),
+                  (hiss, 0.4)])
+
+
+def _footsteps(g: Graph, p: random.Random) -> str:
+    gap = min(0.5, max(0.14, (g.d - 0.15) / 3.3))
+    steps, tk = [], 0.01
+    while not steps or (tk < g.d - 0.1 and len(steps) < 4):
+        steps.append((tk, 1.0 if len(steps) % 2 == 0 else 0.85))
+        tk += gap * p.uniform(0.95, 1.05)
+    heel = g.mul(g.noise("pink", "lowpass=f=500"), g.expr("+".join(f"{a}*{_hit(k, 0.025)}" for k, a in steps)))
+    thud = g.expr("+".join(f"{a}*sin(2*PI*90*(t-{k:.4f}))*{_hit(k, 0.03, 0.002)}" for k, a in steps))
+    scuff = g.mul(g.noise("pink", _bp(1500, 2000)),
+                  g.expr("+".join(f"{a * 0.5}*{_hit(k + 0.05, 0.03, 0.005)}" for k, a in steps)))
+    tap = g.mul(g.noise("white", _bp(3000, 2500)), g.expr("+".join(f"{a}*{_hit(k, 0.004)}" for k, a in steps)))
+    return g.mix([(heel, 1), (thud, 0.5), (scuff, 0.6), (tap, 0.3)])
+
+
 KINDS: dict[str, Kind] = {
     "room": Kind(True, "quiet indoor tone", _room),
     "street": Kind(True, "distant traffic passing", _street),
@@ -284,6 +612,12 @@ KINDS: dict[str, Kind] = {
     "water": Kind(True, "babbling flowing stream", _water),
     "crowd": Kind(True, "far wordless murmur", _crowd),
     "night": Kind(True, "insects, night air", _night),
+    "office": Kind(True, "keys and air", _office),
+    "cafe": Kind(True, "murmur, clinking cups", _cafe),
+    "market": Kind(True, "busy wordless voices", _market),
+    "forest": Kind(True, "birds and leaves", _forest),
+    "sea": Kind(True, "waves breaking slowly", _sea),
+    "train": Kind(True, "rolling rail rhythm", _train),
     "whoosh": Kind(False, "fast air pass", _whoosh),
     "thump": Kind(False, "low soft impact", _thump),
     "tick": Kind(False, "tiny sharp click", _tick),
@@ -296,6 +630,30 @@ KINDS: dict[str, Kind] = {
     "tear": Kind(False, "paper or skin", _tear),
     "clink": Kind(False, "glass or metal", _clink),
     "shutter": Kind(False, "camera shutter click", _shutter),
+    "boing": Kind(False, "springy cartoon bounce", _boing),
+    "plop": Kind(False, "small wet drop", _plop),
+    "ding": Kind(False, "small bell strike", _ding),
+    "chime": Kind(False, "rising right answer", _chime),
+    "buzz": Kind(False, "wrong answer buzzer", _buzz, -4.0),
+    "coin": Kind(False, "coin drops, rings", _coin),
+    "register": Kind(False, "cash register ring", _register),
+    "poof": Kind(False, "soft cloud puff", _poof),
+    "splat": Kind(False, "wet messy impact", _splat),
+    "zip": Kind(False, "fast swish up", _zip),
+    "slide_up": Kind(False, "slide whistle up", _slide(True), -8.0),
+    "slide_down": Kind(False, "slide whistle down", _slide(False), -8.0),
+    "squeak": Kind(False, "rubber toy squeak", _squeak),
+    "knock": Kind(False, "two knocks, wood", _knock),
+    "page": Kind(False, "page turning over", _page),
+    "stamp": Kind(False, "rubber stamp, paper", _stamp),
+    "type": Kind(False, "short keyboard burst", _type),
+    "heartbeat": Kind(False, "lub-dub heart beats", _heartbeat),
+    "zap": Kind(False, "laser zap down", _zap),
+    "sparkle": Kind(False, "climbing magic twinkle", _sparkle),
+    "drum": Kind(False, "snare rim shot", _drum),
+    "cymbal": Kind(False, "crash cymbal wash", _cymbal),
+    "badum": Kind(False, "joke drum sting", _badum),
+    "footsteps": Kind(False, "a few steps", _footsteps),
 }
 
 
@@ -415,7 +773,7 @@ def make(out: Path, kind: str, seconds: float, seed: int, gain_db: float = 0.0) 
         if peak is None:
             raise ProviderError(f"the {kind} sound came out silent (seed {seed}); try another seed")
         want = (BED_LUFS - lufs) if (spec.bed and lufs is not None) else (SHOT_PEAK - peak)
-        gain = min(want + gain_db, CEILING - 0.5 - peak)
+        gain = min(want + gain_db + spec.trim_db, CEILING - 0.5 - peak)
         ch = "2" if spec.bed else "1"
         _ff(["-y", "-loglevel", "error", "-i", str(raw), "-af", f"volume={gain:.3f}dB", "-ar", str(SR), "-ac", ch,
              "-c:a", "pcm_s16le", str(out)])

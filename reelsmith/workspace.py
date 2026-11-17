@@ -203,6 +203,10 @@ class Workspace:
         return self.library_dir / "fonts"
 
     @property
+    def stock_dir(self) -> Path:
+        return self.library_dir / "stock"
+
+    @property
     def notes_path(self) -> Path:
         return self.library_dir / "NOTES.md"
 
