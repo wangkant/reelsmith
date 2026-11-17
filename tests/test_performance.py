@@ -94,9 +94,9 @@ def test_asset_grid_meta():
 
 
 def test_broll_kit_example_validates():
-    # the clip agents copy from kit.md's "Shots that look filmed"
+    # the clip agents copy from kit.md's "The Broll preset"
     doc = (ROOT / "docs" / "kit.md").read_text(encoding="utf-8")
-    section = doc[doc.index("### Shots that look filmed"):]
+    section = doc[doc.index("### The Broll preset"):]
     clip = json.loads(re.search(r"```json\n(.*?)\n```", section, re.S).group(1))
     comps = L.components(EXAMPLE / "projects" / "salt")
     assert comps["Broll"].source == "preset"

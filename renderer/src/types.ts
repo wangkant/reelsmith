@@ -97,6 +97,8 @@ export type MediaRef = {
   duration?: number | null;
   /** an image that moves (GIF, APNG, animated WebP): it plays, looping */
   animated?: boolean;
+  /** a see-through image: the clear rows (top, bottom) around its opaque pixels, in image pixels */
+  inset?: [number, number] | null;
 };
 
 export type ImageContent = {

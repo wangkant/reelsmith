@@ -198,6 +198,7 @@ _SIZES: dict[tuple, tuple[int, int] | None] = {}
 _DURATIONS: dict[tuple, float | None] = {}
 _VIDEO_SIZES: dict[tuple, tuple[int, int] | None] = {}
 _ANIMATED: dict[tuple, bool] = {}
+_INSETS: dict[tuple, tuple[int, int] | None] = {}
 PROXY_KEEP_S = 24 * 3600            # a reversed proxy nothing has used for this long is deleted
 
 
@@ -263,6 +264,25 @@ def _jpeg(f) -> tuple[int, int] | None:
             h, w = struct.unpack(">HH", f.read(4))
             return w, h
         f.seek(size - 2, 1)
+
+
+def image_inset(path: Path) -> tuple[int, int] | None:
+    """(top, bottom): clear rows above and below a see-through picture's opaque pixels (alpha >= 128); None for a
+    picture without alpha or one that is unreadable."""
+    key = _stamp(path)
+    if key is None:
+        return None
+    if key not in _INSETS:
+        _INSETS[key] = None
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                if "A" in im.getbands() or "transparency" in im.info:
+                    box = im.convert("RGBA").getchannel("A").point(lambda v: 255 if v >= 128 else 0).getbbox()
+                    _INSETS[key] = (box[1], im.height - box[3]) if box else None
+        except (OSError, ValueError):
+            pass
+    return _INSETS[key]
 
 
 def image_animated(path: Path) -> bool:
@@ -1007,6 +1027,10 @@ class _Resolver:
             ref["size"] = list(size) if size else None
         if a.kind == "image" and image_animated(path):
             ref["animated"] = True
+        elif a.kind == "image":
+            inset = image_inset(path)
+            if inset:
+                ref["inset"] = list(inset)
         if a.kind == "evidence":
             ref["box"] = list(a.box) if a.box else None
             ref["site"] = a.site

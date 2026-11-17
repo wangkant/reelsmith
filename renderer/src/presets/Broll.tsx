@@ -1,4 +1,4 @@
-// Shots that look filmed: each shot is one plate with a clip baked from it, held in a hand that never keeps still,
+// Still pictures cut as shots: each shot is one plate with a clip baked from it, held in a hand that never keeps still,
 // panned the way a phone turns. Hard cuts at each shot's `at`; the frame never leaves the plate.
 import { useCurrentFrame } from "remotion";
 import { coverFit, handheld, isAsset, isFilm, Layer, Lens, Motes, Plate, Stage, Travel, useClip, Vapor } from "@reelsmith/kit";

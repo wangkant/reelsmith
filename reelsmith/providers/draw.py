@@ -549,8 +549,9 @@ def _draw(ctx, provider, id, prompt, style_ref_asset, size, cutout, match_asset,
             _reachable(provider.name)
             twin_line, not_twin = "", None
             if twin_base is not None and last.cut:
-                from .twin import register, report
-                fitted = register(twin_base, ctx.assets_dir / f"{asset_id}.png", ctx.assets_dir / f"{asset_id}.png")
+                from .twin import part_of, register, report
+                fitted = register(twin_base, ctx.assets_dir / f"{asset_id}.png", ctx.assets_dir / f"{asset_id}.png",
+                                  part=part_of(prompt.removeprefix(TWIN_PREFIX)))
                 if fitted["same"]:
                     last.cut.update(width=fitted["width"], height=fitted["height"], edges=[])
                 else:

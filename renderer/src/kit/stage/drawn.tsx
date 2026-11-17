@@ -13,10 +13,17 @@ import { clamp01 } from "./time";
 /** One key pose of the performer: `src` with the mouth open; its twins, all on `src`'s canvas (draw's `twin_of`):
  *  `shut` the mouth closed (twin_of src), `blink` the eyes shut on the shut drawing (twin_of shut), `blinkOpen` the
  *  eyes shut with the mouth open (twin_of src). `scale` multiplies this pose so its head matches the others; `feet`
- *  is the x midway between the feet as a fraction of the canvas width (default 0.5; draw reports it). */
+ *  is the x midway between the feet as a fraction of the canvas width (default 0.5; draw reports it). The soles
+ *  stand on the ground line: the clear rows under the drawing (its trim pad) are measured from `src`'s asset; for a
+ *  plain string src give `inset` [top, bottom] in image px. */
 export type Pose = {
   src: AssetRef | string; shut?: AssetRef | string; blink?: AssetRef | string; blinkOpen?: AssetRef | string;
-  scale?: number; feet?: number; imgW?: number; imgH?: number;
+  scale?: number; feet?: number; imgW?: number; imgH?: number; inset?: [number, number];
+};
+
+const insetOf = (pose: Pose): [number, number] | null => {
+  const i = pose.inset ?? (isAsset(pose.src) ? pose.src.inset : null);
+  return i && i.length === 2 && i.every((v) => Number.isFinite(v) && v >= 0) ? [i[0], i[1]] : null;
 };
 
 /** The drawing shown: while talking the open mouth (eyes shut only through `blinkOpen`, else the blink is skipped);
@@ -46,11 +53,14 @@ export const checkTwins = (poses: Record<string, Pose>) => {
 };
 
 /** Where a pose stands at drawn height `h` (clip px at scale 1): its size `w` x `hh`, the feet `fx` px from its left
- *  edge, and `s` the picture-to-clip factor. */
+ *  edge, the soles `sole` px down from its top and the head `head` px down, and `s` the picture-to-clip factor. */
 export const poseBox = (pose: Pose, h: number, scale = 1, who = "Performer") => {
   const [IW, IH] = pictureSize(pose.src, pose.imgW, pose.imgH, who);
   const s = (h / IH) * (pose.scale ?? 1) * scale;
-  return { w: IW * s, hh: IH * s, fx: (pose.feet ?? 0.5) * IW * s, s };
+  const inset = insetOf(pose);
+  // unmeasured: the head guess is draw's 2% trim pad
+  const [top, bottom] = inset ?? [0.02 * Math.max(IW, IH), 0];
+  return { w: IW * s, hh: IH * s, fx: (pose.feet ?? 0.5) * IW * s, sole: (IH - bottom) * s, head: top * s, s };
 };
 
 const byAt = <T extends { at: number }>(xs: T[]): T[] => [...xs].sort((a, b) => a.at - b.at);
@@ -141,7 +151,7 @@ export type Nudge = { dx?: number; dy?: number; rot?: number; sy?: number };
 export type PerformerProps = ActOptions & {
   poses: Record<string, Pose>;
   beats: Beat[];
-  /** where the feet stand (the point `feet` of the canvas's bottom edge), clip px */
+  /** where the feet stand (the point `feet` across, on the soles' line), clip px */
   x: number; y: number;
   /** the drawn height of a pose's canvas at scale 1, clip px */
   h: number;
@@ -172,13 +182,13 @@ export function Performer({ poses, beats, x, y, h, flip = false, level: levelIn,
   if (!pose) throw new Error(`Performer: a beat names pose "${a.pose}", not one of ${Object.keys(poses).join(", ")}`);
   const n = nudge ? nudge(f) : {};
   const sy = a.sy * (n.sy ?? 1), sx = a.sx / Math.sqrt(n.sy ?? 1);
-  const { w, hh, fx } = poseBox(pose, h, a.scale);
+  const { w, hh, fx, sole } = poseBox(pose, h, a.scale);
   const blinking = blinks.some((b) => f >= b && f < b + blinkLen) || (autoBlink && blinkAt(f, seed, blinkEvery, blinkLen, fps));
   const pic = faceAt(pose, talkAt(level, f, open, hold), blinking);
   return (
     <div style={{
-      position: "absolute", left: x - fx + (n.dx ?? 0), top: y - hh + a.dy + (n.dy ?? 0), width: w, height: hh,
-      transform: `rotate(${a.rot + (n.rot ?? 0)}deg) scale(${flip ? -sx : sx}, ${sy})`, transformOrigin: `${fx}px ${hh}px`,
+      position: "absolute", left: x - fx + (n.dx ?? 0), top: y - sole + a.dy + (n.dy ?? 0), width: w, height: hh,
+      transform: `rotate(${a.rot + (n.rot ?? 0)}deg) scale(${flip ? -sx : sx}, ${sy})`, transformOrigin: `${fx}px ${sole}px`,
     }}>
       <Img src={assetSrc(pic)} style={{ width: w, height: hh, display: "block" }} />
     </div>
@@ -198,8 +208,7 @@ export type PoseSheetProps = {
 };
 
 /** A preview still: the poses side by side on one ground line, each placed as Performer places it (same `h`, its
- *  `scale` and `feet`), its id under it, a tick at its feet and a guide across at the first pose's head top (its
- *  canvas top less draw's 2% trim pad): one look shows whether the head size holds and the feet are right. */
+ *  `scale` and `feet`), its id under it, a tick at its feet and a guide across at the first pose's head top: one look shows whether the head size holds and the feet are right. */
 export function PoseSheet({ poses, ids, h, y, show = "src" }: PoseSheetProps) {
   const { w: W, h: H } = useClip();
   const ink = useLineStyle();
@@ -212,7 +221,7 @@ export function PoseSheet({ poses, ids, h, y, show = "src" }: PoseSheetProps) {
     return { id, p, b: poseBox(p, h, 1, "PoseSheet") };
   });
   const first = boxes[0];
-  const head = first ? gy - first.b.hh + 0.02 * Math.max(first.b.w, first.b.hh) : 0;
+  const head = first ? gy - first.b.sole + first.b.head : 0;
   const font = Math.max(32, W / 30);
   return (
     <div style={{ position: "absolute", left: 0, top: 0, width: W, height: H }}>
@@ -220,7 +229,7 @@ export function PoseSheet({ poses, ids, h, y, show = "src" }: PoseSheetProps) {
         const cx = (W * (i + 0.5)) / boxes.length;
         return (
           <React.Fragment key={id}>
-            <Img src={assetSrc(p[show] ?? p.src)} style={{ position: "absolute", left: cx - b.fx, top: gy - b.hh, width: b.w, height: b.hh }} />
+            <Img src={assetSrc(p[show] ?? p.src)} style={{ position: "absolute", left: cx - b.fx, top: gy - b.sole, width: b.w, height: b.hh }} />
             <div style={{ position: "absolute", left: cx - ink.weight / 2, top: gy - font * 0.6, width: ink.weight, height: font * 1.2, background: "#D0342C" }} />
             <div style={{ position: "absolute", left: cx - 200, top: gy + font * 0.8, width: 400, textAlign: "center", fontSize: font, fontFamily: "sans-serif", color: ink.color }}>{id}</div>
           </React.Fragment>

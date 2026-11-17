@@ -1,4 +1,4 @@
-// Layered photographs, the pure part: plate fit, depth of field, travel along a traced line, shade ramps, a
+// Photograph components, the pure part: plate fit, depth of field, travel along a traced line, shade ramps, a
 // camera's handheld drift and the progress of a scene join. Functions of the frame only.
 import { random } from "remotion";
 import type { Pt } from "./geom";

@@ -1,6 +1,6 @@
 {
   "name": "Broll",
-  "description": "Footage that looks filmed, made from pictures: each shot is one plate with a clip baked from it (a parallax travel or a tween of key poses), panned and held in a slightly unsteady hand, with live steam, falling snow or dust and small things crossing. Give it the full canvas box and two to three seconds a shot; it cuts hard at each shot's `at` and never shows the plate's edge.",
+  "description": "Still pictures cut as shots (a picture being moved, which reads as a warp when watched: not a film's motion): each shot is one plate with a clip baked from it (a parallax travel or a tween of key poses), panned and held in a slightly unsteady hand, with live steam, falling snow or dust and small things crossing. Give it the full canvas box and two to three seconds a shot; it cuts hard at each shot's `at` and never shows the plate's edge.",
   "props": {
     "type": "object",
     "additionalProperties": false,

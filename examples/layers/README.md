@@ -1,7 +1,7 @@
 # A film in layered photographs
 
 A workspace with one project, `projects/balloon`: a 12-second vertical film on why a hot-air balloon rises, made
-from four generated photographs that move as layers ([docs/kit.md](../../docs/kit.md), "Layered photographs").
+from four generated photographs that move as layers ([docs/kit.md](../../docs/kit.md), "Photograph components").
 Render it with
 
 ```sh

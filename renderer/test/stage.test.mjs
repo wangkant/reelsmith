@@ -503,6 +503,17 @@ test("poseBox: h is the canvas height at scale 1; feet and scale applied", () =>
   assert.equal(K.poseBox({ src: "p.png", imgW: 400, imgH: 800 }, 800).fx, 200);
 });
 
+test("poseBox: the soles, not the canvas's clear trim pad, stand on the ground line", () => {
+  // a 500x1000 cut-out with 20 clear rows under its feet and 24 over its head, drawn 2000 tall
+  const b = K.poseBox({ src: { src: "p.png", size: [500, 1000], inset: [24, 20] } }, 2000);
+  assert.equal(b.sole, 1960);
+  assert.equal(b.head, 48);
+  assert.equal(K.poseBox({ src: "p.png", imgW: 500, imgH: 1000, inset: [24, 20] }, 1000).sole, 980);
+  const bare = K.poseBox({ src: { src: "p.png", size: [500, 1000] } }, 1000);    // unmeasured: the canvas bottom
+  assert.equal(bare.sole, 1000);
+  assert.equal(bare.head, 20);
+});
+
 test("framingAt: hard cuts at their frames, clamped inside the scene", () => {
   const cuts = [{ at: 40, x: 300, y: 1500, z: 2 }, { at: 10, x: 540, y: 960, z: 1.5 }];
   assert.deepEqual(K.framingAt(cuts, 0, 1080, 1920), { x: 540, y: 960, z: 1 });

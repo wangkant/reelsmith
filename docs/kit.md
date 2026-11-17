@@ -1,8 +1,8 @@
 # @reelsmith/kit
 
 Everything a component may import from `@reelsmith/kit`. **To start, read the Exports block below and the one
-section your film needs** ("A component" for a single component, "Stage kit" for drawn worlds, "Drawn-pose
-animation" for a drawn character who acts, "Layered photographs" for photographs that move as layers); the block
+section your film needs** ("A component" for a single component, "Drawn-pose animation" for a film's picture,
+"Stage kit" for drawn worlds, "Photograph components" for the photo reference); the block
 gives every export's props or arguments, defaults and return type, so there is no need to read the sources. The
 source is `renderer/src/kit/`; the presets in `renderer/src/presets/` are fuller examples (`library(p, "Receipt")`
 prints a preset's source path).
@@ -55,7 +55,7 @@ TOKEN_NAMES: readonly ["paper", "ink", "night", "snow", "accent", "gold", "good"
 twoLines(text: string, maxOne = 9) → string[]
 withAlpha(color: string, a) → string
 words(text: string) → string[]
-type AssetRef = {src: string, kind?: string, size?: [n, n] | null, box?: [n, n, n, n] | null, site?: string, line?: number | null, around?: [n, n] | null, duration?: number | null, animated?: boolean}
+type AssetRef = {src: string, kind?: string, size?: [n, n] | null, box?: [n, n, n, n] | null, site?: string, line?: number | null, around?: [n, n] | null, duration?: number | null, animated?: boolean, inset?: [n, n] | null}
 type BlockOptions = {max, min?, maxLines?, family?: string, weight?: string | number, lineHeight?}
 type FontName = keyof typeof FONTS
 type Ground = "light" | "dark"
@@ -270,7 +270,7 @@ framingAt(cuts: FramingCut[], f, w, h, scene?: [n, n]) → { x: number; y: numbe
 <LineStyle children?: ReactNode, ...LineStyleValue>
 <Performer poses: Record<string, Pose>, beats: Beat[], x, y, h, flip = false, level?: ((f: number) => number), open = 0.14, hold = 0.07, blinks = [], autoBlink = true, blinkEvery = [2.5, 5], blinkLen = 3, nudge?: ((f: number) => Nudge), ...ActOptions>
 <PopMark x, y, at, kind = "!", size = 170, len = 36, r = 10, color?: string>
-poseBox(pose: Pose, h, scale = 1, who = "Performer") → { w: number; hh: number; fx: number; s: number }
+poseBox(pose: Pose, h, scale = 1, who = "Performer") → { w: number; hh: number; fx: number; sole: number; head: number; s: number }
 <PoseSheet poses: Record<string, Pose>, ids?: string[], h, y?, show = "src">
 <Splash x, y, at, w = 180, n = 6, len = 24, color?: string>
 <SpeedLines x, y, at, dir = 0, len = 240, n = 5, spread = 170, life = 10>
@@ -287,7 +287,7 @@ type Beat = {at, pose: string, dir?, scale?}
 type FramingCut = {at, x, y, z}
 type LineStyleValue = {color: string, weight, paper: string, spark: string}
 type Nudge = {dx?, dy?, rot?, sy?}
-type Pose = {src: Asset, shut?: Asset, blink?: Asset, blinkOpen?: Asset, scale?, feet?, imgW?, imgH?}
+type Pose = {src: Asset, shut?: Asset, blink?: Asset, blinkOpen?: Asset, scale?, feet?, imgW?, imgH?, inset?: [n, n]}
 type Toss = {x, y, r, sx, sy, t, landed: boolean}
 ```
 
@@ -452,31 +452,131 @@ unknown keys (`"additionalProperties": false`) so a typo is caught at edit time.
 ## Stage kit
 
 The stage kit (`renderer/src/kit/stage/`, exported from `@reelsmith/kit` by name) is for performance films: films in
-which every narration line is acted out in code by drawn objects and torn photo cut-outs, instead of laid over a
-still or a video. `examples/performance/` is a complete one; the manual's "Performance films" section gives the track
-layout. Its second manner, "Layered photographs" (the last section), builds the same kind of world from generated
-photographs that move as layers; `examples/layers/` is one.
+which every narration line is acted out in code instead of laid over a still or a video. The picture is drawn
+animation: a character drawn in key poses on a set drawn in the same style ("Drawn-pose animation", next).
+`examples/performance/` is a complete film; the manual's "Performance films" section gives the track layout.
 
 ### The form
 
-1. A film is one or more **worlds**: a component clip that draws a set (`Room`, `Street`, `Outdoors`, `Desk`)
-   and performs on it. A world may span the whole film and read every narration line from `useClip().lines`
-   (`T("word")` finds a word in any of them), or one world may play under each line (`"start": "line:N"`). A head
-   text clip holds the take for at most 4.5 s; captions come from the captions track, never from a component.
-   The older layout, one `ground` clip under transparent per-line scenes, still works.
-2. No image or video clip fills the frame. A picture appears only as a `Cut` (or a `Loupe` of one) inside a world.
-3. Cues come from the narration: `const { T } = useCues()`, then `T("word")`. Never type a time in a scene.
-4. Something lands at least every 1.5 to 2 s, on the word that names it; start the move 2 to 6 frames before `T`.
-5. Paper and cut-outs move at 12 poses a second (`step`, `Actor`); ink, mist, swings and falls move on every frame.
-6. Words on screen belong to objects (`Label`, `Tag`, `Stamp`, `Card`, `Sign`): 64 px or more, the film's key
+1. The picture is **drawn-pose animation**: a character model sheet, key poses with their twins played by
+   `Performer`, a set in layers in the same style, cut-out props with weight, effects drawn in the same line, and
+   hard cuts between framings on words. Check it on a 6-a-second and a 25-a-second sheet of the draft.
+2. A film is one or more **worlds**: a component clip that draws a set and performs on it. A world may span the
+   whole film and read every narration line from `useClip().lines` (`T("word")` finds a word in any of them), or one
+   world may play under each line (`"start": "line:N"`). A head text clip holds the take for at most 4.5 s; captions
+   come from the captions track, never from a component. The older layout, one `ground` clip under transparent
+   per-line scenes, still works.
+3. No image or video clip fills the frame. Pictures enter a world as `*_asset` props: drawn layers and cut-outs in
+   `Photo`, or a torn `Cut`.
+4. Cues come from the narration: `const { T } = useCues()`, then `T("word")`. Never type a time in a scene.
+5. Something lands at least every 1.2 to 2 s, on the word that names it; start the move 2 to 6 frames before `T`.
+6. Paper and cut-outs move at 12 poses a second (`step`, `Actor`); ink, mist, swings and falls move on every frame.
+7. Words on screen belong to objects (`Label`, `Tag`, `Stamp`, `Card`, `Sign`): 64 px or more, the film's key
    number 140 px or more, one new word per beat.
-7. Lay out in the clip's own pixels (`useClip()` `w`, `h`); the hero object spans most of the safe box; keep text
+8. Lay out in the clip's own pixels (`useClip()` `w`, `h`); the hero object spans most of the safe box; keep text
    out of the caption band.
-8. Drawn objects and cut-outs mix freely on a set: a torn photo taped to a `Desk` is still on the desk.
+9. Moving or warping one picture is not motion: a cut-out slid across a still, a slow push over a plate, a depth
+   bake (`parallax`) or interpolated frames (`tween`) read as a warp when watched.
 
-### Build a world first
+### Drawn-pose animation
 
-Write the place before the story objects, then move the camera through it, then perform:
+This is how a film's picture is made. A drawn host acts as limited TV animation does: each key pose is its
+own drawing; the `Performer` holds one, crouches and leans against the coming move, snaps to the next, overshoots
+and settles, breathes while it holds, flaps its mouth on the voice and blinks. It never pretends to be footage and
+needs no photographs, depth, `tween` or `parallax`.
+
+1. **One model sheet** fixes the design. **Every key pose** is a cut-out drawn with `style_ref_asset` = the sheet,
+   head to feet, the same outfit named in every prompt; one pose per attitude (explain, doubt, shock, smug, shrug, think).
+   draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose.
+2. **Twins**, each registered onto its pose's canvas: `draw(p, "pA_shut", "the mouth is closed in a small smile",
+   twin_of="pA")`; for blinks `draw(p, "pA_blink", "the eyes are shut", twin_of="pA_shut")` (eyes shut, mouth
+   shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). Say "mouth" or "eyes" in the
+   prompt: only that part is taken from the redraw, whole and with a soft edge, lined up on its surroundings; fur,
+   sleeves and outline that the redraw wobbled stay the base's, so nothing flickers when the two swap. The report
+   gives the patched box, how far down the figure it sits, and the regions left as the base: a box that sits low
+   for a face is the wrong part, draw it again. A report that says NOT A TWIN (nothing changed like a mouth or an
+   eye, or the face around it is another drawing) is another pose: draw it again, or use it as a pose of its own
+   with its own twins. Look at each twin beside its pose once, enlarged at the mouth. The Performer refuses a twin
+   whose pixel size differs from its pose's picture (it would make the figure jump on every mouth flap).
+3. **Preview a PoseSheet before staging**: `<PoseSheet poses={poses} h={520} />` as one still shows every pose on
+   one ground line as the Performer places it (pick `h` so they fit side by side), a tick at each `feet` and a guide
+   at the first pose's head top: even out head size with `scale` and the stance with `feet` until both hold.
+   Poses stand on their soles: the clear rows under a cut-out are measured from the picture, so `y` is where the
+   soles touch (for a plain string `src`, give `inset: [top, bottom]` in image px).
+4. **The set** as drawn layers in the same style; **props** as cut-outs in `Photo` (`anchor` is the pivot, `r` turns
+   about it, `w` × sx with `sy` = sy / sx squashes), moved by `drop`, `toss` (an arc that lands and squashes), `swing`.
+5. **Beats** from cue times, **effects** under one `LineStyle` in the drawings' line colour, **cuts** between
+   framings with `Framing` (wide, mid, a close shot of the detail): hard cuts on words, never camera stations or a
+   slow move over one picture.
+
+**Pose sizes**: `h` is the drawn height of a pose's canvas at scale 1, in clip px; `feet` is the x of the point
+midway between the feet as a fraction of the canvas width (default 0.5; take it from the draw report); `scale`
+multiplies one pose so its head matches the others. The Performer stands the canvas's bottom edge on `y` with the
+`feet` point on `x`. **Mouth and eyes**: while the voice is heard the open-mouth `src` shows (a blink uses
+`blinkOpen` if given, otherwise it is skipped); in silence `shut`, and `blink` while blinking. Beats may come in any
+order (sorted by `at`).
+
+```tsx
+const { T } = useCues();
+const a = pics;                                    // props named *_asset keep the suffix: a.pA_asset, not a.pA
+const poses = { pA: { src: a.pA_asset, shut: a.pA_shut_asset, blink: a.pA_blink_asset, feet: 0.52 },
+  pB: { src: a.pB_asset, shut: a.pB_shut_asset, blink: a.pB_blink_asset, scale: 0.9, feet: 0.46 } };
+const beats = [{ at: 0, pose: "pA" }, { at: T("never") - 3, pose: "pB", dir: -1 }];
+const stress = [T("so"), T("egg", 0, 1)];         // nth counts from 0: 1 is the second "egg"
+const nudge = (k) => ({ rot: stress.reduce((s, at) => s + wob(k, at, 3), 0),
+  dy: stress.reduce((s, at) => s + wob(k, at, -14), 0) });
+const egg = toss(f, T("drop"), [520, 900], [250, 1150], 10, 120, 300);
+<Framing scene={[1080, 1920]} cuts={[{ at: T("drop") - 2, x: 300, y: 1100, z: 1.8 }, { at: T("never") - 3, x: 540, y: 960, z: 1 }]}>
+  <LineStyle color="#3A1F10" weight={10}>
+    <Photo src={a.wall_asset} x={540} y={0} w={1080} anchor={[0.5, 0]} />
+    <Performer poses={poses} beats={beats} x={640} y={1600} h={1250} nudge={nudge} />
+    <Photo src={a.pot_asset} x={250} y={1105} w={300} anchor={[0.5, 0]} />
+    <Photo src={a.egg_asset} x={egg.x} y={egg.y} w={86 * egg.sx} sy={egg.sy / egg.sx} r={egg.r} anchor={[0.5, 0.5]} />
+    <Splash x={250} y={1150} at={T("drop") + 10} color="#6B3A1C" />
+    <PopMark x={880} y={560} at={T("never") - 3} kind="!" />
+  </LineStyle>
+</Framing>
+```
+
+Its clip: `{"type": "component", "name": "Cook", "start": 0, "end": "end", "box": "full", "props": {"pics":
+{"pA_asset": "pA", "pA_shut_asset": "pA_shut", ...}}}`. Acting defaults (`ActOptions`): `antic` 3 frames,
+`anticSquash` 0.07, `anticLean` 3°, `anticDip` 6 px, `settle` 12 frames, `overSquash` 0.09, `overRot` 5°, `breath`
+0.012 over 2.8 s, `sway` 0.6° over 4.1 s. The mouth reads `useVoiceLevel()` (loudness 0..1 a frame, 0 without a
+voice) on twos; blinks run by themselves. `LineStyle` defaults: line #2A1A0E, 9 px at 1080 wide, paper #FFFBF2,
+spark #FFD45C. `Framing`: from each cut's `at` the scene shows `z` times larger with its point (`x`, `y`) at the frame
+centre, no easing; with `scene` [w, h] it is clamped so no edge shows (`framingAt` gives the framing at a frame).
+
+**Effects** (all in the LineStyle line colour and weight):
+- `Burst`: an impact flash (paper fill) and rays shooting out, centred on (x, y)
+- `ToonStar`: a four-point star centred on (x, y), filled with spark (or `color`)
+- `SteamCurls`: wavy curls in paper rising from (x, y), the base of the steam
+- `Splash`: a ring on the surface and drops thrown up, centred where the thing lands (x, y); drops filled with paper (or `color`)
+- `SpeedLines`: strokes trailing behind a move; (x, y) is the moving thing, the strokes start behind it
+- `SweatDrop`: a drop (`color`, default light blue) centred on (x, y), its tip up
+- `PopMark`: "!" or "?" filled with spark (or `color`), (x, y) its centre
+- `Cracks`: lines spreading from the hit point (x, y), kept inside `clip`
+- `DustPuff`: two clouds (`color`, default light sand) rolling out sideways from (x, y) on the ground
+
+**What reads as animation**: a new pose or action at least every 1.2 s of narration; anticipation before every move
+(give `dir`); arcs and gravity for props, a squash where they land; the pose 2 or 3 frames before its word; the face
+changes with the line; a close shot for a detail; never a picture slid to fake a camera; nothing held dead.
+
+- **Acting inside a hold**: a hold over 1.2 s needs something: a nod or a tilt through `nudge` on each stressed word
+  (`wob` as in the example), the same pose mirrored with `flip`, a second look through a twin.
+- **Prop hand-off**: a prop that moves as its own cut-out is not also drawn in the pose at that moment. On the frame
+  it leaves the hand, switch to a pose or twin with the hand empty, and start the cut-out from the hand's position.
+- **Judge it on sheets**: pacing on a 6-a-second sheet, `frames(p, "build/draft.mp4", every=0.1667, start=2.4,
+  end=7.2)`; each pose change on a 25-a-second sheet of the half second around it, `frames(p, "build/draft.mp4",
+  every=0.04, start=3.9, end=4.4)` (0.04 is the smallest `every`): the crouch, the snap and the settle must be visible.
+
+**On model**: the sheet as `style_ref_asset` every time, the outfit named every time, each new pose looked at beside
+the sheet and on a PoseSheet with the others.
+**Limits**: limbs jump between drawings (more poses smooth it, not tweening); two mouth shapes.
+
+### Places drawn in code
+
+A set component draws a whole place in code, every plane its own drawing, so a camera may travel through it. In
+a drawn-pose film the framing changes by hard cuts (`Framing`) instead. Place first, then the stops, then perform:
 
 1. **Place.** Pick a set and give it a `span` wide enough for every station (`[-0.3 * w, 2.9 * w]` for four
    stops). The set paints the far planes, the surface and the foreground; `useSet().floor` is where things stand.
@@ -640,10 +740,9 @@ specks. All sizes have defaults relative to the clip width.
 
 ### A complete scene
 
-The last world of `examples/performance/` (`library/components/SaltDesk.tsx`) is one: a `Desk` set, three camera
-stops from `stations`, a taped `Cut` of a photo with a `Loupe` on its detail, a drawn dish and a heap of salt made
-`Solid`, a `drop` with a squash and a `Tag` on a `pendulum`, every move cued with `T("word")`. Read it before
-writing a world of your own.
+The last world of `examples/performance/` (`library/components/SaltDesk.tsx`) is a set-in-code scene: a `Desk`
+set, three camera stops from `stations`, a taped `Cut` of a photo with a `Loupe` on its detail, a drawn dish and a
+heap of salt made `Solid`, a `drop` with a squash and a `Tag` on a `pendulum`, every move cued with `T("word")`.
 
 ### Size and render cost
 
@@ -662,262 +761,51 @@ coordinates on all four edges (fractions when the size is unknown). Preview it o
 points off it (10 to 14 points are enough), write them into the scene as `Pt[]` and remove the clip. It is a
 tracing aid, not film content; its labels are not measured as film text.
 
-### Drawn-pose animation
+### Photograph components
 
-A drawn host who acts, as limited TV animation does: each key pose is its own drawing; the `Performer` holds one,
-crouches and leans against the coming move, snaps to the next, overshoots and settles, breathes while it holds, flaps
-its mouth on the voice and blinks. For stories, explainers with attitude, comedy: honest animation that never
-pretends to be footage, and needs no photographs, depth, `tween` or `parallax`.
+A reference for the components and tools that place and move generated photographs; `examples/layers/` uses them.
+**Their limit**: a plate pushed or swayed, a cut-out slid across it, a clip baked from one still by its depth
+(`parallax`) or frames interpolated between key pictures (`tween`) all move or warp one picture. Watched, that reads
+as a warp, so none of them is a film's motion: make that with drawn-pose animation. `Photo`, `Surface`, `Vapor`,
+`Glow`, `Lens` and the change of state are plain components that any world can use.
 
-1. **One model sheet** fixes the design. **Every key pose** is a cut-out drawn with `style_ref_asset` = the sheet,
-   head to feet, the same outfit named in every prompt; one pose per attitude (explain, doubt, shock, smug, shrug, think).
-   draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose.
-2. **Twins**, each registered onto its pose's canvas: `draw(p, "pA_shut", "the mouth is closed in a small smile",
-   twin_of="pA")`; for blinks `draw(p, "pA_blink", "the eyes are shut", twin_of="pA_shut")` (eyes shut, mouth
-   shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). Only the asked-for change is taken
-   from a twin; other redrawn spots are reported and kept from the base. A report that says NOT A TWIN is another
-   pose: draw it again, or use it as a pose of its own with its own twins. The Performer refuses a twin whose pixel
-   size differs from its pose's picture (it would make the figure jump on every mouth flap).
-3. **Preview a PoseSheet before staging**: `<PoseSheet poses={poses} h={520} />` as one still shows every pose on
-   one ground line as the Performer places it (pick `h` so they fit side by side), a tick at each `feet` and a guide
-   at the first pose's head top: even out head size with `scale` and the stance with `feet` until both hold.
-4. **The set** as drawn layers in the same style; **props** as cut-outs in `Photo` (`anchor` is the pivot, `r` turns
-   about it, `w` × sx with `sy` = sy / sx squashes), moved by `drop`, `toss` (an arc that lands and squashes), `swing`.
-5. **Beats** from cue times, **effects** under one `LineStyle` in the drawings' line colour, **cuts** between
-   framings with `Framing` (wide, mid, a close shot of the detail): hard cuts on words, never camera stations or a
-   slow move over one picture.
+Pictures: a plate is an ordinary `draw` in the film's aspect; a cut-out is `draw(..., cutout=true)`, an isolated,
+trimmed object with alpha (look at it over a coloured ground for a halo or a cropped edge). Trace fronts and lines
+on an `AssetGrid` preview of the plate, in picture px, which `usePlate().at(pt)` (or `coverFit(...).at(pt)`) turns
+into stage px.
 
-**Pose sizes**: `h` is the drawn height of a pose's canvas at scale 1, in clip px; `feet` is the x of the point
-midway between the feet as a fraction of the canvas width (default 0.5; take it from the draw report); `scale`
-multiplies one pose so its head matches the others. The Performer stands the canvas's bottom edge on `y` with the
-`feet` point on `x`. **Mouth and eyes**: while the voice is heard the open-mouth `src` shows (a blink uses
-`blinkOpen` if given, otherwise it is skipped); in silence `shut`, and `blink` while blinking. Beats may come in any
-order (sorted by `at`).
-
-```tsx
-const { T } = useCues();
-const a = pics;                                    // props named *_asset keep the suffix: a.pA_asset, not a.pA
-const poses = { pA: { src: a.pA_asset, shut: a.pA_shut_asset, blink: a.pA_blink_asset, feet: 0.52 },
-  pB: { src: a.pB_asset, shut: a.pB_shut_asset, blink: a.pB_blink_asset, scale: 0.9, feet: 0.46 } };
-const beats = [{ at: 0, pose: "pA" }, { at: T("never") - 3, pose: "pB", dir: -1 }];
-const stress = [T("so"), T("egg", 0, 1)];         // nth counts from 0: 1 is the second "egg"
-const nudge = (k) => ({ rot: stress.reduce((s, at) => s + wob(k, at, 3), 0),
-  dy: stress.reduce((s, at) => s + wob(k, at, -14), 0) });
-const egg = toss(f, T("drop"), [520, 900], [250, 1150], 10, 120, 300);
-<Framing scene={[1080, 1920]} cuts={[{ at: T("drop") - 2, x: 300, y: 1100, z: 1.8 }, { at: T("never") - 3, x: 540, y: 960, z: 1 }]}>
-  <LineStyle color="#3A1F10" weight={10}>
-    <Photo src={a.wall_asset} x={540} y={0} w={1080} anchor={[0.5, 0]} />
-    <Performer poses={poses} beats={beats} x={640} y={1600} h={1250} nudge={nudge} />
-    <Photo src={a.pot_asset} x={250} y={1105} w={300} anchor={[0.5, 0]} />
-    <Photo src={a.egg_asset} x={egg.x} y={egg.y} w={86 * egg.sx} sy={egg.sy / egg.sx} r={egg.r} anchor={[0.5, 0.5]} />
-    <Splash x={250} y={1150} at={T("drop") + 10} color="#6B3A1C" />
-    <PopMark x={880} y={560} at={T("never") - 3} kind="!" />
-  </LineStyle>
-</Framing>
-```
-
-Its clip: `{"type": "component", "name": "Cook", "start": 0, "end": "end", "box": "full", "props": {"pics":
-{"pA_asset": "pA", "pA_shut_asset": "pA_shut", ...}}}`. Acting defaults (`ActOptions`): `antic` 3 frames,
-`anticSquash` 0.07, `anticLean` 3°, `anticDip` 6 px, `settle` 12 frames, `overSquash` 0.09, `overRot` 5°, `breath`
-0.012 over 2.8 s, `sway` 0.6° over 4.1 s. The mouth reads `useVoiceLevel()` (loudness 0..1 a frame, 0 without a
-voice) on twos; blinks run by themselves. `LineStyle` defaults: line #2A1A0E, 9 px at 1080 wide, paper #FFFBF2,
-spark #FFD45C. `Framing`: from each cut's `at` the scene shows `z` times larger with its point (`x`, `y`) at the frame
-centre, no easing; with `scene` [w, h] it is clamped so no edge shows (`framingAt` gives the framing at a frame).
-
-**Effects** (all in the LineStyle line colour and weight):
-- `Burst`: an impact flash (paper fill) and rays shooting out, centred on (x, y)
-- `ToonStar`: a four-point star centred on (x, y), filled with spark (or `color`)
-- `SteamCurls`: wavy curls in paper rising from (x, y), the base of the steam
-- `Splash`: a ring on the surface and drops thrown up, centred where the thing lands (x, y); drops filled with paper (or `color`)
-- `SpeedLines`: strokes trailing behind a move; (x, y) is the moving thing, the strokes start behind it
-- `SweatDrop`: a drop (`color`, default light blue) centred on (x, y), its tip up
-- `PopMark`: "!" or "?" filled with spark (or `color`), (x, y) its centre
-- `Cracks`: lines spreading from the hit point (x, y), kept inside `clip`
-- `DustPuff`: two clouds (`color`, default light sand) rolling out sideways from (x, y) on the ground
-
-**What reads as animation**: a new pose or action at least every 1.2 s of narration; anticipation before every move
-(give `dir`); arcs and gravity for props, a squash where they land; the pose 2 or 3 frames before its word; the face
-changes with the line; a close shot for a detail; never a picture slid to fake a camera; nothing held dead.
-
-- **Acting inside a hold**: a hold over 1.2 s needs something: a nod or a tilt through `nudge` on each stressed word
-  (`wob` as in the example), the same pose mirrored with `flip`, a second look through a twin.
-- **Prop hand-off**: a prop that moves as its own cut-out is not also drawn in the pose at that moment. On the frame
-  it leaves the hand, switch to a pose or twin with the hand empty, and start the cut-out from the hand's position.
-- **Judge it on sheets**: pacing on a 6-a-second sheet, `frames(p, "build/draft.mp4", every=0.1667, start=2.4,
-  end=7.2)`; each pose change on a 25-a-second sheet of the half second around it, `frames(p, "build/draft.mp4",
-  every=0.04, start=3.9, end=4.4)` (0.04 is the smallest `every`): the crouch, the snap and the settle must be visible.
-
-**On model**: the sheet as `style_ref_asset` every time, the outfit named every time, each new pose looked at beside
-the sheet and on a PoseSheet with the others.
-**Limits**: limbs jump between drawings (more poses smooth it, not tweening); two mouth shapes.
-
-### Layered photographs
-
-Every picture on screen is a generated photo-real image, moved by code as separate layers: one full-frame
-**plate** is the place, **cut-outs with a true alpha channel** stand in it, and traced parts of the plate are drawn
-again in front so things pass behind them. Light, air, matter (steam, glow, liquid), lens and motion are added in
-code, things change state in place, and text is printed on the objects themselves. `examples/layers/` is a film.
-
-Use it for a real place or object; use the drawn sets for an abstract idea or a picture that would need faces.
-The standard is detail and plausibility: every thing where it belongs, sizes, light and angles that agree between
-layers, and motion that follows how the thing behaves (a flame flares and settles, a door swings on its hinge).
-
-**Plan the pictures of a scene** before drawing any:
-
-1. One **plate** per place, full frame, in the film's aspect (draw at 9:16 or 2:3): the place with nothing that will
-   move in it. Leave room where things will travel, and ask for the parts things pass behind by name ("a continuous
-   line of near treetops across the lower middle of the frame").
-2. Each thing that moves, lights up or deforms as its own **cut-out**: one object, its angle and light matching the
-   plate ("lit by low morning sun from the right"). Nothing that must move belongs in the plate.
-3. Write down what passes behind what: each answer is a front polygon you will trace on the plate.
-4. A second place (inside the object, a close-up) is its own plate; joins carry the camera into it.
-
-Three to five pictures carry 10 to 15 s; plates near 1024 px wide (wider if you will `punch` in), cut-outs at
-the size they are seen, WebP for both. A plate is an ordinary `draw`; a cut-out is `draw(..., cutout=true)` (an
-isolated, trimmed object with alpha): look at it over a coloured ground for a halo, a drawn shadow or a cropped edge.
-
-**Trace** on an `AssetGrid` preview of the plate (20 columns): fronts along the edge that hides things, closed round
-the frame's bottom (10 to 25 points), travel lines (2 to 4 points), effect origins; in picture px, which
-`usePlate().at(pt)` (or `coverFit(...).at(pt)`) turns into stage px.
-
-- `Plate`: the plate on its own parallax layer, covering the frame with `pad` to spare. `drift` is a slow breathing move in px; `sway` (type `Sway`) `{y, amp = 1.2, hz = 0.35, feather = 60, gust?, gustAmp = 3}` bends the strip below picture row `y` (grass, water) with an optional gust at a frame. Children stand in the plate (stage px of its layer); `fronts` (polygons in picture px, type `Pt[][]`) are drawn again over them with a soft edge. `light` (type `Light`, `{from: "upper-left", height: 0.5}`; `from` is also `left right upper-right back front lower-left lower-right` or degrees) is where the light comes from: the photos inside cast their shadows away from it
-- **A moving plate**: `film` (type `Film`) is a clip baked from the plate (a tween between key pictures of the shot, a camera travelling through it), played over the still from frame `film.at` (a frame on the Plate's own clock: its `f` if given, else the clip's frame), with `from` and `len` in seconds, `rate` a speed factor, `loop` (needs `len` or an asset ref, whose length is known) and `hold`. Before it the still shows (clip frame `from` when `from` > 0, as `Footage` does), after it the last frame holds (`hold: "before"` returns to the still: seamless when the clip ends where it began). A video `src` (its asset ref gives the size, else `imgW`, `imgH`) plays from frame 0, and wherever it is not running its first frame stands in for the still. Fronts, sway, the children and their shadows keep working; fronts are cut from the moving picture, but each copy (the plate, the sway strip, every front) decodes the clip again, so keep fronts few on a filmed plate. A `punch` of 1.7x on a 1080 px plate is soft: draw the plate wider if you will punch in. `<Plate src={a.stall} film={{ src: a.lift, at: T("lifts") }} fronts={[COUNTER]} light={{ from: "upper-left" }}>`
-- **Punch**: `punch` (type `Punch`, one or a list) is a second camera on the same plate: from frame `at` (until `end`) a hard cut to `to` (picture px) `z` times closer (1.3 to 1.8), with its own lens `focus` and `aperture`; the crop stays inside the picture and everything in the plate follows. Cut in and out on words: `punch={[{ at: T("crack"), end: T("inside"), to: YAM, z: 1.6, focus: 0.9 }]}`. `punchAt`, `punchView` give the cue in force and its view
-- `Footage`: a video clip standing in the world like a `Photo` (`x`, `y`, `w` or `h`, `anchor`, `r`, `flip`, `fit`, lens blur and grade, `shade`, `tint`, `haze`), timed by `at` (a frame), `rate` (a factor), `from`, `len` (seconds), `loop` (needs `len` or an asset ref) and `hold` (both ends by default); `still` is the picture it was made from, shown while the clip is not running and not held (before the start unless `from` > 0, and after the end with `hold: "before"` or `false`; the default holds the last frame), and gives the size (else `imgW`, `imgH`). Frame-exact at any concurrency and free off screen or unseen; a video has no alpha, so a clip is a whole shot, a window or a screen, never a cut-out. `<Footage src={a.pour} still={a.cup} at={T("pour")} x={540} y={900} w={600} />`. `filmFrame` gives the clip frame at a frame; `FilmFrame` draws one; `isFilm` tells a video ref
+- `Photo`: a picture standing with its `anchor` (fractions of the picture) on (x, y). `depth` gives it its own parallax layer; inside a `Layer` or `Plate` it takes theirs. Depth of field comes from the enclosing `Lens`; `smear` is motion blur in px along `smearAng`; `shade` darkens, `tint` at `tintA` multiplies in the plate's light, `haze` mixes toward the air; `sy` stretches it from the anchor. `shadow` 0..1 grounds it from its own alpha: a dark contact patch under its lowest pixels and, with a `light` (its own or the Plate's), a cast shadow laid away from the light that softens and fades with distance (`cast` its strength, `shadowW` the patch width; `ground` is the stage y of the floor under a thing in the air, or `lift` its height off the floor as a fraction of its drawn height). Both are built in stage space from the measured alpha, so rotation, `flip`, `sy` and empty rows at the bottom of a cut-out are honoured, and during a change (`to`, `p`) the two silhouettes' shadows cross-fade. `castMatrix` is the geometry; `useLight` the Plate's light
+- **A change of state** (raw to cooked, off to on): both pictures from the same angle at the same size (a `to` whose aspect differs by over 1% is an error), then `<Photo src={a.raw} to={a.cooked} p={p} />`: a dissolve, or a `wipe` with a `soft` edge (`right left up down` is the direction it sweeps; `out` grows from `wipeAt`). `Plate` takes the same props; its fronts change with it
+- `Surface`: children (text, a small component) on a quad traced in picture px (top-left, top-right, bottom-right, bottom-left); inside the `Photo`, `Travel` or `Plate` that holds the picture it follows every move in perspective and takes its blur. `ink="print"` multiplies the ink into the surface, `ink="glow"` is a lit screen. `usePicture()` (type `Picture`) gives the same mapping to your own children
+- `Plate`: a full-frame picture on its own parallax layer, covering the frame with `pad` to spare; `drift` a slow move in px; `sway` (type `Sway`) `{y, amp = 1.2, hz = 0.35, feather = 60, gust?, gustAmp = 3}` bends the strip below picture row `y`. Children stand in it (stage px of its layer); `fronts` (polygons in picture px, `Pt[][]`) are drawn again over them with a soft edge. `light` (type `Light`, `{from: "upper-left", height: 0.5}`; `from` also `left right upper-right back front lower-left lower-right` or degrees) sets where the photos inside cast their shadows. `film` (type `Film`) plays a clip baked from the plate over the still from frame `film.at`, with `from`, `len` (seconds), `rate`, `loop` and `hold` (`"before"` returns to the still); a video `src` plays from frame 0. `punch` (type `Punch`, one or a list) is a hard cut from `at` (until `end`) to picture point `to`, `z` times closer (1.3 to 1.8), with its own `focus` and `aperture`; `punchAt`, `punchView` give the cue in force and its view
+- `Footage`: a video clip standing like a `Photo`, timed by `at` (a frame), `rate`, `from`, `len` (seconds), `loop` (needs `len` or an asset ref) and `hold`; `still` is the picture it was made from, shown while it is not running, and gives the size (else `imgW`, `imgH`). A video has no alpha: a whole shot, a window or a screen, never a cut-out. `filmFrame` gives the clip frame at a frame; `FilmFrame` draws one; `isFilm` tells a video ref
 - `Occluder`: one front placed by hand, in a `Layer` of the plate's depth with the plate's `pad` and `focus`
-- `Photo`: a picture standing with its `anchor` (fractions of the picture) on (x, y). `depth` gives it its own parallax layer; inside a `Layer` or `Plate` it takes theirs. Depth of field comes from the enclosing `Lens`; `smear` is motion blur in px along `smearAng`; `shade` darkens, `tint` at `tintA` multiplies in the plate's light, `haze` mixes toward the air; `sy` stretches it from the anchor. `shadow` 0..1 grounds it from its own alpha: a dark contact patch under its lowest pixels and, with a `light` (its own or the Plate's), a cast shadow laid away from the light that softens and fades with distance (`cast` its strength, `shadowW` the patch width; `ground` is the stage y of the floor under a thing in the air, or `lift` its height off the floor as a fraction of its drawn height: the shadow drops by that much, spreads and fades). Both are built in stage space from the measured alpha, so rotation, `flip`, `sy` and empty rows at the bottom of a cut-out are honoured, the shadow fades with `opacity`, and during a change (`to`, `p`) the two silhouettes' shadows cross-fade with the pictures. `castMatrix` is the geometry; `useLight` the Plate's light
-- `Travel`: a photo moving along `line` (stage px) from frame `at` for `dur`: perspective scale `sizes` [start, end], a smear that grows with its speed (one blur along the motion, never ghost copies), its shadow along with it (`groundAt(x, y)` keeps it on the floor during a hop), `shadeAt(x, y)` darkening it where it is, `turn` to follow the line's direction
-- `travelAt`, `pointAt`: the state a `Travel` draws; a point and direction at a fraction of a line
-- `shadeRamp`: a `shadeAt` function: 0 at `from`, `max` at `to` and beyond (into a doorway's shade)
-- `pictureSize`, `Hold`, `SvgImage`: a picture's size from its ref; a hidden `<Img>` that holds the render until a picture has loaded; an SVG `<image>` that holds it until it has decoded (key it by `href`)
-- `Haze`: air in a band: clear at y0, thickest at y1, gone again past it, with wisps drifting sideways. Put it among a plate's children (behind the cut-outs that stand in front of the distance)
-- `Motes`: soft specks of dust or pollen that drift and glint, brighter near `light`. In a near `Layer` (depth over 1, a little blur) they give the frame depth
-- `Rays`: shafts of light from (x, y) falling at `ang` degrees, added as light, breathing slowly
-- `Refract`: bends what it wraps: `heat` scrolls noise up through the ellipse `area` [cx, cy, rx, ry] (shimmer over a flame, a road, a roof); `front` bends a ring of radius `r` (grow `r` by the frame: a pressure wave); `ripple` three rings. `area`, `r` and `width` are frame px (`onScreen` maps a stage point)
-- `Warp`: deforms one soft region of what it wraps: bulge (`sx`, `sy` over 1), squash, bend (`skew`, `rot` around `origin`), shake (`dx`, `dy` from `shake`)
-- `Streak`: scenery running past an opening (a window): the picture repeats mirrored, `pos` is the distance run (`distanceAt(f, speed)`), the blur follows `speed`
-- `Pane`: glass over an opening: `dark` 0..1 (a tunnel), mirroring `reflect` (any node in stage px) more as it darkens
-- `Lens`: the camera body around a whole world (the `Stage` inside it sets `grain={0} light={0} vignette={0}`): depth of field (`aperture` px of blur per unit of depth from `focus`), one `grade` `{lift, gamma, gain, tint, tintA}`, static grain, impact `kick` `{at, amp = 22, dur = 14, fringe = 6}` (a shake with a brief colour fringe; one or a list) and a hand-held drift in px. Types `Grade`, `Kick`, `LensState`
-- `Join`: travels from scene `a` into scene `b` instead of cutting. `push`: into `hole` [x, y, w, h] of `a` (frame px; `oval` for a soft oval), where `b` is already seen, until it fills the frame. `whip`: a fast pan toward `dir` with real motion blur. `match`: the shape `from` [x, y, size] in `a` moves onto `to` in `b` while `b` dissolves in
-- `Vapor`: steam, smoke or breath rising from (x, y) `w` wide: soft puffs that slow, spread with `wind`, thin
-  out and fade, torn into wisps by moving noise (never drawn curls). `amount` 0 draws nothing; `blend` `screen` for
-  steam, `multiply` or `normal` with a grey `color` for smoke (`<Vapor x={sx} y={sy} w={120} amount={heat} />`)
-- `Glow`: light added over the thing that is lit: a bright core and a long soft tail, `squash` for light pooled on a
-  surface, `flicker` 0..1 for fire (0.5) or a candle (0.3), 0 for a lamp or a screen (`<Glow x={x} y={y} r={300} strength={0.6} flicker={0.5} />`)
-- `Embers`: sparks lifting off a fire bed, cooling from `hot` to `cool` with a short motion streak and a halo
-- `Droplet`: a drop that swells at the lip for `swell` seconds, lets go at `at` (one frame or a list), stretches and
-  blurs as it speeds up and splats on `land`; `color` and `alpha` say what liquid (water about `#DDEBF2` at 0.4, oil
-  0.75, syrup 0.9)
-- `Pour`: a stream from the lip to `land` between frames `at` and `end`: it thins as it falls, curves with `vx`,
-  carries a highlight, and its tail falls clear when it stops; a `pool` spreads where it lands and stays (or soaks
-  in over `soak` seconds)
-- **A change of state** (raw to cooked, off to on, empty to full): draw both pictures from the same angle at the
-  same size (a `to` whose aspect differs by over 1% is an error), then `<Photo src={a.raw} to={a.cooked} p={p} ... />`:
-  a dissolve, or a `wipe` with a `soft` edge: `right left up down` is the direction it sweeps on screen (`right`
-  starts at the left edge), `out` grows from `wipeAt`. `Plate` takes the same props (a room whose lights come on);
-  its fronts change with it
-- `Surface`: children (text, a small component) on a quad traced in picture px (top-left, top-right, bottom-right,
-  bottom-left of a blank label, a screen, a sheet). Put it inside the `Photo`, `Travel` or `Plate` that holds the
-  picture and it follows every move, scale and turn in perspective, and takes the picture's depth-of-field blur and
-  motion smear. `ink="print"` multiplies the ink into the surface, so the label's folds, highlight and grain show
-  through it; `ink="glow"` is a lit screen. `usePicture()` (type `Picture`) gives the same mapping to your own children
-  ```tsx
-  <Photo src={a.bottle} x={x} y={y} w={300} r={-6} shadow={0.8}>
-    <Surface quad={[[30, 720], [450, 720], [450, 1180], [30, 1180]]}><div style={{ fontSize: 64 }}>SYRUP</div></Surface>
-  </Photo>
-  ```
+- `Travel`: a photo slid along `line` (stage px) from `at` for `dur`, with perspective `sizes`, a smear by speed, its shadow (`groundAt`), `shadeAt` and `turn`; `travelAt`, `pointAt` give its state; `shadeRamp` makes a `shadeAt` (0 at `from`, `max` at `to`)
+- `pictureSize`, `Hold`, `SvgImage`: a picture's size from its ref; a hidden `<Img>` that holds the render until a picture has loaded; an SVG `<image>` that holds it until decoded (key it by `href`)
+- Air and light: `Haze` (a band of air, clear at y0, thickest at y1), `Motes` (drifting dust, brighter near `light`), `Rays` (shafts from (x, y) at `ang`), `Glow` (a core and a soft tail; `squash` pooled on a surface, `flicker` 0.5 fire, 0.3 candle, 0 lamp), `Vapor` (steam or smoke rising from (x, y) `w` wide, spread by `wind`; `blend` `screen` for steam, `multiply` or `normal` with a grey `color` for smoke), `Embers` (sparks cooling from `hot` to `cool`)
+- Liquid: `Droplet` (swells for `swell` s, falls at `at`, splats on `land`; `color`, `alpha`: water about `#DDEBF2` at 0.4, oil 0.75, syrup 0.9), `Pour` (a stream from the lip to `land` between `at` and `end`, curving with `vx`, a `pool` that stays or soaks in over `soak` s)
+- Bending what it wraps: `Refract` (`heat` shimmer through the ellipse `area` [cx, cy, rx, ry]; `front` a ring of radius `r`; `ripple`; frame px), `Warp` (bulge `sx`/`sy`, `skew`, `rot` around `origin`, `dx`/`dy`), `Streak` (scenery past an opening; `pos` from `distanceAt(f, speed)`), `Pane` (glass: `dark` 0..1, `reflect` more as it darkens)
+- `Lens`: the camera body around a world (the `Stage` inside sets `grain={0} light={0} vignette={0}`): depth of field (`aperture` px of blur per unit of depth from `focus`), one `grade` `{lift, gamma, gain, tint, tintA}`, static grain, impact `kick` `{at, amp = 22, dur = 14, fringe = 6}` and a hand-held drift. Types `Grade`, `Kick`, `LensState`
+- `Join`: from scene `a` into `b` instead of a cut: `push` into `hole` [x, y, w, h] (frame px; `oval`), `whip` toward `dir`, `match` the shape `from` [x, y, size] onto `to`
 - `onScreen`, `lookAt`, `joinAt`: where a stage point of a layer lands in the frame (and its scale), the camera x, y that centres it, a join's eased progress
 
-**A complete scene.** Line 1 of `examples/layers/` (`library/components/balloon/valley.tsx`): the valley plate,
-the balloon standing behind the treetops, warm air bending above its crown, mist, rays and motes, the camera
-pushing in; `Balloon.tsx` wraps the scenes in one `Lens` and joins them.
+Cost: plates, fronts and cut-outs are images under CSS transforms; an effect costs a second draw of what it wraps
+(`Refract`, `Warp`, a `sway` strip) or a filter over its area (`Haze`, `Rays`, `Vapor`, the `Lens` grade, a shadowed
+`Photo`), free when idle. Keep one or two active, around their words.
 
-```tsx
-export function Opening({ f, a, shot, lighter }: { f: number; a: Assets; shot: Shot; lighter: number }) {
-  const { w, h } = useClip();
-  const fit = coverFit(PLATE[0], PLATE[1], w, h, PAD);
-  const p = shot.at(f);                                       // the balloon's foot: it bobs and lifts on "lighter"
-  const crown = onScreen(camAt(shot.keys, f), DEPTH, w, h, onBalloon(p.x, p.y, shot.bw, CROWN));
-  const heat = 0.6 + 0.4 * prog(f, lighter - 6, 20);
-  const s = crown.s * (shot.bw / 300);
-  return (
-    <Stage cam={shot.keys} grain={0} light={0} vignette={0} f={f}>
-      <Refract kind="heat" area={[crown.x, crown.y - 110 * s, 80 * s, 120 * s]} strength={7 * heat} grain={26} speed={70} f={f}>
-        <Plate src={a.valley} depth={DEPTH} pad={PAD} drift={3} fronts={[TREES]} feather={4}
-          sway={{ y: GRASS_Y, amp: 1.1, feather: 70 }} f={f}>
-          <Haze y0={fit.at([0, MIST[0]])[1]} y1={fit.at([0, MIST[1]])[1]} amount={0.32} drift={10} f={f} />
-          <Photo src={a.balloon} x={p.x} y={p.y} w={shot.bw} tint="#FFE3BC" tintA={0.25} haze={0.12} hazeColor="#E8EEF2" />
-        </Plate>
-      </Refract>
-      <Air f={f} w={w} h={h} />{/* Rays on the plate's layer, Motes on a near one */}
-    </Stage>
-  );
-}
-```
+### The Broll preset
 
-`Balloon.tsx` wraps the three scenes in one `Lens` (hand-held drift, a warm grade, a kick with a fringe) and
-moves between them with a `push` `Join` into the envelope and a `whip` back out.
-
-**What makes it look fake**, and the fix:
-
-- **Effects that read as graphics**: drawn rings, curls, outlines, arrows, flat dashes or circles over a photograph.
-  Show air as the picture bending (`Refract`), light as light added (`Rays`, `Glow`), steam as `Vapor`, liquid as
-  `Droplet` or `Pour`, dust as `Motes`, words on things with `Surface`. `Wisps`, `Drips` and `Sparks` are for the
-  drawn sets.
-- **A sticker sliding**: a cut-out moving at constant size with no shadow, no blur and the wrong light. Give it a
-  `shadow` and the plate a `light`, `tint` from the plate, `shade` where it passes into shadow, perspective `sizes` and the
-  `Travel` smear; let it pass behind a front.
-- **Hard cuts** between places: use a `Join` (push into the thing the next scene is inside, whip with the
-  camera's direction, match a shape).
-- **Nothing deforming**: something inside a picture should give: a flame that flares (`sy`), fabric that swells, a
-  pane that bows (`Warp`), a shake on impact (`Lens` `kick`).
-- **A still plate with a push**: the plate needs life of its own (a `film`, `drift`, `sway`, `Haze` wisps) and
-  something must happen in the first second; one place gives several shots with `punch`.
-
-**Cost.** Plates, fronts and cut-outs are images under CSS transforms, cheap. An effect costs a second draw of what
-it wraps (`Refract`, `Warp`, a `sway` strip, a front of a moving plate) or a filter over its area (`Haze`, `Rays`,
-`Vapor`, the `Lens` grade, a lit, blurred or shadowed `Photo`); each is free when idle (strength 0, `p` 0, a `Join`
-outside its frames, `Footage` off screen). Give an effect strength only around its word and keep one or two active.
-The example renders 12.2 s at 1080 x 1920 in about a minute; `Rays` and the lens grade cost 4 to 5 s each.
-
-### Shots that look filmed
-
-The other form: footage, not a staged scene. Each shot is one plate plus one clip baked from it, two or three
-seconds, hard cuts (cuts are right here: filmed footage cuts). The built-in preset `Broll` plays a list of shots on a
-full-canvas component clip; it eases each pan like a hand turning a phone, adds a hand-held wobble, keeps the frame on
-the plate (a pan asked past the edge stops there), and draws steam, snow or dust and small crossings live:
+`Broll` plays a list of shots on a full-canvas component clip, each one plate and optionally a clip baked from it
+(`film_asset`, made by `tween` or `parallax`), cutting hard at each shot's `at`. It eases a `pan`, `tilt` or `zoom`
+across the plate with a hand-held wobble (`hand`), stops at the plate's edge, and draws `steam`, `air` (snow, dust)
+and `movers` (cut-outs along a `line`) live. Every position and length in a shot is in the plate's own px: read them
+off an `AssetGrid` preview of the plate, not off a Broll still. It moves and warps single pictures, with the limit
+stated above.
 
 ```json
-{"type": "component", "name": "Broll", "start": 0, "end": 7.8, "box": "full", "props": {"hand": 8, "shots": [
+{"type": "component", "name": "Broll", "start": 0, "end": 5.2, "box": "full", "props": {"hand": 8, "shots": [
   {"plate_asset": "street", "film_asset": "street_mv", "at": 0, "pan": [520, 1100], "zoom": [1.03, 1.1]},
-  {"plate_asset": "pour", "film_asset": "pour_mv", "at": 2.6, "zoom": [1.05, 1.08]},
-  {"plate_asset": "yard", "film_asset": "yard_mv", "at": 5.2, "tilt": [1000, 900], "air": {"n": 90, "wind": [20, 150]},
+  {"plate_asset": "yard", "at": 2.6, "tilt": [1000, 900], "air": {"n": 90, "wind": [20, 150]},
    "steam": [{"p": [1300, 620], "w": 30, "color": "#8A8D91", "amount": 0.7, "blend": "normal"}],
    "movers": [{"asset": "bike", "line": [[200, 1500], [900, 1200]], "w": 140, "sizes": [1, 0.6]}]}]}}
 ```
-
-- **Where things are**: every position and length in a shot (`pan`, `tilt`, steam `p`, `w`, `size`, `rise`, a mover's
-  `line` and `w`) is in the plate's own px. Read them off a preview of the preset `AssetGrid` on that plate
-  (`{"asset": "<plate id>"}`), not off a Broll still, where the camera is panned and zoomed.
-- **Plates**: open the prompt with "A single frame grabbed from an ordinary phone video (not a professional
-  photograph): ..." ("ordinary consumer drone video" from the air) and close it with "plain colours, compression
-  softness, slightly crooked, cluttered and unposed, no face, no letters". Documentary, cinematic or food-photography
-  wording comes back too perfect. Overcast flat light and a few ugly everyday things (a blue tarp, plastic buckets,
-  tangled wires) read as filmed; sunrise and golden light read as generated. Say "No smoke, no steam, no mist":
-  painted smoke stays frozen while the camera moves; add it live with `steam`. Live smoke must differ from what is
-  behind it: against a pale sky a grey darker than the sky (`"color": "#8A8D91", "blend": "normal"`), steam over
-  something dark the default pale `screen`; look at a still to see that it reads.
-- **Camera**: `parallax` bakes a travel through the plate's depth (`film_asset`). A 3:2 plate on a 9:16 canvas leaves
-  room to `pan`; a far scene needs a larger `dolly`. A slow push over one picture is the first thing a viewer spots.
-- **Things that move**: draw the first pose, then the others with `match_asset` on it and "Exactly the same
-  photograph from exactly the same camera position, framing and light; nothing changes except one thing: ...", each
-  one small step from its neighbour, three poses about 0.9 s apart, then `tween`. A change of look without a change of
-  place reads as a dissolve. When the tween ends the picture is still: cut there. Keep faces out; hands and backs are
-  fine. A shot without `film_asset` is a still plate that still pans and wobbles.
-- **Fire, boiling liquid, running water**: painted into a plate they are frozen, and a flame with the same shape in
-  three frames gives the shot away. Keep them out of the plate and add them live, or treat them as an action: three
-  pictures from the same position in which only the flame (or the bubbles) differs, tweened round (a, b, c, a) and
-  played with the shot's `"loop": true`.
-- **Subtitles**: large, plain, at the bottom of the safe area; no fixed title chip. Do not give every subtitle its own
-  shot: let a line run across a cut.
-- **Sound**: one `sound` bed per place and an effect on each action.

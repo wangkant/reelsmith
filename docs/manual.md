@@ -438,24 +438,22 @@ shows. A component that crashes shows a red box in previews and is reported firs
 ## Performance films
 
 Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); example: `examples/performance/`.
-- **World first**: a set (`Room`, `Street`, `Outdoors`, `Desk`) for a place with depth and a full lower frame, then
-  camera stops (`stations`), then your own shapes inside `Solid`, then motion on the word (`drop`, `pendulum`,
-  `follow`, `shake`, `breathe`). Cheap: flat icons on a bare ground, an empty lower third, slide in and stop.
+- **Drawn-pose animation** makes the picture (kit.md, same title): one character model sheet; key poses drawn as
+  cut-outs with `style_ref_asset` = the sheet, each with `twin_of` twins (mouth shut, a blink), played by
+  `Performer`, which anticipates, snaps, overshoots and settles; a set drawn in layers in the same style; cut-out
+  props with weight (`drop`, `toss`, `swing`); effects under one `LineStyle`; hard cuts between framings on words
+  (`Framing`). Judge pacing on a 6-a-second `frames` sheet and each pose change on a 25-a-second one.
 - **Tracks**: `world` (one component clip for the whole film reading every line from `useClip().lines`, or one per
   line, `"start": "line:3"`), a head text clip with the take (at most 4.5 s; the cover), captions.
-- **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.5 to 2 s, on its word.
+- **Cues**: `T("litre")` (`useCues()`) is the frame a word is said; something lands every 1.2 to 2 s, on its word.
   Without a voice `useClip().lines` is empty and cue lookups throw: time things in seconds from the clip start.
-- **Cut-outs only** (no full-frame image or video): a picture enters as a `*_asset` prop, shown as a `Cut` or a
-  `Loupe`; trace its outline on a preview of the preset `AssetGrid` (`{"asset": "<id>"}`), then remove that clip.
-- **Layered photographs** (kit.md; `examples/layers/`): a drawn `Plate` per place with traced `fronts`, cut-outs with
-  alpha (`Photo`, `Travel`), `Refract`/`Warp` not drawn rings, one `Lens`, a `Join` instead of a cut.
-- **Shots that look filmed**: the preset `Broll` cuts one plate and its baked clip per shot (kit.md, same title).
-- **A drawn character who acts**: key-pose drawings played by `Performer` (kit.md, "Drawn-pose animation").
-- **Motion in the picture**: for an action, draw key poses of one shot (`match_asset` = the first, prompt "Exactly the
-  same photograph from exactly the same camera position, framing and light; nothing changes except one thing: ...")
-  and `tween` them: two poses far apart ghost (it fades out and in instead of travelling), so add a pose between.
-  For a camera moving through a place, `parallax` one plate. Both take whole opaque pictures, never cut-outs, and
-  make video assets for `Footage`; after a tween the picture is still: cut soon or keep something live (steam, a camera move).
+- **Pictures inside the world** (no full-frame image or video clip): a picture enters as a `*_asset` prop, shown in
+  a `Photo`, or torn as a `Cut` traced on a preview of the preset `AssetGrid` (`{"asset": "<id>"}`; remove it after).
+- **Places drawn in code**: a set (`Room`, `Street`, `Outdoors`, `Desk`), your own shapes inside `Solid`, motion on
+  the word (`drop`, `pendulum`, `follow`, `shake`, `breathe`). Cheap: flat icons on a bare ground, an empty lower
+  third, things that slide in and stop.
+- **Moving one picture is not motion**: `tween`, `parallax`, the preset `Broll`, a `Plate` `film` and `Travel` slide
+  or warp a single picture (kit.md, "Photograph components"); watched, that reads as a warp, not as a film's motion.
 - **Sound under the picture**: a voice alone leaves silence between lines. `sound` makes a looping bed for each
   place (on an audio track: `"volume": 0.25, "loop": true, "duck": {"under": "voice", "to": 0.5}`; a new place gets
   a new bed clip with `fade_in`/`fade_out` 0.3) and a one-shot for each action on a second audio track (`"start":
@@ -497,9 +495,9 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `typecheck(project)` | type-check your own components | `typecheck(p)` |
 | `speak(project, lines, gap_s=0.22)` | narrate; one item per line, a string or `{text, pace, emotion}` | `speak(p, ["A T-shirt drinks 2,700 litres.", {"text": "Most of it in the field.", "pace": 0.9}])` |
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
-| `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?, twin_of?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `twin_of` the same cut-out drawing with one change (a closed mouth), registered onto its canvas; `draw_many` 1–8 at once | `draw(p, "field", "a cotton field at dawn, photo", size="16:9")`, `draw(p, "cup", "a paper coffee cup on the table, photo", cutout=true, match_asset="field")`, `draw_many(p, [{"id": "field", "prompt": "..."}, {"id": "cup", "prompt": "...", "cutout": true, "match_asset": "field"}])`, `draw(p, "pA_shut", "the mouth is closed", twin_of="pA")` |
+| `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?, twin_of?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `twin_of` the same cut-out drawing with one change (a closed mouth), registered onto its canvas; `draw_many` 1–8 at once | `draw(p, "pA", "the cat host points left, head to feet", cutout=true, style_ref_asset="sheet")`, `draw_many(p, [{"id": "wall", "prompt": "...", "style_ref_asset": "sheet"}, {"id": "pot", "prompt": "...", "cutout": true, "style_ref_asset": "sheet"}])`, `draw(p, "pA_shut", "the mouth is closed", twin_of="pA")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
-| `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: the frames between key pictures of one shot (2–6, ≤ 12 s); a camera moving through one still by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`); both run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
+| `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: frames interpolated between key pictures of one shot (2–6, ≤ 12 s); one still pushed through by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`). Both warp a picture, which reads as a warp: not a film's motion. They run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
 | `sound(project, id, kind, seconds, seed?, gain_db?)` | local and free: a bed that loops (room, street, wind, rain, kitchen, fire, water, crowd, night; −24 LUFS) or a one-shot (whoosh, thump, tick, pop, sizzle, crackle, pour, drip, steam, tear, clink, shutter), with its loudness and low/mid/high split | `sound(p, "amb", "street", 20)`, `sound(p, "hit", "thump", 0.5)` |
 | `import_asset(project, id, source, kind?)` | copy a file or download a URL (at most `providers.import.max_mb`, default 200 MB) into assets | `import_asset(p, "bed", "/home/me/music/bed.m4a", "audio")` |
 | `assets(project)` | assets with kinds, sizes, durations, spend | `assets(p)` |

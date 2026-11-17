@@ -123,10 +123,11 @@ import-guarded. It can equip itself further: `add_package` brings npm libraries 
 components, and `run_script` runs a Node script of its own under Node's permission model to make textures, paths or
 baked data ([Bring your own tools](docs/manual.md#bring-your-own-tools)).
 
-For films made entirely in code, the kit's stage primitives (grounds, a camera, torn photo cut-outs, paper, ink and
-drawn objects) act each narration line out, and every scene times its moves to the words it plays under, read from
-the voice. [examples/performance](examples/performance) is a complete one, and the built-in `AssetGrid` helps trace
-a picture's outline for a cut-out.
+For films made entirely in code, the kit's stage acts each narration line out in drawn-pose animation: a character
+drawn in key poses, with a closed-mouth twin and a blink for each, anticipates, snaps to the next pose and settles,
+its mouth moving with the voice, on a set drawn in the same style, with hard cuts on the words it plays under
+([docs/kit.md](docs/kit.md#drawn-pose-animation)). Sets, paper, ink and drawn objects are built in;
+[examples/performance](examples/performance) is a film made with them.
 
 ## Supported agents
 

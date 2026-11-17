@@ -9,7 +9,7 @@ import wave
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from reelsmith import providers as P
 from reelsmith import resolve as R
@@ -21,22 +21,42 @@ ROOT = Path(__file__).resolve().parent.parent
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg missing")
 
 
-def figure(size, s=1.0, shift=(0, 0), mouth="open", pose="stand", stripe=False):
+def figure(size, s=1.0, shift=(0, 0), mouth="open", pose="stand", stripe=False, eyes="open", wobble=0, arm=None,
+           fringe=0, lip=False):
     """A drawn cut-out: a body, a head with eyes and a mouth, outlined, on a clear canvas; `stripe` redraws a mark
-    on the belly, far from the mouth."""
+    on the belly, far from the mouth; `wobble` redraws the head's outline that much further out on its left side;
+    `arm` draws a sleeved arm across the belly, its paw that far down; `fringe` gives the body a fur edge
+    of teeth that deep; `lip` draws a thin lower-lip curve a little below the open mouth."""
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     ox, oy = shift
     p = lambda x, y: (ox + x * s, oy + y * s)  # noqa: E731
     box = lambda a, b, c, e: [*p(a, b), *p(c, e)]  # noqa: E731
     line, w = (40, 20, 10, 255), max(2, round(6 * s))
-    if pose == "stand":
+    if pose == "stand" and fringe:
+        teeth = [p(70 + 10 * i + (5 if i % 2 else 0), 200 - (fringe if i % 2 else 0)) for i in range(17)]
+        right = [p(230 + (fringe if i % 2 else 0), 200 + 13 * i) for i in range(21)]
+        bottom = [p(230 - 10 * i, 460 + (fringe if i % 2 else 0)) for i in range(17)]
+        left = [p(70 - (fringe if i % 2 else 0), 460 - 13 * i) for i in range(21)]
+        d.polygon(teeth + right + bottom + left, fill=(230, 140, 50, 255), outline=line, width=w)
+    elif pose == "stand":
         d.rounded_rectangle(box(70, 200, 230, 460), radius=round(40 * s), fill=(230, 140, 50, 255), outline=line, width=w)
     else:
         d.polygon([p(20, 230), p(280, 210), p(250, 300), p(40, 320)], fill=(230, 140, 50, 255), outline=line, width=w)
+    if arm is not None and pose == "stand":
+        t = 22
+        d.line([p(110, 260), p(200, 320 + arm)], fill=line, width=round((t + 6) * s))
+        d.line([p(110, 260), p(200, 320 + arm)], fill=(245, 235, 205, 255), width=round(t * s))
     d.ellipse(box(60, 40, 240, 220), fill=(240, 160, 70, 255), outline=line, width=w)
+    if wobble:
+        d.arc(box(60 - wobble, 40 - wobble, 240 + wobble, 220 + wobble), 60, 300, fill=line, width=w)
     for ex in (110, 190):
-        d.ellipse(box(ex - 10, 100, ex + 10, 125), fill=line)
+        if eyes == "open":
+            d.ellipse(box(ex - 10, 100, ex + 10, 125), fill=line)
+        else:
+            d.line([p(ex - 10, 112), p(ex + 10, 112)], fill=line, width=w)
+    if mouth == "open" and lip:
+        d.arc(box(128, 182, 172, 214), 20, 160, fill=line, width=round(3 * s))
     if mouth == "open":
         d.ellipse(box(125, 150, 175, 195), fill=(120, 30, 30, 255), outline=line, width=w)
     else:
@@ -75,7 +95,8 @@ def test_only_the_asked_for_change_is_patched_in(tmp_path):
     assert len(r["left"]) == 1 and r["left"][0][0] <= 105 and r["left"][0][3] >= 420, r["left"]
     assert r["changed"][3] < 260, r["changed"]
     text = TW.report("a", r)
-    assert "Also redrawn at x" in text and "kept from the base" in text, text
+    assert "Patched in 1 changed part(s) as a whole" in text and "1 other changed region(s) left as the base" in text
+    assert "lined up locally by +0 +0 px" in text, text
 
 
 def test_close_regions_are_one_change():
@@ -87,11 +108,94 @@ def test_close_regions_are_one_change():
     assert len(regs) == 3 and regs[0][0] == pytest.approx(1600, rel=0.1)
 
 
+def test_a_wobbled_outline_stays_the_base_even_when_it_is_the_largest_change(tmp_path):
+    base = figure((600, 1000), s=2)
+    base.save(tmp_path / "a.png")
+    figure((600, 1000), s=2, mouth="shut", wobble=8).save(tmp_path / "a_shut.png")
+    r = TW.register(tmp_path / "a.png", tmp_path / "a_shut.png", tmp_path / "out.png")
+    out = Image.open(tmp_path / "out.png")
+    assert out.getpixel((40, 260)) == base.getpixel((40, 260))            # the redrawn outline is the base's
+    assert out.getpixel((300, 345)) != base.getpixel((300, 345))          # the mouth is the twin's
+    x0, y0, x1, y1 = r["changed"]
+    assert 200 <= x0 and x1 <= 400 and 260 <= y0 and y1 <= 430, r["changed"]
+    assert r["left"] and r["kept"] >= 1 and "left as the base" in TW.report("a", r)
+
+
+@pytest.mark.parametrize("part, kept_at, base_at", [("eyes", (220, 206), (300, 345)), ("mouth", (300, 345), (220, 206))])
+def test_the_part_named_is_the_one_patched_in(tmp_path, part, kept_at, base_at):
+    base = figure((600, 1000), s=2)
+    base.save(tmp_path / "a.png")
+    figure((600, 1000), s=2, mouth="shut", eyes="shut").save(tmp_path / "a_b.png")
+    r = TW.register(tmp_path / "a.png", tmp_path / "a_b.png", tmp_path / "out.png", part=part)
+    out = Image.open(tmp_path / "out.png")
+    assert out.getpixel(kept_at) != base.getpixel(kept_at) and out.getpixel(base_at) == base.getpixel(base_at), r
+    assert r["kept"] == (2 if part == "eyes" else 1), r
+
+
+def test_a_limb_redrawn_bigger_than_the_mouth_is_not_the_part(tmp_path):
+    base = figure((600, 1000), s=2, arm=0)
+    base.save(tmp_path / "a.png")
+    figure((600, 1000), s=2, arm=45, mouth="shut").save(tmp_path / "a_shut.png")   # the arm moved, a big change
+    r = TW.register(tmp_path / "a.png", tmp_path / "a_shut.png", tmp_path / "out.png", part="mouth")
+    out = Image.open(tmp_path / "out.png")
+    x0, y0, x1, y1 = r["changed"]
+    assert 200 <= x0 and x1 <= 400 and 260 <= y0 and y1 <= 430, r["changed"]
+    assert out.getpixel((330, 690)) == base.getpixel((330, 690))          # the arm is the base's
+    assert out.getpixel((300, 345)) != base.getpixel((300, 345))          # the mouth is the twin's
+
+
+def test_an_arm_moved_with_no_mouth_change_is_refused_not_patched(tmp_path):
+    figure((600, 1000), s=2, arm=0).save(tmp_path / "a.png")
+    figure((600, 1000), s=2, arm=45).save(tmp_path / "a_shut.png")
+    r = TW.register(tmp_path / "a.png", tmp_path / "a_shut.png", tmp_path / "out.png", part="mouth")
+    assert not r["same"] and not (tmp_path / "out.png").exists(), r
+    text = TW.report("a", r)
+    assert "NOT A TWIN of 'a'" in text and "none is a compact change inside the figure" in text, text
+
+
+def test_no_rim_of_the_old_mouth_survives(tmp_path):
+    base = figure((600, 1000), s=2, lip=True)
+    base.save(tmp_path / "a.png")
+    twin = figure((600, 1000), s=2, mouth="shut")
+    twin.save(tmp_path / "a_shut.png")
+    TW.register(tmp_path / "a.png", tmp_path / "a_shut.png", tmp_path / "out.png", part="mouth")
+    out = Image.open(tmp_path / "out.png").convert("RGBA")
+    old_mouth = (240, 290, 360, 440)                                       # the open mouth, its outline and lip
+    assert ImageChops.difference(out.crop(old_mouth), twin.crop(old_mouth)).getbbox() is None
+
+
+def test_a_twin_whose_silhouette_differs_but_whose_face_matches_is_patched(tmp_path):
+    base = figure((600, 1000), s=2)
+    base.save(tmp_path / "a.png")
+    figure((600, 1000), s=2, fringe=20, mouth="shut").save(tmp_path / "a_shut.png")   # a furry body edge
+    r = TW.register(tmp_path / "a.png", tmp_path / "a_shut.png", tmp_path / "out.png", part="mouth")
+    assert TW.SAME_POSE_MAX < r["residual"] < TW.POSE_SANITY_MAX and r["same"], r
+    out = Image.open(tmp_path / "out.png")
+    assert out.getpixel((300, 345)) != base.getpixel((300, 345))          # the mouth is the twin's
+    assert out.getpixel((130, 395)) == base.getpixel((130, 395))          # the body's edge is the base's
+    assert r["face"] <= TW.FACE_MAX and "lined up locally by" in TW.report("a", r)
+
+
+@pytest.mark.parametrize("prompt, part", [("the eyes are shut", "eyes"), ("the mouth is closed", "mouth"),
+                                          ("eyes shut, the mouth stays open", "eyes"), ("闭上嘴", "mouth"),
+                                          ("a blink", "eyes"), ("the tail curls", None)])
+def test_a_twins_part_is_the_first_one_its_prompt_names(prompt, part):
+    assert TW.part_of(prompt) == part
+
+
+def test_a_cut_outs_clear_rows_are_measured_so_its_soles_stand_on_the_ground(tmp_path):
+    figure((300, 500)).save(tmp_path / "cut.png")                       # body down to y 460: 40 clear rows below
+    top, bottom = R.image_inset(tmp_path / "cut.png")
+    assert abs(top - 40) <= 2 and abs(bottom - 40) <= 2, (top, bottom)
+    Image.new("RGB", (40, 30), (9, 9, 9)).save(tmp_path / "plate.jpg")
+    assert R.image_inset(tmp_path / "plate.jpg") is None and R.image_inset(tmp_path / "gone.png") is None
+
+
 def test_a_different_pose_is_not_a_twin_and_is_left_as_drawn(tmp_path):
     figure((300, 500)).save(tmp_path / "a.png")
     figure((300, 500), pose="lean").save(tmp_path / "b.png")
     r = TW.register(tmp_path / "a.png", tmp_path / "b.png", tmp_path / "out.png")
-    assert not r["same"] and r["residual"] > TW.SAME_POSE_MAX, r
+    assert not r["same"] and r["residual"] > TW.POSE_SANITY_MAX, r
     assert not (tmp_path / "out.png").exists() and r["changed"] is None
     text = TW.report("a", r)
     assert "NOT A TWIN of 'a'" in text and "pose of its own" in text and "draw it again" in text.lower()
