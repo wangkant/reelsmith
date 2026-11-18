@@ -1,0 +1,14 @@
+reelsmith
+Copyright 2026 Qiankang (Kant) Wang
+https://github.com/wangkant/reelsmith
+
+Licensed under the Apache License, Version 2.0: see LICENSE.
+
+Releases published before 10 November 2026 were made under the MIT License,
+and those from then until 18 November 2026 under the PolyForm Noncommercial
+License 1.0.0. Copies of those releases stay under the licence they were
+released with.
+
+The renderer depends on Remotion, which has its own licence
+(https://www.remotion.dev/license). Bundled fonts and sounds keep the licences
+named in the README.

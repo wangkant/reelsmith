@@ -199,9 +199,9 @@ python integrations/sync_skills.py --check     # the plugin's copy of the skill
 
 ## License
 
-reelsmith is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): it may be used, modified
-and shared for noncommercial purposes. Commercial use requires a separate license from the author; open an issue
-to enquire. Releases published before 10 November 2026 were made under the MIT license.
+reelsmith is open source under the [Apache License 2.0](LICENSE): it may be used, modified and shared, for
+commercial purposes too. Releases published before 10 November 2026 were made under the MIT license, and those
+from then until 18 November 2026 under the PolyForm Noncommercial License 1.0.0.
 
 The renderer depends on [Remotion](https://www.remotion.dev), which has its own license: free for individuals and
 small teams, with a company license required for larger organisations (https://www.remotion.dev/license). The
