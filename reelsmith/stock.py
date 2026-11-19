@@ -38,7 +38,7 @@ LOOK_HELP = ('write <workspace>/library/stock/look.json first: {"character": "<s
              '"set": "<style sentence for places>", "prop": "<style sentence for things>", "sheet": "<optional: a '
              'picture file in library/stock that shows the look, sent as the style reference>", "who": "<optional, '
              'for a workspace with one fixed character: how every pose names it and its outfit; sheet is then its '
-             'model sheet>"}')
+             'model sheet>", "blink": <optional, false: poses get no blink twin (small faces)>}')
 CAST_HELP = ('cast="<a short id for one character of this film, like granny>" with who="<what it is and wears, one '
              'sentence, the same words in every call>"')
 CAST_ID = re.compile(r"^[a-z][a-z0-9]{0,15}$")
@@ -163,7 +163,7 @@ def pictures_for(kind: str, entry: dict, look: dict, sheet: bool, cast: dict | N
         base = {"id": eid, "cutout": True, "size": "2:3", **ref,
                 "prompt": f"{who}, {entry['pose']}. {POSE_FRAME.format(view=entry['view'])} {look['character']}"}
         out = [base, {"id": f"{eid}_shut", "prompt": SHUT_PROMPT, "twin_of": eid}]
-        if entry.get("blink", True):
+        if entry.get("blink", True) and look.get("blink", True) is not False:
             out.append({"id": f"{eid}_blink", "prompt": BLINK_PROMPT, "twin_of": f"{eid}_shut"})
         return out
     if kind == "set":
@@ -397,11 +397,12 @@ def take(root: Path, refs, cast=None, provider=None) -> tuple[str, bool]:
             to_draw = [t for t in to_draw if t[0] != "pose"]
     reports += _draw_all(root, ctx, sheet, to_draw, provider) if to_draw else []
     drawn_ok = {m for text in reports for m in re.findall(r"^\d+\. (\S+): ok,", text, re.M)}
+    drawn_ok -= _misplaced_blinks(reports)
     for kind, iid, entry, pics in to_draw:
         if kind == "pose" and cast:
             if pics[0]["id"] in drawn_ok:
-                own[(kind, iid)] = pics
                 lost = [p["id"] for p in pics if p["id"] not in drawn_ok]
+                own[(kind, iid)] = [p for p in pics if p["id"] in drawn_ok]
                 said[(kind, iid)] = f"drawn for {cast['id']} from {cast_sheet(cast)}" + (
                     f"; without {', '.join(lost)} (failed or not a twin: usable without it)" if lost else "")
             else:
@@ -436,12 +437,23 @@ def take(root: Path, refs, cast=None, provider=None) -> tuple[str, bool]:
     return text, not taken
 
 
+def _misplaced_blinks(reports: list[str]) -> set[str]:
+    """Blink twins the draw patched at or below their pose's mouth: the wrong part (a hand, a shoe), not the eyes."""
+    down = {aid: int(pct) for text in reports for aid, pct in
+            re.findall(r"^\d+\. (\S+): ok,.*?its middle (\d+)% of the way down", text, re.M)}
+    return {aid for aid, pct in down.items() if aid.endswith("_blink")
+            and pct >= down.get(f"{aid[:-len('_blink')]}_shut", 101)}
+
+
 def _own_pose(root: Path, pics: list[dict]) -> dict:
-    """A stock-shaped meta for a cast member's pose that lives in the project's assets."""
+    """A stock-shaped meta for a cast member's pose that lives in the project's assets: the twins asked for that
+    sit on the pose's own canvas (a redraw that was not a twin has another size)."""
     assets = read_project(context(root)).get("assets") or {}
     base = pics[0]["id"]
+    size = lambda aid: (assets[aid].get("width"), assets[aid].get("height"))  # noqa: E731
     files = {"src": {"file": base}}
-    files.update({t: {"file": f"{base}_{t}"} for t in TWINS if isinstance(assets.get(f"{base}_{t}"), dict)})
+    files.update({t: {"file": f"{base}_{t}"} for t in TWINS if f"{base}_{t}" in {p["id"] for p in pics}
+                  and isinstance(assets.get(f"{base}_{t}"), dict) and size(f"{base}_{t}") == size(base)})
     meta = {"id": base, "kind": "pose", "files": files}
     try:
         meta["feet"] = D.feet_of(_project_picture(root, assets, base))

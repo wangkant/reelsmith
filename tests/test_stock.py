@@ -288,6 +288,27 @@ def test_a_cast_member_gets_a_sheet_then_poses_that_stay_in_the_project(ws, tmp_
     assert not far.ok and "style_ref_asset='granny_sheet'" in far
 
 
+def test_a_look_may_turn_blinks_off_and_a_twin_that_is_not_one_stays_out_of_the_manifest(ws, tmp_path, monkeypatch):
+    with_plain_look(ws)
+    look = stock_dir(ws) / "look.json"
+    look.write_text(json.dumps({**json.loads(look.read_text(encoding="utf-8")), "blink": False}), encoding="utf-8")
+    painter = Painter(tmp_path)
+    monkeypatch.setattr(D, "make_provider", lambda ctx: painter)
+    r = T.take(str(ws), ["pose:shrug"], cast="granny", who=GRANNY)
+    assert r.ok and len(painter.calls) == 3 and "granny_shrug_blink" not in r, r     # sheet, pose, shut
+    figure((340, 560)).save(ws / "assets" / "granny_shrug_blink.png")           # a stray redraw on another canvas
+    raw = json.loads((ws / "project.json").read_text(encoding="utf-8"))
+    raw["assets"]["granny_shrug_blink"] = {"path": "assets/granny_shrug_blink.png", "kind": "image", "alpha": True,
+                                           "width": 340, "height": 560}
+    (ws / "project.json").write_text(json.dumps(raw), encoding="utf-8")
+    again = T.take(str(ws), ["pose:shrug"], cast="granny", who=GRANNY)
+    assert again.ok and "blink:" not in again.split("const poses")[1], again
+    report = ("1. a_blink: ok, x. its middle 94% of the way down the figure\n"
+              "2. a_shut: ok, x. its middle 14% of the way down the figure\n"
+              "3. b_blink: ok, x. its middle 10% of the way down\n4. b_shut: ok, x. its middle 14% of the way down")
+    assert S._misplaced_blinks([report]) == {"a_blink"}
+
+
 def test_a_cast_works_beside_a_fixed_character_and_a_failed_sheet_stops_its_poses(ws, tmp_path, monkeypatch):
     with_look(ws)
     stocked_pose(ws, tmp_path)
