@@ -235,3 +235,71 @@ def test_the_three_tools_are_published():
     from reelsmith.mcp_server import mcp
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert {"stock", "take", "keep"} <= names and {"stock", "take", "keep"} <= set(T.TOOLS)
+
+
+# ------------------------------------------------------------------ a film's own cast
+GRANNY = "an old woman with a grey bun and a floral padded jacket"
+
+
+def with_plain_look(project):
+    stock = stock_dir(project)
+    stock.mkdir(parents=True, exist_ok=True)
+    (stock / "look.json").write_text(json.dumps({k: LOOK[k] for k in ("sheet", "character", "set", "prop")}),
+                                     encoding="utf-8")
+    figure((300, 500)).save(stock / "sheet.png")
+
+
+def test_a_look_without_a_fixed_character_draws_poses_only_for_a_cast(ws, tmp_path, monkeypatch):
+    with_plain_look(ws)
+    painter = Painter(tmp_path)
+    monkeypatch.setattr(D, "make_provider", lambda ctx: painter)
+    r = T.take(str(ws), ["pose:shrug"])
+    assert not r.ok and "no fixed character" in r and "cast" in r and painter.calls == []
+    assert "take(project, [\"pose:<id>\"], cast=" in T.stock(str(ws))
+    assert "<cast>_shrug" in T.stock(str(ws), name="pose:shrug")
+    assert T.take(str(ws), ["prop:coin"]).ok                         # places and things need no character
+    assert not T.take(str(ws), ["pose:shrug"], cast="granny").ok     # who is missing
+    assert not T.take(str(ws), ["pose:shrug"], cast="Gran ny", who=GRANNY).ok
+    assert not T.take(str(ws), ["pose:shrug"], cast="look", who=GRANNY).ok     # look_sheet is the workspace's
+
+
+def test_a_cast_member_gets_a_sheet_then_poses_that_stay_in_the_project(ws, tmp_path, monkeypatch):
+    with_plain_look(ws)
+    painter = Painter(tmp_path)
+    monkeypatch.setattr(D, "make_provider", lambda ctx: painter)
+    r = T.take(str(ws), ["pose:shrug"], cast="granny", who=GRANNY)
+    assert r.ok and "Took 1 of 1" in r and "drawn for granny from granny_sheet" in r, r
+    sheet, base, shut, blink = painter.calls
+    assert "model sheet" in sheet["prompt"] and GRANNY in sheet["prompt"] and "STYLE-C." in sheet["prompt"]
+    assert sheet["ref"] == "look_sheet.png"
+    assert base["prompt"].startswith(f"The same character as the reference model sheet ({GRANNY}), shoulders raised")
+    assert base["ref"] == "granny_sheet.png" and shut["ref"] == "granny_shrug.png"
+    assert blink["ref"] == "granny_shrug_shut.png"
+    assert "const poses = { granny_shrug: { src: a.granny_shrug_asset, shut: a.granny_shrug_shut_asset, " \
+           "blink: a.granny_shrug_blink_asset, feet: 0.50 } };" in r
+    assert {"granny_sheet", "granny_shrug", "granny_shrug_shut", "granny_shrug_blink"} <= set(assets(ws))
+    assert not (stock_dir(ws) / "poses").exists()                    # the film's own: nothing kept
+    painter.calls.clear()
+    again = T.take(str(ws), ["pose:shrug", "pose:think"], cast="granny", who=GRANNY)
+    assert again.ok and "already in this project as granny's" in again and "Took 2 of 2" in again, again
+    assert len(painter.calls) == 3 and all("model sheet of one" not in c["prompt"] for c in painter.calls)
+    assert "granny_think: { src: a.granny_think_asset" in again
+    far = T.take(str(ws), ["pose:moonwalk_no"], cast="granny", who=GRANNY)
+    assert not far.ok and "style_ref_asset='granny_sheet'" in far
+
+
+def test_a_cast_works_beside_a_fixed_character_and_a_failed_sheet_stops_its_poses(ws, tmp_path, monkeypatch):
+    with_look(ws)
+    stocked_pose(ws, tmp_path)
+
+    class NoSheet(Painter):
+        def draw(self, prompt, *a, **kw):
+            if "model sheet of one" in prompt:
+                self.calls.append({"prompt": prompt})
+                return D.Shot("noimage", None, 1.0, thread="t")
+            return super().draw(prompt, *a, **kw)
+    painter = NoSheet(tmp_path)
+    monkeypatch.setattr(D, "make_provider", lambda ctx: painter)
+    r = T.take(str(ws), ["pose:shrug", "prop:coin"], cast="guard", who="a tall security guard in a navy uniform")
+    assert r.ok and "guard_sheet was not drawn" in r and "Took 1 of 2" in r, r
+    assert "guard_shrug" not in assets(ws) and "shrug" not in assets(ws)     # the stock pose is the fixed character's

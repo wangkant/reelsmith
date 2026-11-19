@@ -1,5 +1,6 @@
 """A workspace's stock pictures (library/stock: poses with their twins, sets in layers, props) that every film can
-take, and the shipped catalogue of standard items, drawn in the workspace's own look (stock/look.json) when taken."""
+take, and the shipped catalogue of standard items, drawn in the workspace's own look (stock/look.json) when taken.
+A film's own character (a cast member) gets a model sheet and catalogue poses that stay in the project."""
 from __future__ import annotations
 
 import filecmp
@@ -21,7 +22,7 @@ D = importlib.import_module(f"{__package__}.providers.draw")     # the package r
 CATALOGUE = Path(__file__).with_name("stock_catalogue.json")
 KINDS = {"pose": "poses", "set": "sets", "prop": "props"}
 LOOK_FILE = "look.json"
-LOOK_KEYS = ("sheet", "who", "character", "set", "prop")
+LOOK_KEYS = ("character", "set", "prop")        # "sheet" and "who" are optional
 TWINS = {"shut": "shut", "half": "half", "blink": "blink", "blink_open": "blinkOpen"}    # file suffix -> Pose key
 SHUT_PROMPT = "the mouth is closed; the expression is otherwise the same"
 BLINK_PROMPT = "the eyes are shut"
@@ -33,10 +34,18 @@ PLATE_FLOOR = ("Straight-on view at standing eye height. The lower third is clea
 PIECE_FRAME = "seen straight on from the front at standing eye height, whole, alone"
 PICTURES = (".png", ".webp", ".jpg", ".jpeg")
 ID = re.compile(r"^[a-z0-9][a-z0-9_]{0,47}$")
-LOOK_HELP = ('write <workspace>/library/stock/look.json first: {"sheet": "<picture file in library/stock: the '
-             'character\'s model sheet>", "who": "<how every pose names the character and its outfit>", "character": '
-             '"<style sentence for the character>", "set": "<style sentence for places>", "prop": "<style sentence '
-             'for things>"}')
+LOOK_HELP = ('write <workspace>/library/stock/look.json first: {"character": "<style sentence for characters>", '
+             '"set": "<style sentence for places>", "prop": "<style sentence for things>", "sheet": "<optional: a '
+             'picture file in library/stock that shows the look, sent as the style reference>", "who": "<optional, '
+             'for a workspace with one fixed character: how every pose names it and its outfit; sheet is then its '
+             'model sheet>"}')
+CAST_HELP = ('cast="<a short id for one character of this film, like granny>" with who="<what it is and wears, one '
+             'sentence, the same words in every call>"')
+CAST_ID = re.compile(r"^[a-z][a-z0-9]{0,15}$")
+CAST_SHEET = ("Character model sheet of one original character: {who}. Four full-body views of the same character "
+              "standing in a row on a plain white background: front view, front view talking with the mouth open, "
+              "side view, back view. The same face, build, outfit and proportions in all four. No text, no labels.")
+CAST_WHO = "The same character as the reference model sheet ({who})"
 
 
 class StockError(ValueError):
@@ -117,13 +126,42 @@ def files_of(meta: dict) -> list[tuple[str, dict]]:
 
 
 # ------------------------------------------------------------------ the catalogue's recipes
-def pictures_for(kind: str, entry: dict, look: dict, sheet: bool) -> list[dict]:
-    """The draw_many items that make one catalogue entry in the look, in the order they depend on each other."""
+def cast_of(value) -> dict | None:
+    """{"id", "who"} of a film's own character, or None when no cast is given."""
+    if value in (None, "", {}):
+        return None
+    if not isinstance(value, dict) or set(value) - {"id", "who"}:
+        raise StockError(CAST_HELP)
+    cid, who = str(value.get("id") or "").strip().lower(), " ".join(str(value.get("who") or "").split())
+    if not CAST_ID.match(cid) or cast_sheet({"id": cid}) == SHEET_ASSET:
+        raise StockError(f"cast id {value.get('id')!r} must be 1-16 lowercase letters or digits, starting with a "
+                         f"letter, and not \"look\" ({SHEET_ASSET} is the workspace's sheet); {CAST_HELP}")
+    if not 8 <= len(who) <= 400:
+        raise StockError(f"cast who must say in 8-400 characters what the character is and wears; {CAST_HELP}")
+    return {"id": cid, "who": who.rstrip(".")}
+
+
+def cast_sheet(cast: dict) -> str:
+    return f"{cast['id']}_sheet"
+
+
+def sheet_picture(cast: dict, look: dict, sheet: bool) -> dict:
+    """The draw that fixes a cast member's design, in the look."""
+    return {"id": cast_sheet(cast), "size": "3:2", **({"style_ref_asset": SHEET_ASSET} if sheet else {}),
+            "prompt": f"{CAST_SHEET.format(who=cast['who'])} {look['character']}"}
+
+
+def pictures_for(kind: str, entry: dict, look: dict, sheet: bool, cast: dict | None = None) -> list[dict]:
+    """The draw_many items that make one catalogue entry in the look, in the order they depend on each other. With
+    cast, a pose is that character's: named <cast>_<pose> and drawn from its own model sheet."""
     ref = {"style_ref_asset": SHEET_ASSET} if sheet else {}
     if kind == "pose":
-        eid = entry["id"]
+        eid, who = entry["id"], look.get("who", "")
+        if cast:
+            eid, who = f"{cast['id']}_{eid}", CAST_WHO.format(who=cast["who"])
+            ref = {"style_ref_asset": cast_sheet(cast)}
         base = {"id": eid, "cutout": True, "size": "2:3", **ref,
-                "prompt": f"{look['who']}, {entry['pose']}. {POSE_FRAME.format(view=entry['view'])} {look['character']}"}
+                "prompt": f"{who}, {entry['pose']}. {POSE_FRAME.format(view=entry['view'])} {look['character']}"}
         out = [base, {"id": f"{eid}_shut", "prompt": SHUT_PROMPT, "twin_of": eid}]
         if entry.get("blink", True):
             out.append({"id": f"{eid}_blink", "prompt": BLINK_PROMPT, "twin_of": f"{eid}_shut"})
@@ -158,6 +196,11 @@ def listing(root: Path, kind: str = "", name: str = "") -> str:
             missing_rows.append(f"{KINDS[k]} ({len(left)}): {', '.join(e['id'] for e in left)}")
     if missing_rows:
         rows += ["Catalogue, not yet in stock (take draws them in the look and keeps them):", *missing_rows]
+    if look and not look.get("who") and "pose" in kinds:
+        rows.append('This workspace has no fixed character: a catalogue pose is drawn for a character of this film, '
+                    'take(project, ["pose:<id>"], cast="granny", who="<what it is and wears>"), as '
+                    "<cast>_<pose> with its twins, from the model sheet <cast>_sheet (drawn first when the project "
+                    "has none). They stay in the project.")
     rows.append('stock(project, name="pose:<id>") shows one in full; take(project, ["pose:<id>", "set:<id>", '
                 '"prop:<id>"]) brings them into this project; keep saves your own drawings to stock.')
     return "\n".join(rows)
@@ -190,8 +233,10 @@ def _one(stock: Path, kind: str, item_id: str) -> str:
     rows = [f"{kind}:{item_id} is in the catalogue, not in stock: {entry['what']}"]
     if not look:
         return "\n".join(rows + [f"take cannot draw it yet: {why}", json.dumps(entry, ensure_ascii=False)])
-    pics = pictures_for(kind, entry, look, bool(look.get("sheet")))
-    rows.append(f"take draws it in {len(pics)} picture(s), in this order:")
+    cast = {"id": "<cast>", "who": "<who>"} if kind == "pose" and not look.get("who") else None
+    pics = pictures_for(kind, entry, look, bool(look.get("sheet")), cast)
+    rows.append(f"take draws it in {len(pics)} picture(s), in this order"
+                + (" (for the cast member you name; its model sheet first if the project has none):" if cast else ":"))
     rows += [f"- {json.dumps(p, ensure_ascii=False)}" for p in pics]
     return "\n".join(rows)
 
@@ -298,41 +343,70 @@ def _put(ctx, assets: dict, kind: str, meta: dict, folder: Path) -> list[str]:
 
 
 # ------------------------------------------------------------------ take(project, items)
-def take(root: Path, refs, provider=None) -> tuple[str, bool]:
-    """(text, is_error): stock items into the project; catalogue items not in stock drawn in the look first."""
+def take(root: Path, refs, cast=None, provider=None) -> tuple[str, bool]:
+    """(text, is_error): stock items into the project; catalogue items not in stock drawn in the look first. With
+    cast, every pose asked for is drawn for that character of the film and stays in the project."""
     stock = stock_of(root)
     refs = [refs] if isinstance(refs, str) else refs
     if not isinstance(refs, list) or not 1 <= len(refs) <= 24:
         raise StockError('items must be a list of 1-24 names like ["pose:shrug", "set:kitchen", "prop:coin"]')
+    cast = cast_of(cast)
     wanted = list(dict.fromkeys(parse_ref(r, stock) for r in refs))
     ctx = context(root)
     assets = read_project(ctx).get("assets") or {}
     look, why = read_look(stock)
-    sheet = project_file(stock, look["sheet"]) if look else None
+    sheet = project_file(stock, look["sheet"]) if look and look.get("sheet") else None
     sheet = sheet if sheet is not None and sheet.is_file() and sheet.suffix.lower() in PICTURES else None
-    said, to_draw = {}, []
+    said, to_draw, own = {}, [], {}
     for kind, iid in wanted:
-        if iid in items(stock, kind):
+        mine = cast if kind == "pose" else None
+        if mine is None and iid in items(stock, kind):
             continue
         entry = catalogue()[kind].get(iid)
-        if entry is None:
+        if entry is None and mine:
+            said[(kind, iid)] = ("failed: not in the catalogue (stock(project, kind='pose') lists it): draw this pose "
+                                 f"yourself with style_ref_asset={cast_sheet(mine)!r}")
+        elif entry is None:
             said[(kind, iid)] = f"failed: not in stock or the catalogue (stock(project, kind={kind!r}) lists both)"
         elif look is None:
-            said[(kind, iid)] = f"failed: not in stock, and drawing it needs the workspace's look: {why}"
-        elif kind == "pose" and sheet is None:
-            said[(kind, iid)] = (f"failed: look.json's sheet {look['sheet']!r} is not a picture in {stock}: poses are "
-                                 "drawn in the style of the character's model sheet")
+            said[(kind, iid)] = (f"failed: {'drawing it' if mine else 'not in stock, and drawing it'} needs the "
+                                 f"workspace's look: {why}")
+        elif kind == "pose" and mine is None and not look.get("who"):
+            said[(kind, iid)] = ('failed: this workspace has no fixed character (look.json has no "who"): pass cast '
+                                 f"and the pose is drawn for that character of this film; {CAST_HELP}")
+        elif kind == "pose" and mine is None and sheet is None:
+            said[(kind, iid)] = (f"failed: look.json's sheet {look.get('sheet')!r} is not a picture in {stock}: poses "
+                                 "are drawn in the style of the character's model sheet")
         else:
-            pics = pictures_for(kind, entry, look, sheet is not None)
+            pics = pictures_for(kind, entry, look, sheet is not None, mine)
             held = [p["id"] for p in pics if p["id"] in assets]
-            if held:
-                said[(kind, iid)] = (f"failed: the project already has asset(s) {', '.join(held)}: keep them to stock "
-                                     "or remove_asset them, then take again")
+            if mine and pics[0]["id"] in held:
+                own[(kind, iid)] = pics                     # this character's pose is already in the project
+                said[(kind, iid)] = f"already in this project as {mine['id']}'s"
+            elif held:
+                said[(kind, iid)] = (f"failed: the project already has asset(s) {', '.join(held)}: "
+                                     + ("" if mine else "keep them to stock or ") + "remove_asset them, then take again")
             else:
                 to_draw.append((kind, iid, entry, pics))
-    reports = _draw_all(root, ctx, sheet, to_draw, provider) if to_draw else []
+    reports = []
+    if cast and any(t[0] == "pose" for t in to_draw) and cast_sheet(cast) not in assets:
+        reports.append(_draw_sheet(root, ctx, sheet, sheet_picture(cast, look, sheet is not None), provider))
+        if not re.search(rf"^1\. {cast_sheet(cast)}: ok,", reports[-1], re.M):
+            for kind, iid, *_ in [t for t in to_draw if t[0] == "pose"]:
+                said[(kind, iid)] = f"failed: {cast['id']}'s model sheet {cast_sheet(cast)} was not drawn (see below)"
+            to_draw = [t for t in to_draw if t[0] != "pose"]
+    reports += _draw_all(root, ctx, sheet, to_draw, provider) if to_draw else []
     drawn_ok = {m for text in reports for m in re.findall(r"^\d+\. (\S+): ok,", text, re.M)}
     for kind, iid, entry, pics in to_draw:
+        if kind == "pose" and cast:
+            if pics[0]["id"] in drawn_ok:
+                own[(kind, iid)] = pics
+                lost = [p["id"] for p in pics if p["id"] not in drawn_ok]
+                said[(kind, iid)] = f"drawn for {cast['id']} from {cast_sheet(cast)}" + (
+                    f"; without {', '.join(lost)} (failed or not a twin: usable without it)" if lost else "")
+            else:
+                said[(kind, iid)] = f"failed: {pics[0]['id']} was not drawn (see the draw report below)"
+            continue
         try:
             said[(kind, iid)] = _keep_drawn(root, stock, kind, entry, pics, drawn_ok)
         except StockError as exc:
@@ -340,7 +414,11 @@ def take(root: Path, refs, provider=None) -> tuple[str, bool]:
     taken, rows = [], []
     for kind, iid in wanted:
         line = said.get((kind, iid), "")
-        if not line.startswith("failed"):
+        if (kind, iid) in own:
+            meta = _own_pose(root, own[(kind, iid)])
+            line = f"{line}: assets {', '.join(aid for aid, _ in files_of(meta))}"
+            taken.append(meta)
+        elif not line.startswith("failed"):
             meta = items(stock, kind)[iid]
             try:
                 ids = _put(ctx, read_project(ctx).get("assets") or {}, kind, meta, stock / KINDS[kind])
@@ -350,20 +428,48 @@ def take(root: Path, refs, provider=None) -> tuple[str, bool]:
                 line = f"failed: {exc}"
         rows.append(f"- {kind}:{iid}: {line}")
     head = f"Took {len(taken)} of {len(wanted)} item(s) into this project."
+    if cast and own:
+        head += (f" {cast['id']}'s poses are drawn from the model sheet {cast_sheet(cast)}: look at it and at one pose "
+                 "beside it before taking more. A wrong design: remove_asset the sheet and its poses, then take with "
+                 "a clearer who.")
     text = "\n".join([head, *rows, *(["Drawing:", *reports] if reports else []), *_for_components(taken)])
     return text, not taken
+
+
+def _own_pose(root: Path, pics: list[dict]) -> dict:
+    """A stock-shaped meta for a cast member's pose that lives in the project's assets."""
+    assets = read_project(context(root)).get("assets") or {}
+    base = pics[0]["id"]
+    files = {"src": {"file": base}}
+    files.update({t: {"file": f"{base}_{t}"} for t in TWINS if isinstance(assets.get(f"{base}_{t}"), dict)})
+    meta = {"id": base, "kind": "pose", "files": files}
+    try:
+        meta["feet"] = D.feet_of(_project_picture(root, assets, base))
+    except (StockError, OSError, ValueError):
+        pass
+    return meta
+
+
+def _register_sheet(ctx, sheet: Path) -> None:
+    ctx.assets_dir.mkdir(parents=True, exist_ok=True)
+    rel = f"assets/{SHEET_ASSET}{sheet.suffix.lower()}"
+    _copy(sheet, ctx.project / rel)
+    facts = picture_facts(ctx.project / rel)
+    register_asset(ctx, SHEET_ASSET, {"path": rel, "kind": "image", "alpha": True if facts["alpha"] else None,
+                                      "width": facts["width"], "height": facts["height"],
+                                      "note": "the workspace's look sheet (stock look.json)"})
+
+
+def _draw_sheet(root: Path, ctx, sheet, picture: dict, provider) -> str:
+    if sheet is not None:
+        _register_sheet(ctx, sheet)
+    return str(D.draw_many(root, pictures=[picture], provider=provider)[0])
 
 
 def _draw_all(root: Path, ctx, sheet, to_draw, provider) -> list[str]:
     """draw_many in batches of whole items, so a twin never waits on a picture of another batch."""
     if sheet is not None:
-        ctx.assets_dir.mkdir(parents=True, exist_ok=True)
-        rel = f"assets/{SHEET_ASSET}{sheet.suffix.lower()}"
-        _copy(sheet, ctx.project / rel)
-        facts = picture_facts(ctx.project / rel)
-        register_asset(ctx, SHEET_ASSET, {"path": rel, "kind": "image", "alpha": True if facts["alpha"] else None,
-                                          "width": facts["width"], "height": facts["height"],
-                                          "note": "the workspace's model sheet (stock look.json)"})
+        _register_sheet(ctx, sheet)
     batches, batch = [], []
     for _, _, _, pics in to_draw:
         if batch and len(batch) + len(pics) > D.BATCH_MAX:

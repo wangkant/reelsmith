@@ -545,15 +545,16 @@ animation: a character drawn in key poses on a set drawn in the same style ("Dra
 
 ### Drawn-pose animation
 
-This is how a film's picture is made. A drawn host acts as limited TV animation does: each key pose is its
-own drawing; the `Performer` holds one, crouches and leans against the coming move, snaps to the next, overshoots
+This is how a film's picture is made. A drawn character (a channel's fixed host, or a cast chosen for the one
+film) acts as limited TV animation does: each key pose is its own drawing; the `Performer` holds one, crouches and leans against the coming move, snaps to the next, overshoots
 and settles, breathes while it holds, flaps its mouth on the voice and blinks. It never pretends to be footage and
 needs no photographs, depth, `tween` or `parallax`.
 
 1. **One model sheet** fixes the design. **Every key pose** is a cut-out drawn with `style_ref_asset` = the sheet,
    head to feet, the same outfit named in every prompt; one pose per attitude (explain, doubt, shock, smug, shrug, think).
    draw's report gives each cut-out's `feet` ("It stands at feet 0.52"): copy it into the pose. Read `stock(p)` first:
-   kept poses, sets and props cost nothing to take ("Stock", below).
+   kept poses, sets and props cost nothing to take, and `take` with `cast` draws a film's own character its sheet
+   and catalogue poses ("Stock", below). Two or three characters each need their own sheet and their own poses.
 2. **Twins**, each registered onto its pose's canvas: `draw(p, "pA_shut", "the mouth is closed in a small smile",
    twin_of="pA")`; for blinks `draw(p, "pA_blink", "the eyes are shut", twin_of="pA_shut")` (eyes shut, mouth
    shut) and, optionally, `twin_of="pA"` for `blinkOpen` (eyes shut, mouth open). A third mouth, optional:
@@ -699,16 +700,23 @@ loudness only.
 ### Stock: poses, sets and props that stay
 
 A workspace keeps reusable pictures in `library/stock` (`poses/`, `sets/`, `props/`: each item its pictures and an
-`<id>.json`), all in one look set once in `library/stock/look.json`: `{"sheet": "<model sheet picture in
-library/stock>", "who": "<the character and its outfit, as every pose names it>", "character": "<style sentence>",
-"set": "<style sentence>", "prop": "<style sentence>"}`. A shipped catalogue names standard items: 54 poses
-(expressions, gestures, actions and the bridge poses `crouch`, `lean_back`, `turn`), 38 sets and 66 props.
+`<id>.json`), all in one look set once in `library/stock/look.json`: `{"character": "<style sentence>", "set":
+"<style sentence>", "prop": "<style sentence>", "sheet": "<optional: a picture in library/stock that shows the look,
+sent as the style reference>", "who": "<optional: the workspace's one fixed character and its outfit, as every pose
+names it; sheet is then its model sheet>"}`. A shipped catalogue names standard items: 54 poses (expressions,
+gestures, actions and the bridge poses `crouch`, `lean_back`, `turn`), 38 sets and 66 props.
 
 - `stock(p)` lists what is kept, then the catalogue ids not yet kept; `kind` lists one kind with what each is;
   `name="pose:shrug"` shows one item in full, or the draws `take` would make for it.
 - `take(p, items)` copies kept items into `assets/`; a catalogue item not yet kept is drawn first in the look (a
   pose: base, closed-mouth twin, blink, 3 draws; a set: the plate, then each piece matched to it; a prop: one
   cut-out) and kept for every later film. Without a complete `look.json` it takes kept items only.
+- `take(p, ["pose:shrug", "pose:shock"], cast="granny", who="an old woman, grey bun, floral padded jacket")` casts a
+  character for this film alone: the model sheet `granny_sheet` is drawn first in the look (or is the one you
+  drew under that id), then each catalogue pose from it as `granny_shrug` with its twins. Cast poses stay in the
+  project and are not kept. Take one pose first, look at the sheet and the pose, then take the rest with the same
+  `who`. A pose the catalogue lacks: `draw` it with `style_ref_asset="granny_sheet"`. A workspace whose
+  `look.json` has no `who` has no fixed character: its catalogue poses are drawn only this way.
 - `keep(p, ids, kind)` saves the project's own drawings: a pose with its twins found by name, a set's layers back
   to front, props one per id; an item already kept needs `replace=true`.
 

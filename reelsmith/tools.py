@@ -1158,16 +1158,21 @@ def stock(project: str, kind: str = "", name: str = "") -> str:
 
 
 @tool
-def take(project: str, items: list[str]) -> str:
+def take(project: str, items: list[str], cast: str = "", who: str = "") -> str:
     """Bring stock items into this project as image assets: items like ["pose:shrug", "set:kitchen", "prop:coin"]. A
-    pose comes with its twins (<id>, <id>_shut, <id>_blink, <id>_half when kept), a set as <id>_<layer>, a prop as
-    <id>. An item not in stock but in the catalogue is drawn first in the workspace's look (library/stock/look.json):
-    a pose from the model sheet, then its closed-mouth twin and the blink of that (3 draws); a set's plate, then its
-    middle piece matched to it; a prop as a cut-out; counted and reported as draw_many does, then kept in stock for
-    every later film. A failed twin is reported; the pose works without it. Ends with the poses manifest (feet,
-    twins), each set's layer order and the clip's pics."""
+    pose comes with its twins (<id>, <id>_shut, <id>_blink), a set as <id>_<layer>, a prop as <id>. A catalogue item
+    not in stock is drawn first in the workspace's look (library/stock/look.json) and kept for later films: a pose
+    with its closed-mouth twin and blink (3 draws), a set's plate then its piece, a prop as a cut-out. `cast` and
+    `who` (cast="granny", who="an old woman, grey bun, floral padded jacket") make the poses a character of this
+    film's own: its model sheet <cast>_sheet is drawn first when the project has none, each pose from it as
+    <cast>_<pose> with twins, and they stay in the project. Take one pose first and look at the sheet. A failed twin
+    is reported; the pose works without it. Ends with the poses manifest, each set's layer order and the clip's
+    pics."""
     items = _json_arg(items, "items")
-    return _stock("take", _project(project), items)
+    if bool(str(cast or "").strip()) != bool(str(who or "").strip()):
+        raise ToolInputError('cast and who go together: cast="granny" (a short id), who="what the character is and '
+                             'wears, one sentence"')
+    return _stock("take", _project(project), items, {"id": cast, "who": who} if str(cast or "").strip() else None)
 
 
 @tool

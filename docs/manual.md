@@ -433,13 +433,14 @@ shows. A component that crashes shows a red box in previews and is reported firs
 ## Performance films
 
 Every line is acted out in code with the stage kit ([docs/kit.md](kit.md)); example: `examples/performance/`.
-- **Drawn-pose animation** makes the picture (kit.md, same title): one character model sheet; key poses drawn as
+- **Drawn-pose animation** makes the picture (kit.md, same title): one model sheet per character; key poses drawn as
   cut-outs with `style_ref_asset` = the sheet, each with `twin_of` twins (mouth shut, a blink), played by
   `Performer`, which anticipates, snaps, overshoots and settles; a set drawn in layers in the same style; cut-out
   props with weight (`drop`, `toss`, `swing`); effects under one `LineStyle`; hard cuts between framings on words
   (`Framing`). Judge pacing on a 6-a-second `frames` sheet and each pose change on a 25-a-second one.
 - **Before drawing**: `stock` and `take` (kept poses, sets and props are free; a catalogue item is drawn once in the
-  workspace's look, then kept; `keep` saves your own). The kit draws marks (anger, tears, rain, poof, focus lines,
+  workspace's look, then kept; `take` with `cast` and `who` draws a character of this film its model sheet and
+  poses; `keep` saves your own). The kit draws marks (anger, tears, rain, poof, focus lines,
   speech bubbles, a chalkboard), a third mouth (`half`), `Walker`, `Smear`, `Brush`, `Morph` and `Boil` (kit.md).
 - **Tracks**: `world` (one component clip for the whole film reading every line from `useClip().lines`, or one per
   line, `"start": "line:3"`), a head text clip with the take (at most 4.5 s; the cover), captions.
@@ -494,7 +495,7 @@ What you build stays in the workspace for every film; `note` what each piece is 
 | `capture(project, url, id, match?, viewport?)` | screenshot of a page as evidence, boxed around `match`; `viewport` `phone` or `desktop` (default: phone on a tall canvas, desktop on a wide or square one) | `capture(p, "https://...", "ev_water", "about 2,700 litres")` |
 | `draw(project, id, prompt, style_ref_asset?, size?, cutout?, match_asset?, twin_of?)`, `draw_many(project, pictures)` | an original picture; `cutout=true` one subject with a real alpha channel, trimmed to itself; `match_asset` a plate it must sit in; `twin_of` the same cut-out drawing with one change (a closed mouth), registered onto its canvas; `draw_many` 1–8 at once | `draw(p, "pA", "the cat host points left, head to feet", cutout=true, style_ref_asset="sheet")`, `draw_many(p, [{"id": "wall", "prompt": "...", "style_ref_asset": "sheet"}, {"id": "pot", "prompt": "...", "cutout": true, "style_ref_asset": "sheet"}])`, `draw(p, "pA_shut", "the mouth is closed", twin_of="pA")` |
 | `stock(project, kind?, name?)` | the workspace's reusable poses, sets and props (`library/stock`), then the catalogue items not yet kept; `name` shows one in full | `stock(p, "pose")`, `stock(p, name="pose:shrug")` |
-| `take(project, items)` | kept items into the project as assets; a catalogue item not kept is drawn first in the workspace's look (`library/stock/look.json`) and kept; returns the `poses` manifest and each set's layer order | `take(p, ["pose:shrug", "set:kitchen", "prop:coin"])` |
+| `take(project, items, cast?, who?)` | kept items into the project as assets; a catalogue item not kept is drawn first in the workspace's look (`library/stock/look.json`) and kept; with `cast` and `who`, poses are drawn for a character of this film from its own model sheet (`<cast>_sheet`, `<cast>_<pose>`) and stay in the project; returns the `poses` manifest and each set's layer order | `take(p, ["pose:shrug", "set:kitchen", "prop:coin"])`, `take(p, ["pose:shock"], cast="granny", who="an old woman, grey bun, floral padded jacket")` |
 | `keep(project, ids, kind, what?, name?, replace?)` | save the project's own pose (twins found by name), a set's layers back to front, or props into stock | `keep(p, ["wave"], "pose")` |
 | `animate(project, id, image_asset, motion, seconds=4, camera?)` | a 2–12 s silent clip from a 9:16, 1:1 or 16:9 picture; `camera` default `push` | `animate(p, "field_v", "field", "the cotton bolls sway in the wind", 4, "push")` |
 | `tween(project, id, frames, seconds, fps?, hold_first?, hold_last?)`, `parallax(project, id, asset, seconds, move, fps?)` | local and free: frames interpolated between key pictures of one shot (2–6, ≤ 12 s); one still pushed through by its depth (`move` `dolly`, `truck`, `pedestal`, `ease`). Both warp a picture, which reads as a warp: not a film's motion. They run local models, the first call downloads them (RIFE about 23 MB, Depth Anything V2 Small about 99 MB) into `<workspace>/.cache/models` | `tween(p, "lift", ["pose_a", "pose_b"], [0, 1.2])`, `parallax(p, "walk", "stall", 4, {"dolly": 0.1, "truck": 0.02})` |
