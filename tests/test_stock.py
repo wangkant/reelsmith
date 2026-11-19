@@ -303,6 +303,11 @@ def test_a_look_may_turn_blinks_off_and_a_twin_that_is_not_one_stays_out_of_the_
     (ws / "project.json").write_text(json.dumps(raw), encoding="utf-8")
     again = T.take(str(ws), ["pose:shrug"], cast="granny", who=GRANNY)
     assert again.ok and "blink:" not in again.split("const poses")[1], again
+    look.write_text(json.dumps({**json.loads(look.read_text(encoding="utf-8")), "mouth": "shut"}), encoding="utf-8")
+    painter.calls.clear()
+    quiet = T.take(str(ws), ["pose:think"], cast="granny", who=GRANNY)
+    assert quiet.ok and len(painter.calls) == 1 and S.MOUTH_SHUT in painter.calls[0]["prompt"], quiet     # no twin
+    assert "granny_think: { src: a.granny_think_asset, feet" in quiet and "granny_think_shut" not in quiet, quiet
     report = ("1. a_blink: ok, x. its middle 94% of the way down the figure\n"
               "2. a_shut: ok, x. its middle 14% of the way down the figure\n"
               "3. b_blink: ok, x. its middle 10% of the way down\n4. b_shut: ok, x. its middle 14% of the way down")

@@ -28,7 +28,8 @@ SHUT_PROMPT = "the mouth is closed; the expression is otherwise the same"
 BLINK_PROMPT = "the eyes are shut"
 SHEET_ASSET = "look_sheet"
 POSE_FRAME = ("Seen from the {view}, the whole figure from head to feet, alone, nothing else in the picture, no ground, "
-              "no shadow. The mouth is open as if speaking; the hands stay below the top of the head.")
+              "no shadow. {mouth}; the hands stay below the top of the head.")
+MOUTH_OPEN, MOUTH_SHUT = "The mouth is open as if speaking", "The mouth is closed unless the pose says otherwise"
 PLATE_FLOOR = ("Straight-on view at standing eye height. The lower third is clear, empty floor with nothing standing on "
                "it, where a figure will stand. No people or animals.")
 PIECE_FRAME = "seen straight on from the front at standing eye height, whole, alone"
@@ -38,7 +39,8 @@ LOOK_HELP = ('write <workspace>/library/stock/look.json first: {"character": "<s
              '"set": "<style sentence for places>", "prop": "<style sentence for things>", "sheet": "<optional: a '
              'picture file in library/stock that shows the look, sent as the style reference>", "who": "<optional, '
              'for a workspace with one fixed character: how every pose names it and its outfit; sheet is then its '
-             'model sheet>", "blink": <optional, false: poses get no blink twin (small faces)>}')
+             'model sheet>", "blink": <optional, false: poses get no blink twin (small faces)>, "mouth": <optional, "shut": '
+             'poses are drawn with the mouth closed and get no closed-mouth twin (narrated films)>}')
 CAST_HELP = ('cast="<a short id for one character of this film, like granny>" with who="<what it is and wears, one '
              'sentence, the same words in every call>"')
 CAST_ID = re.compile(r"^[a-z][a-z0-9]{0,15}$")
@@ -160,11 +162,13 @@ def pictures_for(kind: str, entry: dict, look: dict, sheet: bool, cast: dict | N
         if cast:
             eid, who = f"{cast['id']}_{eid}", CAST_WHO.format(who=cast["who"])
             ref = {"style_ref_asset": cast_sheet(cast)}
+        shut = look.get("mouth") == "shut"      # nobody speaks on screen: the pose itself is the closed mouth
+        frame = POSE_FRAME.format(view=entry["view"], mouth=MOUTH_SHUT if shut else MOUTH_OPEN)
         base = {"id": eid, "cutout": True, "size": "2:3", **ref,
-                "prompt": f"{who}, {entry['pose']}. {POSE_FRAME.format(view=entry['view'])} {look['character']}"}
-        out = [base, {"id": f"{eid}_shut", "prompt": SHUT_PROMPT, "twin_of": eid}]
+                "prompt": f"{who}, {entry['pose']}. {frame} {look['character']}"}
+        out = [base] if shut else [base, {"id": f"{eid}_shut", "prompt": SHUT_PROMPT, "twin_of": eid}]
         if entry.get("blink", True) and look.get("blink", True) is not False:
-            out.append({"id": f"{eid}_blink", "prompt": BLINK_PROMPT, "twin_of": f"{eid}_shut"})
+            out.append({"id": f"{eid}_blink", "prompt": BLINK_PROMPT, "twin_of": eid if shut else f"{eid}_shut"})
         return out
     if kind == "set":
         plate, *pieces = entry["layers"]
