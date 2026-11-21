@@ -196,6 +196,18 @@ def test_a_set_is_drawn_plate_first_then_its_piece_matched_to_it(ws, tmp_path, m
     assert counter["ref"] == "kitchen_plate.png" and counter["ref_note"] == D.MATCH_CUT_NOTE
     assert "STYLE-P." in coin["prompt"]
     assert "set kitchen back to front: kitchen_plate, the figure, kitchen_counter" in r
+
+
+def test_a_look_may_say_where_a_set_keeps_its_floor(ws, tmp_path, monkeypatch):
+    with_look(ws)
+    look = stock_dir(ws) / "look.json"
+    look.write_text(json.dumps({**json.loads(look.read_text(encoding="utf-8")),
+                                "floor": "The lower half is empty floor."}), encoding="utf-8")
+    painter = Painter(tmp_path)
+    monkeypatch.setattr(D, "make_provider", lambda ctx: painter)
+    assert T.take(str(ws), ["set:kitchen"]).ok
+    plate = painter.calls[0]["prompt"]
+    assert "The lower half is empty floor." in plate and S.PLATE_FLOOR not in plate
     meta = json.loads((stock_dir(ws) / "sets" / "kitchen.json").read_text(encoding="utf-8"))
     assert [(x["name"], x["front"]) for x in meta["layers"]] == [("plate", False), ("counter", True)]
 

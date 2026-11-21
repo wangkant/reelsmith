@@ -705,7 +705,7 @@ A workspace keeps reusable pictures in `library/stock` (`poses/`, `sets/`, `prop
 sent as the style reference>", "who": "<optional: the workspace's one fixed character and its outfit, as every pose
 names it; sheet is then its model sheet>", "blink": false, "mouth": "shut"}` (`blink` optional: false draws poses
 without a blink twin, for figures whose faces are too small for one; `mouth` optional: "shut" draws every pose with
-the mouth closed and no closed-mouth twin, for films where a narrator speaks and nobody on screen does). A shipped catalogue names standard items: 54 poses (expressions,
+the mouth closed and no closed-mouth twin, for films where a narrator speaks and nobody on screen does; `floor` optional: the sentence that says where a set's plate keeps its empty floor, in place of "the lower third", for a vertical film whose figures stand above the captions band). A shipped catalogue names standard items: 54 poses (expressions,
 gestures, actions and the bridge poses `crouch`, `lean_back`, `turn`), 38 sets and 66 props.
 
 - `stock(p)` lists what is kept, then the catalogue ids not yet kept; `kind` lists one kind with what each is;

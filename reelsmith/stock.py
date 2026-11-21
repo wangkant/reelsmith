@@ -40,7 +40,8 @@ LOOK_HELP = ('write <workspace>/library/stock/look.json first: {"character": "<s
              'picture file in library/stock that shows the look, sent as the style reference>", "who": "<optional, '
              'for a workspace with one fixed character: how every pose names it and its outfit; sheet is then its '
              'model sheet>", "blink": <optional, false: poses get no blink twin (small faces)>, "mouth": <optional, "shut": '
-             'poses are drawn with the mouth closed and get no closed-mouth twin (narrated films)>}')
+             'poses are drawn with the mouth closed and get no closed-mouth twin (narrated films)>, "floor": <optional: '
+             'the sentence that says where a set keeps its empty floor, in place of the lower third>}')
 CAST_HELP = ('cast="<a short id for one character of this film, like granny>" with who="<what it is and wears, one '
              'sentence, the same words in every call>"')
 CAST_ID = re.compile(r"^[a-z][a-z0-9]{0,15}$")
@@ -173,7 +174,8 @@ def pictures_for(kind: str, entry: dict, look: dict, sheet: bool, cast: dict | N
     if kind == "set":
         plate, *pieces = entry["layers"]
         pid = f"{entry['id']}_{plate['name']}"
-        out = [{"id": pid, "prompt": f"{plate['description']}. {PLATE_FLOOR} {look['set']}", **ref}]
+        floor = str(look.get("floor") or "").strip() or PLATE_FLOOR     # a captions band may need the figure higher
+        out = [{"id": pid, "prompt": f"{plate['description']}. {floor} {look['set']}", **ref}]
         return out + [{"id": f"{entry['id']}_{p['name']}", "cutout": True, "match_asset": pid,
                        "prompt": f"{p['description']}, {PIECE_FRAME}. {look['set']}"} for p in pieces]
     return [{"id": entry["id"], "cutout": True, **ref,
